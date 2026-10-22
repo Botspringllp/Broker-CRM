@@ -20,9 +20,9 @@ Both Antigravity and Codex must strictly adhere to these instructions.
 - **Strict Scope Boundary:** Phase 1 implementation covers only what is specified in `docs/Broker PRD.pdf` up to the line **"End of Phase 1"** (pages 1–9).
 - **Working Specification:** `docs/PRD-phase1.md` is the active requirements specification.
 - **Source Verification:** `docs/Broker PRD.pdf` is the definitive source of truth for verifying original requirements.
-- **Decisions & Architecture:** `docs/decisions.md` records all confirmed, provisional, and external dependency decisions.
-- **Out of Scope (Do Not Build in Phase 1):**
-  - Anything after the "End of Phase 1" marker in the PDF.
+- **Decisions & Architecture:** `docs/decisions.md` records all confirmed foundations, technical choices, provisional defaults, and external dependencies.
+- **Out of Scope for Phase 1 (Do Not Implement):**
+  - Anything after the "End of Phase 1" marker in the PDF is outside the current Phase 1 scope and requires separate approval for future implementation.
   - Broker website from templates (Section 4, p. 12).
   - Detailed post-boundary deal stages (`Negotiation`, `Token`, `Final Deal`, `Commission active`).
   - Commission accounting, invoices, and billing modules.
@@ -46,7 +46,7 @@ Both Antigravity and Codex must strictly adhere to these instructions.
 
 - **Task Isolation:** Work on one assigned task at a time. Do not continue to future phases or speculate on unassigned scope.
 - **Minimal Dependencies:** Do not install unnecessary dependencies. When a new package is required, document the architectural justification.
-- **Quality Gates:** Run appropriate lint checks (`npm run lint`), type checks (`npx tsc --noEmit`), tests (`npm run test`), and build (`npm run build`) after implementation tasks.
+- **Testing & Quality Gates:** Every feature ships with its own tests in the same task: unit tests for business rules (for example, property matching), negative tests for tenant isolation and permissions, and Playwright flows wherever a UI exists. Run lint, type checks, tests and build, and report the results.
 - **Package Integrity:** Never run `npm audit fix --force`.
 - **Deployment Control:** Do not deploy to Vercel or any environment without an explicit, direct request from the project lead.
 
@@ -54,14 +54,16 @@ Both Antigravity and Codex must strictly adhere to these instructions.
 
 ## 4. Mandatory UI/UX Design Rules
 
-This application must use a **LIGHT THEME**.  
+This application must use a **LIGHT THEME ONLY**. Do not create a dark-mode interface or dark-theme components.  
 The UI must look like a professionally designed, modern business SaaS application (similar to Stripe, Linear, or GitHub Enterprise), not a generic or flashy AI-generated dashboard.
 
 ### Design Principles
-- **Light, Crisp Surfaces:** Pure white (`#FFFFFF`) cards and surfaces over soft neutral page backgrounds (`#F8FAFC`).
-- **Typography & Spacing:** Clean typography hierarchy, readable font sizes, comfortable padding, and scannable layouts.
+- **Light, Crisp Surfaces:** Pure white (`#FFFFFF`) cards and surfaces over warm off-white page backgrounds (`#F7F5F0`).
+- **Typography & Spacing:** Clean typography hierarchy, readable font sizes, comfortable padding, and scannable layouts. Use a non-default Next.js font only if it is self-hosted, lightweight, and appropriate for the product.
 - **Functional & Usable:** Prioritize workflow efficiency, compact forms, high-density data tables, responsive filters, and clear status indicators over decorative visuals.
-- **Restrained Styling:** Modest border radii (`rounded-md` / `rounded-lg`), subtle borders (`#E2E8F0`), and soft, minimal shadows.
+- **Restrained Styling:** Modest border radii (`rounded-md` / `rounded-lg`), subtle borders (`#E4DFD5`), and soft, minimal shadows.
+- **Consistent Status & Domain Colors:** Status colours must retain the same meaning on every screen. Different functional areas may use distinct accent colours, but they must come from the shared palette.
+- **Accessible Contrast:** Maintain accessible contrast ratios and readable text throughout the application.
 - **Strictly Prohibited:**
   - No dark-mode styling or dark-theme components.
   - No excessive gradients, glassmorphism, glow effects, or decorative blur backdrops.
@@ -69,16 +71,17 @@ The UI must look like a professionally designed, modern business SaaS applicatio
   - No unnecessary or distracting motion animations.
   - Do not introduce fragmented or different design languages across pages.
 
-### Design Palette Tokens
-- **Primary Action:** `#2563EB` (Tailwind blue-600)
-- **Secondary / Supporting:** `#0D9488` (Tailwind teal-600)
-- **Accent / Alerting:** `#D97706` (Tailwind amber-600)
-- **Page Background:** `#F8FAFC` (Tailwind slate-50)
-- **Surface / Card Background:** `#FFFFFF`
-- **Main Heading & Text:** `#0F172A` (Tailwind slate-900)
-- **Muted Text / Secondary Labels:** `#64748B` (Tailwind slate-500)
-- **Border / Divider:** `#E2E8F0` (Tailwind slate-200)
-- **Success / Validated:** `#15803D` (Tailwind green-700)
-- **Error / Rejected / Due:** `#DC2626` (Tailwind red-600)
+### Recommended Light-Theme Design Tokens
+*(Note: These design tokens are engineering recommendations to guarantee accessible contrast and visual consistency throughout the application; they are not requirements from the original PRD. Define this palette once and reuse it consistently).*
 
-*(Note: These design tokens are engineering recommendations to guarantee accessible contrast and visual consistency; they are not requirements from the original PRD).*
+- **Page Background:** `#F7F5F0` — warm off-white
+- **Surface / Card Background:** `#FFFFFF`
+- **Main Heading & Text:** `#1E2A32`
+- **Muted Text / Secondary Labels:** `#667085`
+- **Border / Divider:** `#E4DFD5`
+- **Primary Action:** `#1F6F6B` — deep teal
+- **Info and Links:** `#3B5BA9` — muted indigo
+- **Accent for Callbacks & Attention:** `#C4641D` — burnt orange
+- **Success / Validated:** `#2E7D4F`
+- **Warning / Pending:** `#B7791F`
+- **Error / Rejected / Due:** `#B3261E`
