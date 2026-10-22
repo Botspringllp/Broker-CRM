@@ -1,0 +1,714 @@
+// Prisma Schema for Broker CRM (Phase 1)
+// Multi-tenant Real Estate Broker CRM for Indian Secondary Market (Resale & Rentals)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------
+// ENUMS (Stable Lifecycle & Domain Categories)
+// ---------------------------------------------------------
+
+enum UserRole {
+  BROKER_OWNER
+  TEAM_LEADER
+  TELECALLER
+  FIELD_VERIFIER
+  FIELD_SALES_AGENT
+  CRM_TENANT_ADMIN
+  PLATFORM_SUPER_ADMIN
+}
+
+enum TransactionType {
+  SALE
+  RENT
+}
+
+enum PropertyType {
+  APARTMENT
+  INDEPENDENT_HOUSE
+  VILLA
+  BUILDER_FLOOR
+  PLOT
+  COMMERCIAL
+  OTHER
+}
+
+enum FurnishingStatus {
+  UNFURNISHED
+  SEMI_FURNISHED
+  FURNISHED
+}
+
+enum AreaUnitType {
+  CARPET
+  BUILT_UP
+  SUPER_BUILT_UP
+}
+
+enum ConstructionStatus {
+  READY_TO_MOVE
+  UNDER_CONSTRUCTION
+}
+
+enum PropertyEntryChannel {
+  BULK_UPLOAD
+  MANUAL
+  WHATSAPP
+}
+
+enum SupplyValidationStatus {
+  NOT_VALIDATED
+  IN_VALIDATION
+  VALIDATED
+  MANDATE_DECLINED
+}
+
+enum PropertyAvailabilityStatus {
+  AVAILABLE
+  TEMPORARILY_UNAVAILABLE
+  SOLD
+  RENTED
+}
+
+enum PropertyCallingDisposition {
+  PROPERTY_AVAILABLE
+  PROPERTY_SOLD_OR_RENTED
+  OWNER_DECLINES_MANDATE
+  TEMPORARILY_UNAVAILABLE
+  CALL_BACK
+  RINGING_OR_NOT_ANSWERING
+}
+
+enum LeadStatus {
+  NOT_YET_VALIDATED
+  ACTIVE
+  INACTIVE
+}
+
+enum LeadCallingDisposition {
+  RINGING_OR_NOT_ANSWERING
+  CALL_BACK
+  CONNECTED
+  BUYER_SAYS_NOT_LOOKING
+}
+
+enum CallTargetType {
+  PROPERTY_VALIDATION
+  LEAD_VALIDATION
+}
+
+enum AssignmentTargetType {
+  PROPERTY
+  LEAD
+  SITE_VISIT
+}
+
+enum AssignmentRole {
+  TELECALLER_VALIDATION
+  TELECALLER_FOLLOWUP
+  FIELD_VERIFIER
+  FIELD_SALES_AGENT
+}
+
+enum AssignmentMethod {
+  ROUND_ROBIN
+  MANUAL
+}
+
+enum AssignmentStatus {
+  ACTIVE
+  REASSIGNED
+  COMPLETED
+  CANCELLED
+}
+
+enum SiteVisitStatus {
+  TENTATIVE_AWAITING_OWNER
+  CONFIRMED
+  COMPLETED
+  NOT_COMPLETED
+  CANCELLED
+  RESCHEDULED
+}
+
+enum SiteVisitItemOutcome {
+  PENDING
+  VISIT_DONE
+  VISIT_NOT_DONE
+}
+
+enum VisitOutcomeEntryChannel {
+  FIELD_AGENT_DIRECT
+  TELECALLER_ON_BEHALF
+}
+
+enum VisitPartyPersona {
+  OWNER
+  BUYER
+  BROKER
+}
+
+enum ScheduleChangeType {
+  RESCHEDULED
+  DELAYED
+  CANCELLED
+}
+
+enum BuyerInterestLevel {
+  HIGH
+  MEDIUM
+  LOW
+  NOT_INTERESTED
+}
+
+enum RentalRevalidationStatus {
+  NONE
+  DUE
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum MediaType {
+  PHOTO
+  VIDEO
+}
+
+enum MediaStorageProvider {
+  OBJECT_STORAGE
+  YOUTUBE
+}
+
+enum KeyHolderPersona {
+  GUARD
+  MAINTENANCE_OFFICE
+  NEIGHBOUR
+  OWNER
+  OTHER
+}
+
+// ---------------------------------------------------------
+// 1. TENANT & IDENTITY
+// ---------------------------------------------------------
+
+model Tenant {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Tenant-scoped relations
+  users                     User[]
+  localities                Locality[]
+  properties                Property[]
+  keyHolders                KeyHolder[]
+  propertyMedia             PropertyMedia[]
+  leads                     Lead[]
+  enquiries                 Enquiry[]
+  leadRequirements          LeadRequirement[]
+  leadRequirementLocalities LeadRequirementLocality[]
+  leadChangeLogs            LeadChangeLog[]
+  callLogs                  CallLog[]
+  assignments               Assignment[]
+  buyerPropertyInterests    BuyerPropertyInterest[]
+  siteVisits                SiteVisit[]
+  siteVisitItems            SiteVisitItem[]
+  siteVisitScheduleHistory  SiteVisitScheduleHistory[]
+  siteVisitAccessLinks      SiteVisitAccessLink[]
+
+  @@map("tenants")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  email     String
+  phone     String
+  role      UserRole
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Operational Relationships
+  assignedLeads              Lead[]                     @relation("AssignedTelecaller")
+  assignedVisits             SiteVisit[]                @relation("AssignedSalesAgent")
+  confirmedVisits            SiteVisit[]                @relation("TelecallerConfirmedVisits")
+  callLogs                   CallLog[]                  @relation("CallerCallLogs")
+  leadChangeLogs             LeadChangeLog[]            @relation("UserChangeLogs")
+  assignmentsReceived        Assignment[]               @relation("AssignedUser")
+  assignmentsGiven           Assignment[]               @relation("AssignerUser")
+  reportedVisitItems         SiteVisitItem[]            @relation("ReportedByUser")
+  enteredVisitItems          SiteVisitItem[]            @relation("EnteredByUser")
+  scheduleChangesRecorded    SiteVisitScheduleHistory[] @relation("ScheduleChangedByUser")
+  siteVisitAccessLinks       SiteVisitAccessLink[]      @relation("SalesAgentAccessLinks")
+  submittedProperties        Property[]                 @relation("SubmittingAgentProperties")
+
+  @@unique([tenantId, email])
+  @@index([tenantId, role])
+  @@map("users")
+}
+
+// ---------------------------------------------------------
+// 2. REFERENCE / MASTER DATA
+// ---------------------------------------------------------
+
+model Locality {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  city      String
+  state     String?
+  pincode   String?
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  properties     Property[]
+  leadLocalities LeadRequirementLocality[]
+
+  @@unique([tenantId, city, name])
+  @@index([tenantId, city])
+  @@map("localities")
+}
+
+// ---------------------------------------------------------
+// 3. SUPPLY / PROPERTY DOMAIN
+// ---------------------------------------------------------
+
+model Property {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Property Details
+  flatNumber         String
+  societyName        String
+  localityId         String?
+  locality           Locality?        @relation(fields: [localityId], references: [id], onDelete: SetNull)
+  localityName       String           // Preserved from upload/entry
+  city               String
+  preference         TransactionType
+  furnishingStatus   FurnishingStatus
+  propertyType       PropertyType
+  area               Decimal          @db.Decimal(12, 2)
+  areaType           AreaUnitType
+  bedroomCount       Int
+  bathroomCount      Int
+  balconyCount       Int              @default(0)
+  price              Decimal          @db.Decimal(14, 2) // Total sale price or monthly rent
+  amenities          String[]         @default([])
+  constructionStatus ConstructionStatus
+
+  // Owner Contacts (Masked from unauthenticated & buyer-facing views)
+  ownerName   String
+  ownerMobile String // Normalized mobile number
+
+  // Status & Lifecycle Separation
+  validationStatus   SupplyValidationStatus     @default(NOT_VALIDATED)
+  availabilityStatus PropertyAvailabilityStatus @default(AVAILABLE)
+  isActiveSupply     Boolean                    @default(false) // True only when Validated + Available
+
+  // Rental 10-Month Revalidation Rule
+  rentedAt               DateTime?
+  rentalAgreementMonths  Int                      @default(11)
+  revalidationStatus     RentalRevalidationStatus @default(NONE)
+  revalidationDueDate    DateTime?
+
+  // Intake Channel
+  entryChannel      PropertyEntryChannel @default(MANUAL)
+  submittingAgentId String?
+  submittingAgent   User?                @relation("SubmittingAgentProperties", fields: [submittingAgentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Child relationships
+  keyHolders     KeyHolder[]
+  media          PropertyMedia[]
+  callLogs       CallLog[]
+  assignments    Assignment[]
+  siteVisitItems SiteVisitItem[]
+  buyerInterests BuyerPropertyInterest[]
+  enquiries      Enquiry[]
+
+  @@index([tenantId, validationStatus])
+  @@index([tenantId, availabilityStatus])
+  @@index([tenantId, isActiveSupply])
+  @@index([tenantId, city, preference])
+  @@index([tenantId, price])
+  @@index([tenantId, revalidationStatus])
+  @@map("properties")
+}
+
+model KeyHolder {
+  id         String           @id @default(uuid())
+  tenantId   String
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  propertyId String
+  property   Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  name       String
+  mobile     String           // Normalized mobile number
+  persona    KeyHolderPersona @default(OTHER)
+  notes      String?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+
+  @@index([tenantId, propertyId])
+  @@map("key_holders")
+}
+
+model PropertyMedia {
+  id              String               @id @default(uuid())
+  tenantId        String
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  propertyId      String
+  property        Property             @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  mediaType       MediaType
+  storageProvider MediaStorageProvider @default(OBJECT_STORAGE)
+  url             String               // S3/R2/Blob object storage URL or YouTube link
+  caption         String?
+  displayOrder    Int                  @default(0)
+  createdAt       DateTime             @default(now())
+
+  @@index([tenantId, propertyId])
+  @@map("property_media")
+}
+
+// ---------------------------------------------------------
+// 4. DEMAND / LEAD DOMAIN
+// ---------------------------------------------------------
+
+model Lead {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Primary Prospect Identification
+  name           String
+  primaryPhone   String // Normalized mobile number (E.164 or 10-digit)
+  alternatePhone String?
+  email          String?
+
+  // Lifecycle Status & Tracking
+  status                    LeadStatus @default(NOT_YET_VALIDATED)
+  unreachableAttemptsCount  Int        @default(0)
+
+  // Non-Editable Source Metadata (PRD §5.3)
+  originalSource String
+  sourceCreatedAt DateTime @default(now())
+
+  // Current Operational Assignment
+  assignedTelecallerId String?
+  assignedTelecaller   User?   @relation("AssignedTelecaller", fields: [assignedTelecallerId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Child relationships
+  enquiries        Enquiry[]
+  requirement      LeadRequirement?
+  changeLogs       LeadChangeLog[]
+  callLogs         CallLog[]
+  assignments      Assignment[]
+  siteVisits       SiteVisit[]
+  propertyInterests BuyerPropertyInterest[]
+
+  @@unique([tenantId, primaryPhone]) // Tenant-scoped buyer deduplication
+  @@index([tenantId, status])
+  @@index([tenantId, assignedTelecallerId])
+  @@map("leads")
+}
+
+model Enquiry {
+  id                   String    @id @default(uuid())
+  tenantId             String
+  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId               String
+  lead                 Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  source               String    // 99ACRES, MAGICBRICKS, NOBROKER, MANUAL, CSV, etc.
+  advertisedPropertyRef String?   // External portal ad reference code
+  advertisedPropertyId String?
+  advertisedProperty   Property? @relation(fields: [advertisedPropertyId], references: [id], onDelete: SetNull)
+  enquiryDate          DateTime  @default(now())
+  enquiryDetails       String?
+
+  // Demand Validation Enquiry Verification (PRD §5.1)
+  isVerifiedByCaller     Boolean  @default(false)
+  callerVerificationNotes String?
+  createdAt              DateTime @default(now())
+
+  @@index([tenantId, leadId])
+  @@index([tenantId, advertisedPropertyId])
+  @@map("enquiries")
+}
+
+model LeadRequirement {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId     String   @unique
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  // Search Criteria
+  minBudget             Decimal          @db.Decimal(14, 2)
+  maxBudget             Decimal          @db.Decimal(14, 2)
+  city                  String
+  societies             String[]         @default([])
+  bedroomConfigurations String[]         @default([]) // e.g. ["2 BHK", "3 BHK"]
+  minBedrooms           Int?
+  maxBedrooms           Int?
+  preference            TransactionType
+  propertyTypes         PropertyType[]   @default([])
+  targetArea            Decimal?         @db.Decimal(12, 2)
+  areaType              AreaUnitType?
+
+  isConfirmed Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  localities LeadRequirementLocality[]
+
+  @@index([tenantId, city, preference])
+  @@map("lead_requirements")
+}
+
+model LeadRequirementLocality {
+  id            String          @id @default(uuid())
+  tenantId      String
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requirementId String
+  requirement   LeadRequirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  localityId    String
+  locality      Locality        @relation(fields: [localityId], references: [id], onDelete: Cascade)
+
+  @@unique([requirementId, localityId])
+  @@index([tenantId, localityId])
+  @@map("lead_requirement_localities")
+}
+
+model LeadChangeLog {
+  id             String   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId         String
+  lead           Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  fieldName      String
+  previousValue  String?
+  newValue       String?
+  changedByUserId String?
+  changedByUser  User?    @relation("UserChangeLogs", fields: [changedByUserId], references: [id], onDelete: SetNull)
+  changeSource   String   // USER, API, SYSTEM
+  changedAt      DateTime @default(now())
+
+  @@index([tenantId, leadId, changedAt])
+  @@map("lead_change_logs")
+}
+
+// ---------------------------------------------------------
+// 5. CALL LOGGING & VALIDATION HISTORY
+// ---------------------------------------------------------
+
+model CallLog {
+  id                   String                      @id @default(uuid())
+  tenantId             String
+  tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  callerId             String
+  caller               User                        @relation("CallerCallLogs", fields: [callerId], references: [id], onDelete: Restrict)
+  callType             CallTargetType
+  propertyId           String?
+  property             Property?                   @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  leadId               String?
+  lead                 Lead?                       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  propertyDisposition  PropertyCallingDisposition?
+  leadDisposition      LeadCallingDisposition?
+  notes                String?
+  callbackScheduledAt  DateTime?
+  calledAt             DateTime                    @default(now())
+
+  @@index([tenantId, propertyId, calledAt])
+  @@index([tenantId, leadId, calledAt])
+  @@index([tenantId, callerId])
+  @@index([tenantId, callbackScheduledAt])
+  @@map("call_logs")
+}
+
+// ---------------------------------------------------------
+// 6. ASSIGNMENTS & WORKLOAD TRACKING
+// ---------------------------------------------------------
+
+model Assignment {
+  id               String               @id @default(uuid())
+  tenantId         String
+  tenant           Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  targetType       AssignmentTargetType
+  propertyId       String?
+  property         Property?            @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  leadId           String?
+  lead             Lead?                @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  siteVisitId      String?
+  siteVisit        SiteVisit?           @relation(fields: [siteVisitId], references: [id], onDelete: Cascade)
+  assignedUserId   String
+  assignedUser     User                 @relation("AssignedUser", fields: [assignedUserId], references: [id], onDelete: Restrict)
+  assignedByUserId String?
+  assignedByUser   User?                @relation("AssignerUser", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+  roleInAssignment AssignmentRole
+  assignmentMethod AssignmentMethod     @default(MANUAL)
+  status           AssignmentStatus     @default(ACTIVE)
+  notes            String?
+  assignedAt       DateTime             @default(now())
+  unassignedAt     DateTime?
+
+  @@index([tenantId, targetType, status])
+  @@index([tenantId, assignedUserId, status])
+  @@map("assignments")
+}
+
+// ---------------------------------------------------------
+// 7. PROPERTY MATCHING & FEEDBACK PERSISTENCE
+// ---------------------------------------------------------
+
+model BuyerPropertyInterest {
+  id                String             @id @default(uuid())
+  tenantId          String
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId            String
+  lead              Lead               @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  propertyId        String
+  property          Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  interestLevel     BuyerInterestLevel @default(MEDIUM)
+  feedbackNotes     String?
+  isShortlisted     Boolean            @default(false)
+  sharedWithBuyerAt DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@unique([tenantId, leadId, propertyId])
+  @@index([tenantId, propertyId])
+  @@map("buyer_property_interests")
+}
+
+// ---------------------------------------------------------
+// 8. SITE VISITS & ITINERARIES
+// ---------------------------------------------------------
+
+model SiteVisit {
+  id                   String            @id @default(uuid())
+  tenantId             String
+  tenant               Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId               String
+  lead                 Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  assignedSalesAgentId String
+  assignedSalesAgent   User              @relation("AssignedSalesAgent", fields: [assignedSalesAgentId], references: [id], onDelete: Restrict)
+  scheduledDate        DateTime
+  status               SiteVisitStatus   @default(TENTATIVE_AWAITING_OWNER)
+
+  // Telecaller Final Confirmation (PRD §8.3)
+  telecallerConfirmedAt       DateTime?
+  telecallerConfirmedByUserId String?
+  telecallerConfirmedByUser   User?     @relation("TelecallerConfirmedVisits", fields: [telecallerConfirmedByUserId], references: [id], onDelete: SetNull)
+
+  // Cancellation details
+  cancellationReason String?
+  cancelledByPersona VisitPartyPersona?
+  cancelledAt        DateTime?
+  notes              String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Child relationships
+  items             SiteVisitItem[]
+  scheduleHistories SiteVisitScheduleHistory[]
+  accessLinks       SiteVisitAccessLink[]
+  assignments       Assignment[]
+
+  @@index([tenantId, leadId, scheduledDate])
+  @@index([tenantId, assignedSalesAgentId, scheduledDate])
+  @@index([tenantId, status])
+  @@map("site_visits")
+}
+
+model SiteVisitItem {
+  id          String               @id @default(uuid())
+  tenantId    String
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  siteVisitId String
+  siteVisit   SiteVisit            @relation(fields: [siteVisitId], references: [id], onDelete: Cascade)
+  propertyId  String
+  property    Property             @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  visitOrder  Int                  @default(0)
+  status      SiteVisitItemOutcome @default(PENDING)
+
+  // Outcome Reporting Audit (PRD §8.3: Preserving both reporter and recorder)
+  reportedOutcomeAt DateTime?
+  reportedByUserId  String?
+  reportedByUser    User?                    @relation("ReportedByUser", fields: [reportedByUserId], references: [id], onDelete: SetNull)
+  enteredByUserId   String
+  enteredByUser     User                     @relation("EnteredByUser", fields: [enteredByUserId], references: [id], onDelete: Restrict)
+  entryChannel      VisitOutcomeEntryChannel @default(FIELD_AGENT_DIRECT)
+
+  // Agent Field Notes
+  agentTextNotes           String?
+  voiceNoteUrl             String? // Storage URL in object storage
+  voiceNoteDurationSeconds Int?
+
+  // Post-Visit Buyer Feedback
+  buyerFeedback      String?
+  buyerInterestLevel BuyerInterestLevel?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, siteVisitId, propertyId])
+  @@index([tenantId, propertyId])
+  @@map("site_visit_items")
+}
+
+model SiteVisitScheduleHistory {
+  id                  String             @id @default(uuid())
+  tenantId            String
+  tenant              Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  siteVisitId         String
+  siteVisit           SiteVisit          @relation(fields: [siteVisitId], references: [id], onDelete: Cascade)
+  previousScheduledAt DateTime
+  newScheduledAt      DateTime?
+  changeType          ScheduleChangeType
+  reason              String
+  recordedByUserId    String
+  recordedByUser      User               @relation("ScheduleChangedByUser", fields: [recordedByUserId], references: [id], onDelete: Restrict)
+  createdAt           DateTime           @default(now())
+
+  @@index([tenantId, siteVisitId, createdAt])
+  @@map("site_visit_schedule_history")
+}
+
+model SiteVisitAccessLink {
+  id           String    @id @default(uuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  siteVisitId  String
+  siteVisit    SiteVisit @relation(fields: [siteVisitId], references: [id], onDelete: Cascade)
+  salesAgentId String
+  salesAgent   User      @relation("SalesAgentAccessLinks", fields: [salesAgentId], references: [id], onDelete: Cascade)
+  tokenHash    String    @unique // Cryptographic hash of access token
+  expiresAt    DateTime
+  accessedAt   DateTime?
+  isRevoked    Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+
+  @@index([tenantId, siteVisitId])
+  @@index([tokenHash])
+  @@map("site_visit_access_links")
+}
+
