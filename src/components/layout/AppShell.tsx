@@ -147,19 +147,6 @@ export function AppShell({ children }: AppShellProps) {
             );
           })}
         </nav>
-
-        {/* Demo Mode Notice in Sidebar */}
-        <div className="p-3 border-t border-crm-border bg-stone-50/70 text-[11px] text-crm-muted">
-          <div className="flex items-center gap-1.5 font-semibold text-crm-accent mb-1">
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            <span>Demo Data Mode</span>
-          </div>
-          <p className="leading-snug">
-            Realistic Indian resale & rental fixtures. No live data or external APIs connected.
-          </p>
-        </div>
       </aside>
 
       {/* Mobile Header Bar */}
@@ -219,12 +206,6 @@ export function AppShell({ children }: AppShellProps) {
             <span className="font-semibold text-crm-text">Secondary Resale & Rental CRM</span>
             <span className="text-crm-muted">|</span>
             <span className="text-crm-muted text-[11px]">Tenant: Apex Realty Advisors (Gurgaon)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-              Prototype View (Phase 1)
-            </span>
           </div>
         </header>
 
