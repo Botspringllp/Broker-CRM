@@ -206,6 +206,7 @@ model Tenant {
 
   // Tenant-scoped relations
   users                     User[]
+  sessions                  Session[]
   localities                Locality[]
   properties                Property[]
   keyHolders                KeyHolder[]
@@ -227,16 +228,22 @@ model Tenant {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  name      String
-  email     String
-  phone     String
-  role      UserRole
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String    @id @default(uuid())
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  phone         String
+  role          UserRole
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Better Auth Core Relations
+  sessions      Session[]
+  accounts      Account[]
 
   // Operational Relationships
   assignedLeads              Lead[]                     @relation("AssignedTelecaller")
@@ -255,6 +262,56 @@ model User {
   @@unique([tenantId, email])
   @@index([tenantId, role])
   @@map("users")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id @default(uuid())
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId             String
+  providerId            String
+  password              String?   // Stores hashed password for emailAndPassword (scrypt)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String    @id @default(uuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@index([identifier])
+  @@map("verifications")
 }
 
 // ---------------------------------------------------------
@@ -342,6 +399,7 @@ model Property {
   buyerInterests BuyerPropertyInterest[]
   enquiries      Enquiry[]
 
+  @@unique([id, tenantId])
   @@index([tenantId, validationStatus])
   @@index([tenantId, availabilityStatus])
   @@index([tenantId, isActiveSupply])
@@ -424,6 +482,7 @@ model Lead {
   siteVisits       SiteVisit[]
   propertyInterests BuyerPropertyInterest[]
 
+  @@unique([id, tenantId])
   @@unique([tenantId, primaryPhone]) // Tenant-scoped buyer deduplication
   @@index([tenantId, status])
   @@index([tenantId, assignedTelecallerId])
@@ -536,6 +595,7 @@ model CallLog {
   callbackScheduledAt  DateTime?
   calledAt             DateTime                    @default(now())
 
+  @@unique([id, tenantId])
   @@index([tenantId, propertyId, calledAt])
   @@index([tenantId, leadId, calledAt])
   @@index([tenantId, callerId])
@@ -569,6 +629,7 @@ model Assignment {
   assignedAt       DateTime             @default(now())
   unassignedAt     DateTime?
 
+  @@unique([id, tenantId])
   @@index([tenantId, targetType, status])
   @@index([tenantId, assignedUserId, status])
   @@map("assignments")
@@ -633,6 +694,7 @@ model SiteVisit {
   accessLinks       SiteVisitAccessLink[]
   assignments       Assignment[]
 
+  @@unique([id, tenantId])
   @@index([tenantId, leadId, scheduledDate])
   @@index([tenantId, assignedSalesAgentId, scheduledDate])
   @@index([tenantId, status])

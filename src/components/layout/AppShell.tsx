@@ -2,7 +2,8 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useSession, signOut } from "@/lib/auth-client";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -10,7 +11,18 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { data: session } = useSession();
+
+  const handleSignOut = async () => {
+    await signOut();
+    router.push("/login");
+  };
+
+  const userName = session?.user?.name || "Pooja Sharma";
+  const userRole = (session?.user as { role?: string })?.role?.replace("_", " ") || "Telecaller";
+  const isAuthenticated = !!session?.user;
 
   const navItems = [
     {
@@ -100,12 +112,12 @@ export function AppShell({ children }: AppShellProps) {
 
         {/* User Context & Role Pill */}
         <div className="px-4 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span className="font-medium text-crm-text">Pooja Sharma</span>
+          <div className="flex items-center gap-2 truncate max-w-[140px]">
+            <span className={`w-2 h-2 rounded-full shrink-0 ${isAuthenticated ? "bg-emerald-500 animate-pulse" : "bg-stone-400"}`}></span>
+            <span className="font-medium text-crm-text truncate" title={userName}>{userName}</span>
           </div>
-          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-crm-primary-light text-crm-primary uppercase">
-            Telecaller
+          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-crm-primary-light text-crm-primary uppercase shrink-0">
+            {userRole}
           </span>
         </div>
 
@@ -206,6 +218,23 @@ export function AppShell({ children }: AppShellProps) {
             <span className="font-semibold text-crm-text">Secondary Resale & Rental CRM</span>
             <span className="text-crm-muted">|</span>
             <span className="text-crm-muted text-[11px]">Tenant: Apex Realty Advisors (Gurgaon)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {isAuthenticated ? (
+              <button
+                onClick={handleSignOut}
+                className="px-2.5 py-1 text-[11px] font-medium rounded border border-crm-border text-crm-muted hover:text-crm-text hover:bg-stone-50 transition-colors"
+              >
+                Sign Out
+              </button>
+            ) : (
+              <Link
+                href="/login"
+                className="px-2.5 py-1 text-[11px] font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs transition-colors"
+              >
+                Sign In
+              </Link>
+            )}
           </div>
         </header>
 
