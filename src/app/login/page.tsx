@@ -113,62 +113,64 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Quick Demo Credentials Selector */}
-          <div className="pt-4 border-t border-crm-border space-y-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] uppercase font-bold text-crm-muted">
-                Demo Accounts (Quick Select)
-              </span>
-              <span className="text-[10px] text-crm-muted">Password auto-fills</span>
+          {/* Quick Demo Credentials Selector (Development Only) */}
+          {process.env.NODE_ENV !== "production" && (
+            <div className="pt-4 border-t border-crm-border space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] uppercase font-bold text-crm-muted">
+                  Demo Accounts (Quick Select)
+                </span>
+                <span className="text-[10px] text-crm-muted">Password auto-fills</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => handleQuickFill("pooja.telecaller@apexrealty.in")}
+                  className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
+                >
+                  <div className="font-bold text-crm-text">Pooja Sharma</div>
+                  <div className="text-crm-muted text-[10px]">Telecaller (Apex)</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickFill("vikram.owner@apexrealty.in")}
+                  className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
+                >
+                  <div className="font-bold text-crm-text">Vikram Mehta</div>
+                  <div className="text-crm-muted text-[10px]">Broker / Owner</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickFill("sunil.manager@apexrealty.in")}
+                  className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
+                >
+                  <div className="font-bold text-crm-text">Sunil Grover</div>
+                  <div className="text-crm-muted text-[10px]">Team Leader / Manager</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickFill("rahul.sales@apexrealty.in")}
+                  className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
+                >
+                  <div className="font-bold text-crm-text">Rahul Varma</div>
+                  <div className="text-crm-muted text-[10px]">Field Sales Agent</div>
+                </button>
+              </div>
             </div>
-
-            <div className="grid grid-cols-2 gap-2 text-[11px]">
-              <button
-                type="button"
-                onClick={() => handleQuickFill("pooja.telecaller@apexrealty.in")}
-                className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
-              >
-                <div className="font-bold text-crm-text">Pooja Sharma</div>
-                <div className="text-crm-muted text-[10px]">Telecaller (Apex)</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickFill("vikram.owner@apexrealty.in")}
-                className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
-              >
-                <div className="font-bold text-crm-text">Vikram Mehta</div>
-                <div className="text-crm-muted text-[10px]">Broker / Owner</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickFill("sunil.manager@apexrealty.in")}
-                className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
-              >
-                <div className="font-bold text-crm-text">Sunil Grover</div>
-                <div className="text-crm-muted text-[10px]">Team Leader / Manager</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickFill("rahul.sales@apexrealty.in")}
-                className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
-              >
-                <div className="font-bold text-crm-text">Rahul Varma</div>
-                <div className="text-crm-muted text-[10px]">Field Sales Agent</div>
-              </button>
-            </div>
-          </div>
+          )}
         </div>
 
         {/* Footer info */}
         <div className="text-center text-[11px] text-crm-muted space-y-1">
           <div>
-            Apex Realty Advisors • Tenant Scoped Multi-Tenant Architecture
+            Broker CRM • Multi-Tenant Architecture
           </div>
           <Link href="/" className="text-crm-link hover:underline">
-            ← Return to Prototype Overview
+            ← Return to Overview
           </Link>
         </div>
       </div>
