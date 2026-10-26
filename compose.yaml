@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: broker-crm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: broker_crm
+      POSTGRES_USER: broker_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "5433:5432"
+    volumes:
+      - broker_crm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U broker_admin -d broker_crm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  broker_crm_postgres_data:
