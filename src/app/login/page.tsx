@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { signIn } from "@/lib/auth-client";
+import { signIn, authClient } from "@/lib/auth-client";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -26,7 +26,14 @@ export default function LoginPage() {
       if (result.error) {
         setErrorMessage(result.error.message || "Invalid email or password.");
       } else {
-        router.push("/");
+        const session = await authClient.getSession();
+        const role = (session?.data?.user as { role?: string })?.role;
+
+        if (role === "PLATFORM_SUPER_ADMIN" || email.toLowerCase().trim() === "superadmin@crm.in") {
+          router.push("/platform");
+        } else {
+          router.push("/");
+        }
         router.refresh();
       }
     } catch {
@@ -34,12 +41,6 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleQuickFill = (roleEmail: string) => {
-    setEmail(roleEmail);
-    setPassword("BrokerCRM@2026");
-    setErrorMessage(null);
   };
 
   return (
@@ -63,7 +64,7 @@ export default function LoginPage() {
           <div className="border-b border-crm-border pb-3">
             <h2 className="text-base font-semibold text-crm-text">Sign in to your account</h2>
             <p className="text-xs text-crm-muted mt-0.5">
-              Enter your brokerage email and password to access your assigned queues.
+              Enter your email and password to access your brokerage account.
             </p>
           </div>
 
@@ -92,7 +93,6 @@ export default function LoginPage() {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="font-semibold text-crm-text">Password</label>
-                <span className="text-[11px] text-crm-muted">Default: BrokerCRM@2026</span>
               </div>
               <input
                 type="password"
@@ -109,59 +109,9 @@ export default function LoginPage() {
               disabled={loading}
               className="w-full py-2.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs transition-colors disabled:opacity-50"
             >
-              {loading ? "Signing in..." : "Sign In to Brokerage"}
+              {loading ? "Signing in..." : "Sign In"}
             </button>
           </form>
-
-          {/* Quick Demo Credentials Selector (Development Only) */}
-          {process.env.NODE_ENV !== "production" && (
-            <div className="pt-4 border-t border-crm-border space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] uppercase font-bold text-crm-muted">
-                  Demo Accounts (Quick Select)
-                </span>
-                <span className="text-[10px] text-crm-muted">Password auto-fills</span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => handleQuickFill("pooja.telecaller@apexrealty.in")}
-                  className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
-                >
-                  <div className="font-bold text-crm-text">Pooja Sharma</div>
-                  <div className="text-crm-muted text-[10px]">Telecaller (Apex)</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleQuickFill("vikram.owner@apexrealty.in")}
-                  className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
-                >
-                  <div className="font-bold text-crm-text">Vikram Mehta</div>
-                  <div className="text-crm-muted text-[10px]">Broker / Owner</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleQuickFill("sunil.manager@apexrealty.in")}
-                  className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
-                >
-                  <div className="font-bold text-crm-text">Sunil Grover</div>
-                  <div className="text-crm-muted text-[10px]">Team Leader / Manager</div>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleQuickFill("rahul.sales@apexrealty.in")}
-                  className="p-2 text-left rounded border border-crm-border hover:bg-stone-50 hover:border-crm-primary transition-colors"
-                >
-                  <div className="font-bold text-crm-text">Rahul Varma</div>
-                  <div className="text-crm-muted text-[10px]">Field Sales Agent</div>
-                </button>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Footer info */}
@@ -177,4 +127,3 @@ export default function LoginPage() {
     </div>
   );
 }
-

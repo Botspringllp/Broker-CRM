@@ -6,20 +6,33 @@ import { UserRole } from "@prisma/client";
 import { UsersManagementClient, UserViewItem, UserAuditItem } from "./UsersManagementClient";
 import { AppShell } from "@/components/layout/AppShell";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 async function UsersManagementData() {
+  let context: Awaited<ReturnType<typeof requireTenantContext>> | null = null;
+
+  try {
+    context = await requireTenantContext();
+  } catch {
+    context = null;
+  }
+
+  if (!context) {
+    redirect("/login");
+  }
+
+  if (context.role === UserRole.PLATFORM_SUPER_ADMIN) {
+    redirect("/platform");
+  }
+
   let users: UserViewItem[] = [];
   let teamLeaders: { id: string; name: string; email: string; brokerId?: string | null }[] = [];
   let brokers: { id: string; name: string; email: string }[] = [];
   let auditLogs: UserAuditItem[] = [];
-  let currentUserRole: UserRole = UserRole.BROKER_OWNER;
-  let currentUserId = "";
+  const currentUserRole: UserRole = context.role;
+  const currentUserId = context.userId;
 
   try {
-    const context = await requireTenantContext();
-    currentUserRole = context.role;
-    currentUserId = context.userId;
-
     const [rawUsers, leaders, rawBrokers, rawLogs] = await Promise.all([
       listTenantUsers(context).catch(() => []),
       prisma.user.findMany({

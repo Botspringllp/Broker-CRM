@@ -83,7 +83,7 @@ export function PlatformAdminClient({ initialTenants }: PlatformAdminClientProps
     return { total, active, totalSeats, totalUsers };
   }, [tenants]);
 
-  // Auto-generate slug from name
+  // Auto-generate slug from name and default admin name
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const name = e.target.value;
     const autoSlug = name
@@ -95,12 +95,18 @@ export function PlatformAdminClient({ initialTenants }: PlatformAdminClientProps
       ...prev,
       name,
       slug: prev.slug === "" || prev.slug === autoSlug.slice(0, -1) ? autoSlug : prev.slug,
+      adminName: prev.adminName === "" || prev.adminName === prev.name ? name : prev.adminName,
     }));
   };
 
   const handleProvisionSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.slug || !formData.adminEmail || !formData.adminPassword) {
+    const cleanName = formData.name.trim();
+    const cleanSlug = formData.slug.toLowerCase().trim();
+    const cleanAdminEmail = formData.adminEmail.toLowerCase().trim();
+    const cleanAdminName = formData.adminName.trim() || cleanName;
+
+    if (!cleanName || !cleanSlug || !cleanAdminEmail || !formData.adminPassword) {
       showToast("Please fill in all mandatory fields.", "warning");
       return;
     }
@@ -113,14 +119,14 @@ export function PlatformAdminClient({ initialTenants }: PlatformAdminClientProps
     setIsSubmitting(true);
     try {
       const res = await provisionTenantAction({
-        name: formData.name,
-        slug: formData.slug,
-        contactEmail: formData.contactEmail || formData.adminEmail,
-        contactPhone: formData.contactPhone || formData.adminPhone,
-        maxSeats: Number(formData.maxSeats),
-        adminName: formData.adminName || "Tenant Admin",
-        adminEmail: formData.adminEmail,
-        adminPhone: formData.adminPhone,
+        name: cleanName,
+        slug: cleanSlug,
+        contactEmail: cleanAdminEmail,
+        contactPhone: formData.adminPhone?.trim() || undefined,
+        maxSeats: Number(formData.maxSeats) || 15,
+        adminName: cleanAdminName,
+        adminEmail: cleanAdminEmail,
+        adminPhone: formData.adminPhone?.trim() || undefined,
         adminPassword: formData.adminPassword,
       });
 
@@ -135,7 +141,7 @@ export function PlatformAdminClient({ initialTenants }: PlatformAdminClientProps
             contactPhone: res.data!.tenant.contactPhone,
             maxSeats: res.data!.tenant.maxSeats,
             isActive: res.data!.tenant.isActive,
-            createdAt: new Date(),
+            createdAt: new Date().toISOString(),
             _count: { users: 1, properties: 0, leads: 0 },
           },
           ...prev,
@@ -352,130 +358,125 @@ export function PlatformAdminClient({ initialTenants }: PlatformAdminClientProps
         <Modal
           isOpen={isProvisionOpen}
           onClose={() => setIsProvisionOpen(false)}
-          title="Provision New Brokerage Tenant"
+          title="Provision New Tenant Account"
         >
           <form onSubmit={handleProvisionSubmit} className="space-y-4">
             <div className="bg-[#F7F5F0] p-3 rounded-md border border-[#E4DFD5] text-xs text-[#667085]">
-              This action creates an isolated brokerage tenant and provisions its initial primary CRM Tenant Admin.
+              Creates an isolated brokerage tenant organization and provisions its initial CRM Tenant Admin login account.
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-3">
               <div>
                 <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
-                  Brokerage Name *
+                  Brokerage / Tenant Name *
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Apex Realty Partners"
+                  placeholder="e.g. Vikrant Singh or Apex Realty"
                   value={formData.name}
                   onChange={handleNameChange}
                   className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
-                  Tenant Identifier (Slug) *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. apex-realty"
-                  value={formData.slug}
-                  onChange={(e) => setFormData({ ...formData, slug: e.target.value.toLowerCase() })}
-                  className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm font-mono text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
-                  Contact Email
-                </label>
-                <input
-                  type="email"
-                  placeholder="contact@apexrealty.in"
-                  value={formData.contactEmail}
-                  onChange={(e) => setFormData({ ...formData, contactEmail: e.target.value })}
-                  className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
-                  Max User Seats *
-                </label>
-                <input
-                  type="number"
-                  required
-                  min={1}
-                  max={500}
-                  value={formData.maxSeats}
-                  onChange={(e) => setFormData({ ...formData, maxSeats: Number(e.target.value) })}
-                  className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
-                />
-              </div>
-            </div>
-
-            <div className="border-t border-[#E4DFD5] pt-3 mt-3">
-              <h4 className="text-xs font-bold text-[#1E2A32] uppercase tracking-wider mb-2">
-                Initial CRM Tenant Admin
-              </h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
-                    Admin Full Name *
+                    Tenant Identifier (Slug) *
                   </label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Ramesh Chandra"
-                    value={formData.adminName}
-                    onChange={(e) => setFormData({ ...formData, adminName: e.target.value })}
-                    className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
+                    placeholder="e.g. vikrant"
+                    value={formData.slug}
+                    onChange={(e) => setFormData({ ...formData, slug: e.target.value.toLowerCase() })}
+                    className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm font-mono text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
                   />
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
-                    Admin Work Email *
+                    Max User Seats *
                   </label>
                   <input
-                    type="email"
+                    type="number"
                     required
-                    placeholder="admin@apexrealty.in"
-                    value={formData.adminEmail}
-                    onChange={(e) => setFormData({ ...formData, adminEmail: e.target.value })}
+                    min={1}
+                    max={500}
+                    value={formData.maxSeats}
+                    onChange={(e) => setFormData({ ...formData, maxSeats: Number(e.target.value) })}
                     className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
-                    Admin Phone
-                  </label>
-                  <input
-                    type="tel"
-                    placeholder="+91 98765 43210"
-                    value={formData.adminPhone}
-                    onChange={(e) => setFormData({ ...formData, adminPhone: e.target.value })}
-                    className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
-                  />
+              <div className="border-t border-[#E4DFD5] pt-3">
+                <div className="text-xs font-bold text-[#1E2A32] uppercase tracking-wider mb-2 flex items-center justify-between">
+                  <span>Tenant Admin Credentials</span>
+                  <span className="text-[10px] text-[#667085] font-normal lowercase">(Login details for tenant)</span>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
-                    Initial Password *
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    minLength={8}
-                    placeholder="Min 8 characters"
-                    value={formData.adminPassword}
-                    onChange={(e) => setFormData({ ...formData, adminPassword: e.target.value })}
-                    className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
-                  />
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
+                        Admin Full Name *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Vikrant Singh"
+                        value={formData.adminName}
+                        onChange={(e) => setFormData({ ...formData, adminName: e.target.value })}
+                        className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
+                        Admin Work Email (Login) *
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="e.g. vikrant@crm.in"
+                        value={formData.adminEmail}
+                        onChange={(e) => setFormData({ ...formData, adminEmail: e.target.value })}
+                        className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
+                        Contact Phone (Optional)
+                      </label>
+                      <input
+                        type="tel"
+                        placeholder="+91 98765 43210"
+                        value={formData.adminPhone}
+                        onChange={(e) => setFormData({ ...formData, adminPhone: e.target.value })}
+                        className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
+                        Initial Login Password *
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        minLength={8}
+                        placeholder="Min 8 characters"
+                        value={formData.adminPassword}
+                        onChange={(e) => setFormData({ ...formData, adminPassword: e.target.value })}
+                        className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -493,7 +494,7 @@ export function PlatformAdminClient({ initialTenants }: PlatformAdminClientProps
                 disabled={isSubmitting}
                 className="px-4 py-2 bg-[#1F6F6B] hover:bg-[#165451] text-white text-sm font-semibold rounded-md shadow-sm transition-colors disabled:opacity-50"
               >
-                {isSubmitting ? "Provisioning..." : "Provision Tenant"}
+                {isSubmitting ? "Provisioning..." : "Provision Tenant Account"}
               </button>
             </div>
           </form>

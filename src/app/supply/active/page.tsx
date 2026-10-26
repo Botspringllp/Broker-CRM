@@ -8,14 +8,30 @@ import {
 } from "@/server/dal/mappers";
 import { Property, Lead } from "@/types/crm";
 import { ActiveSupplyPoolClient } from "./ActiveSupplyPoolClient";
-import { SupplyValidationStatus, LeadStatus } from "@prisma/client";
+import { SupplyValidationStatus, LeadStatus, UserRole } from "@prisma/client";
+import { redirect } from "next/navigation";
 
 async function ActiveSupplyPoolData() {
+  let context: Awaited<ReturnType<typeof requireTenantContext>> | null = null;
+
+  try {
+    context = await requireTenantContext();
+  } catch {
+    context = null;
+  }
+
+  if (!context) {
+    redirect("/login");
+  }
+
+  if (context.role === UserRole.PLATFORM_SUPER_ADMIN) {
+    redirect("/platform");
+  }
+
   let properties: Property[] = [];
   let leads: Lead[] = [];
 
   try {
-    const context = await requireTenantContext();
     const [dbProperties, dbLeads] = await Promise.all([
       listProperties(context, {
         validationStatus: { equals: SupplyValidationStatus.VALIDATED },
@@ -29,7 +45,6 @@ async function ActiveSupplyPoolData() {
     properties = dbProperties.map(mapPrismaPropertyToView);
     leads = dbLeads.map(mapPrismaLeadToView);
   } catch {
-    // Unauthenticated or not associated with tenant: render empty state
     properties = [];
     leads = [];
   }

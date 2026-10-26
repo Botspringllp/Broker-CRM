@@ -10,21 +10,34 @@ import {
 } from "@/server/dal/mappers";
 import { Property, Lead, SiteVisit } from "@/types/crm";
 import { OverviewClient } from "./OverviewClient";
+import { UserRole } from "@prisma/client";
+import { redirect } from "next/navigation";
 
 async function OverviewData() {
+  let context: Awaited<ReturnType<typeof requireTenantContext>> | null = null;
+
+  try {
+    context = await requireTenantContext();
+  } catch {
+    context = null;
+  }
+
+  // 1. If not authenticated, redirect to /login
+  if (!context) {
+    redirect("/login");
+  }
+
+  // 2. If Platform Super Admin, redirect directly to /platform
+  if (context.role === UserRole.PLATFORM_SUPER_ADMIN) {
+    redirect("/platform");
+  }
+
+  // 3. For authenticated tenant users, load operational data
   let properties: Property[] = [];
   let leads: Lead[] = [];
   let visits: SiteVisit[] = [];
-  let isAuthenticated = false;
-  let userName = "Not signed in";
-  let userRole = "Guest";
 
   try {
-    const context = await requireTenantContext();
-    isAuthenticated = true;
-    userName = context.user.name;
-    userRole = context.user.role.replace("_", " ");
-
     const [dbProperties, dbLeads, dbVisits] = await Promise.all([
       listProperties(context).catch(() => []),
       listLeads(context).catch(() => []),
@@ -35,7 +48,6 @@ async function OverviewData() {
     leads = dbLeads.map(mapPrismaLeadToView);
     visits = dbVisits.map(mapPrismaSiteVisitToView);
   } catch {
-    // Unauthenticated or not associated with tenant: safely default to empty dataset
     properties = [];
     leads = [];
     visits = [];
@@ -46,9 +58,9 @@ async function OverviewData() {
       initialProperties={properties}
       initialLeads={leads}
       initialVisits={visits}
-      userName={userName}
-      userRole={userRole}
-      isAuthenticated={isAuthenticated}
+      userName={context.user.name}
+      userRole={context.user.role.replace("_", " ")}
+      isAuthenticated={true}
     />
   );
 }
