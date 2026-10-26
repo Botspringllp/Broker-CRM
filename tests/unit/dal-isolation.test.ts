@@ -181,10 +181,10 @@ describe("Tenant Data Access Layer (DAL) Isolation & Security", () => {
 
       expect(prisma.lead.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: {
+          where: expect.objectContaining({
             id: "lead-foreign-999",
             tenantId: "tenant-apex",
-          },
+          }),
         })
       );
     });

@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bootstrap:superadmin": "npx tsx scripts/bootstrap-superadmin.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",

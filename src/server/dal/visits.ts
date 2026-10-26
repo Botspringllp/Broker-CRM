@@ -1,11 +1,13 @@
 import { prisma } from "../db";
-import { TenantContext, NotFoundError } from "../tenant-context";
+import { TenantContext, NotFoundError, ForbiddenError } from "../tenant-context";
 import { assertPermission } from "../permissions";
 import { Prisma, UserRole, SiteVisitItemOutcome } from "@prisma/client";
 
 /**
  * Lists site visits strictly scoped to the authenticated tenant.
- * Field Sales Agents are strictly restricted to their assigned visits per PRD §8.2.
+ * - Field Sales Agents are strictly restricted to their assigned visits per PRD §8.2.
+ * - Telecallers and Broker Owners can view all tenant site visits.
+ * - Field Verifiers and Tenant Admins have zero operational visit access.
  */
 export async function listSiteVisits(context: TenantContext) {
   assertPermission(context, "visits:view_assigned");
@@ -60,6 +62,7 @@ export async function listSiteVisits(context: TenantContext) {
 
 /**
  * Retrieves a site visit by ID strictly scoped to the authenticated tenant.
+ * Denies access if not found or if a Field Sales Agent requests an unassigned visit.
  */
 export async function getSiteVisitById(context: TenantContext, visitId: string) {
   assertPermission(context, "visits:view_assigned");
@@ -69,6 +72,7 @@ export async function getSiteVisitById(context: TenantContext, visitId: string) 
     tenantId: context.tenantId, // STRICT TENANT SCOPE
   };
 
+  // Field Sales Agent: deny unassigned visits even if ID is known
   if (context.role === UserRole.FIELD_SALES_AGENT) {
     where.assignedSalesAgentId = context.userId;
   }
@@ -76,8 +80,35 @@ export async function getSiteVisitById(context: TenantContext, visitId: string) 
   const visit = await prisma.siteVisit.findFirst({
     where,
     include: {
+      lead: {
+        select: {
+          id: true,
+          name: true,
+          primaryPhone: true,
+        },
+      },
+      assignedSalesAgent: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
       items: {
-        include: { property: true },
+        include: {
+          property: {
+            select: {
+              id: true,
+              societyName: true,
+              localityName: true,
+              city: true,
+              bedroomCount: true,
+              flatNumber: true,
+              ownerName: true,
+              ownerMobile: true,
+            },
+          },
+        },
       },
       scheduleHistories: true,
     },
@@ -92,6 +123,7 @@ export async function getSiteVisitById(context: TenantContext, visitId: string) 
 
 /**
  * Records per-property visit outcome with dual-identity audit.
+ * Field Sales Agents can only record outcomes on their assigned visit items.
  */
 export async function recordVisitItemOutcome(
   context: TenantContext,
@@ -112,10 +144,21 @@ export async function recordVisitItemOutcome(
       id: itemId,
       tenantId: context.tenantId, // STRICT TENANT SCOPE
     },
+    include: {
+      siteVisit: true,
+    },
   });
 
   if (!item) {
     throw new NotFoundError("Visit item not found.");
+  }
+
+  // If actor is Field Sales Agent, assert this visit is assigned to them
+  if (
+    context.role === UserRole.FIELD_SALES_AGENT &&
+    item.siteVisit.assignedSalesAgentId !== context.userId
+  ) {
+    throw new ForbiddenError("Cannot record outcome on unassigned visit.");
   }
 
   return prisma.siteVisitItem.update({
@@ -131,4 +174,3 @@ export async function recordVisitItemOutcome(
     },
   });
 }
-

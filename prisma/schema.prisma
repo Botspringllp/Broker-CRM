@@ -199,8 +199,11 @@ enum KeyHolderPersona {
 model Tenant {
   id        String   @id @default(uuid())
   name      String
-  slug      String   @unique
-  isActive  Boolean  @default(true)
+  slug         String   @unique
+  contactEmail String?
+  contactPhone String?
+  maxSeats     Int      @default(10)
+  isActive     Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -223,41 +226,53 @@ model Tenant {
   siteVisitItems            SiteVisitItem[]
   siteVisitScheduleHistory  SiteVisitScheduleHistory[]
   siteVisitAccessLinks      SiteVisitAccessLink[]
+  userAuditLogs             UserAuditLog[]
 
   @@map("tenants")
 }
 
 model User {
-  id            String    @id @default(uuid())
+  id            String   @id @default(uuid())
   tenantId      String
-  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   name          String
-  email         String    @unique
-  emailVerified Boolean   @default(false)
+  email         String   @unique
+  emailVerified Boolean  @default(false)
   image         String?
   phone         String
   role          UserRole
-  isActive      Boolean   @default(true)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   // Better Auth Core Relations
-  sessions      Session[]
-  accounts      Account[]
+  sessions Session[]
+  accounts Account[]
 
   // Operational Relationships
-  assignedLeads              Lead[]                     @relation("AssignedTelecaller")
-  assignedVisits             SiteVisit[]                @relation("AssignedSalesAgent")
-  confirmedVisits            SiteVisit[]                @relation("TelecallerConfirmedVisits")
-  callLogs                   CallLog[]                  @relation("CallerCallLogs")
-  leadChangeLogs             LeadChangeLog[]            @relation("UserChangeLogs")
-  assignmentsReceived        Assignment[]               @relation("AssignedUser")
-  assignmentsGiven           Assignment[]               @relation("AssignerUser")
-  reportedVisitItems         SiteVisitItem[]            @relation("ReportedByUser")
-  enteredVisitItems          SiteVisitItem[]            @relation("EnteredByUser")
-  scheduleChangesRecorded    SiteVisitScheduleHistory[] @relation("ScheduleChangedByUser")
-  siteVisitAccessLinks       SiteVisitAccessLink[]      @relation("SalesAgentAccessLinks")
-  submittedProperties        Property[]                 @relation("SubmittingAgentProperties")
+  assignedLeads           Lead[]                     @relation("AssignedTelecaller")
+  assignedVisits          SiteVisit[]                @relation("AssignedSalesAgent")
+  confirmedVisits         SiteVisit[]                @relation("TelecallerConfirmedVisits")
+  callLogs                CallLog[]                  @relation("CallerCallLogs")
+  leadChangeLogs          LeadChangeLog[]            @relation("UserChangeLogs")
+  assignmentsReceived     Assignment[]               @relation("AssignedUser")
+  assignmentsGiven        Assignment[]               @relation("AssignerUser")
+  reportedVisitItems      SiteVisitItem[]            @relation("ReportedByUser")
+  enteredVisitItems       SiteVisitItem[]            @relation("EnteredByUser")
+  scheduleChangesRecorded SiteVisitScheduleHistory[] @relation("ScheduleChangedByUser")
+  siteVisitAccessLinks    SiteVisitAccessLink[]      @relation("SalesAgentAccessLinks")
+  submittedProperties     Property[]                 @relation("SubmittingAgentProperties")
+
+  // Team Hierarchy & Delegated Permissions
+  brokerId             String?
+  broker               User?          @relation("BrokerTeamHierarchy", fields: [brokerId], references: [id], onDelete: SetNull)
+  brokerTeamMembers    User[]         @relation("BrokerTeamHierarchy")
+  teamLeaderId         String?
+  teamLeader           User?          @relation("TeamHierarchy", fields: [teamLeaderId], references: [id], onDelete: SetNull)
+  subordinates         User[]         @relation("TeamHierarchy")
+  delegatedPermissions String[]       @default([])
+  targetAuditLogs      UserAuditLog[] @relation("AuditTargetUser")
+  actorAuditLogs       UserAuditLog[] @relation("AuditActorUser")
 
   @@unique([tenantId, email])
   @@index([tenantId, role])
@@ -287,7 +302,7 @@ model Account {
   user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   accountId             String
   providerId            String
-  password              String?   // Stores hashed password for emailAndPassword (scrypt)
+  password              String? // Stores hashed password for emailAndPassword (scrypt)
   accessToken           String?
   refreshToken          String?
   idToken               String?
@@ -344,27 +359,27 @@ model Locality {
 // ---------------------------------------------------------
 
 model Property {
-  id        String   @id @default(uuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(uuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Property Details
   flatNumber         String
   societyName        String
   localityId         String?
-  locality           Locality?        @relation(fields: [localityId], references: [id], onDelete: SetNull)
-  localityName       String           // Preserved from upload/entry
+  locality           Locality?          @relation(fields: [localityId], references: [id], onDelete: SetNull)
+  localityName       String // Preserved from upload/entry
   city               String
   preference         TransactionType
   furnishingStatus   FurnishingStatus
   propertyType       PropertyType
-  area               Decimal          @db.Decimal(12, 2)
+  area               Decimal            @db.Decimal(12, 2)
   areaType           AreaUnitType
   bedroomCount       Int
   bathroomCount      Int
-  balconyCount       Int              @default(0)
-  price              Decimal          @db.Decimal(14, 2) // Total sale price or monthly rent
-  amenities          String[]         @default([])
+  balconyCount       Int                @default(0)
+  price              Decimal            @db.Decimal(14, 2) // Total sale price or monthly rent
+  amenities          String[]           @default([])
   constructionStatus ConstructionStatus
 
   // Owner Contacts (Masked from unauthenticated & buyer-facing views)
@@ -377,10 +392,10 @@ model Property {
   isActiveSupply     Boolean                    @default(false) // True only when Validated + Available
 
   // Rental 10-Month Revalidation Rule
-  rentedAt               DateTime?
-  rentalAgreementMonths  Int                      @default(11)
-  revalidationStatus     RentalRevalidationStatus @default(NONE)
-  revalidationDueDate    DateTime?
+  rentedAt              DateTime?
+  rentalAgreementMonths Int                      @default(11)
+  revalidationStatus    RentalRevalidationStatus @default(NONE)
+  revalidationDueDate   DateTime?
 
   // Intake Channel
   entryChannel      PropertyEntryChannel @default(MANUAL)
@@ -416,7 +431,7 @@ model KeyHolder {
   propertyId String
   property   Property         @relation(fields: [propertyId], references: [id], onDelete: Cascade)
   name       String
-  mobile     String           // Normalized mobile number
+  mobile     String // Normalized mobile number
   persona    KeyHolderPersona @default(OTHER)
   notes      String?
   createdAt  DateTime         @default(now())
@@ -434,7 +449,7 @@ model PropertyMedia {
   property        Property             @relation(fields: [propertyId], references: [id], onDelete: Cascade)
   mediaType       MediaType
   storageProvider MediaStorageProvider @default(OBJECT_STORAGE)
-  url             String               // S3/R2/Blob object storage URL or YouTube link
+  url             String // S3/R2/Blob object storage URL or YouTube link
   caption         String?
   displayOrder    Int                  @default(0)
   createdAt       DateTime             @default(now())
@@ -448,9 +463,9 @@ model PropertyMedia {
 // ---------------------------------------------------------
 
 model Lead {
-  id        String   @id @default(uuid())
-  tenantId  String
-  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id       String @id @default(uuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   // Primary Prospect Identification
   name           String
@@ -459,11 +474,11 @@ model Lead {
   email          String?
 
   // Lifecycle Status & Tracking
-  status                    LeadStatus @default(NOT_YET_VALIDATED)
-  unreachableAttemptsCount  Int        @default(0)
+  status                   LeadStatus @default(NOT_YET_VALIDATED)
+  unreachableAttemptsCount Int        @default(0)
 
   // Non-Editable Source Metadata (PRD §5.3)
-  originalSource String
+  originalSource  String
   sourceCreatedAt DateTime @default(now())
 
   // Current Operational Assignment
@@ -474,12 +489,12 @@ model Lead {
   updatedAt DateTime @updatedAt
 
   // Child relationships
-  enquiries        Enquiry[]
-  requirement      LeadRequirement?
-  changeLogs       LeadChangeLog[]
-  callLogs         CallLog[]
-  assignments      Assignment[]
-  siteVisits       SiteVisit[]
+  enquiries         Enquiry[]
+  requirement       LeadRequirement?
+  changeLogs        LeadChangeLog[]
+  callLogs          CallLog[]
+  assignments       Assignment[]
+  siteVisits        SiteVisit[]
   propertyInterests BuyerPropertyInterest[]
 
   @@unique([id, tenantId])
@@ -490,22 +505,22 @@ model Lead {
 }
 
 model Enquiry {
-  id                   String    @id @default(uuid())
-  tenantId             String
-  tenant               Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  leadId               String
-  lead                 Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  source               String    // 99ACRES, MAGICBRICKS, NOBROKER, MANUAL, CSV, etc.
-  advertisedPropertyRef String?   // External portal ad reference code
-  advertisedPropertyId String?
-  advertisedProperty   Property? @relation(fields: [advertisedPropertyId], references: [id], onDelete: SetNull)
-  enquiryDate          DateTime  @default(now())
-  enquiryDetails       String?
+  id                    String    @id @default(uuid())
+  tenantId              String
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId                String
+  lead                  Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  source                String // 99ACRES, MAGICBRICKS, NOBROKER, MANUAL, CSV, etc.
+  advertisedPropertyRef String? // External portal ad reference code
+  advertisedPropertyId  String?
+  advertisedProperty    Property? @relation(fields: [advertisedPropertyId], references: [id], onDelete: SetNull)
+  enquiryDate           DateTime  @default(now())
+  enquiryDetails        String?
 
   // Demand Validation Enquiry Verification (PRD §5.1)
-  isVerifiedByCaller     Boolean  @default(false)
+  isVerifiedByCaller      Boolean  @default(false)
   callerVerificationNotes String?
-  createdAt              DateTime @default(now())
+  createdAt               DateTime @default(now())
 
   @@index([tenantId, leadId])
   @@index([tenantId, advertisedPropertyId])
@@ -513,23 +528,23 @@ model Enquiry {
 }
 
 model LeadRequirement {
-  id         String   @id @default(uuid())
-  tenantId   String
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  leadId     String   @unique
-  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  id       String @id @default(uuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId   String @unique
+  lead     Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
 
   // Search Criteria
-  minBudget             Decimal          @db.Decimal(14, 2)
-  maxBudget             Decimal          @db.Decimal(14, 2)
+  minBudget             Decimal         @db.Decimal(14, 2)
+  maxBudget             Decimal         @db.Decimal(14, 2)
   city                  String
-  societies             String[]         @default([])
-  bedroomConfigurations String[]         @default([]) // e.g. ["2 BHK", "3 BHK"]
+  societies             String[]        @default([])
+  bedroomConfigurations String[]        @default([]) // e.g. ["2 BHK", "3 BHK"]
   minBedrooms           Int?
   maxBedrooms           Int?
   preference            TransactionType
-  propertyTypes         PropertyType[]   @default([])
-  targetArea            Decimal?         @db.Decimal(12, 2)
+  propertyTypes         PropertyType[]  @default([])
+  targetArea            Decimal?        @db.Decimal(12, 2)
   areaType              AreaUnitType?
 
   isConfirmed Boolean  @default(false)
@@ -557,18 +572,18 @@ model LeadRequirementLocality {
 }
 
 model LeadChangeLog {
-  id             String   @id @default(uuid())
-  tenantId       String
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  leadId         String
-  lead           Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  fieldName      String
-  previousValue  String?
-  newValue       String?
+  id              String   @id @default(uuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leadId          String
+  lead            Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  fieldName       String
+  previousValue   String?
+  newValue        String?
   changedByUserId String?
-  changedByUser  User?    @relation("UserChangeLogs", fields: [changedByUserId], references: [id], onDelete: SetNull)
-  changeSource   String   // USER, API, SYSTEM
-  changedAt      DateTime @default(now())
+  changedByUser   User?    @relation("UserChangeLogs", fields: [changedByUserId], references: [id], onDelete: SetNull)
+  changeSource    String // USER, API, SYSTEM
+  changedAt       DateTime @default(now())
 
   @@index([tenantId, leadId, changedAt])
   @@map("lead_change_logs")
@@ -579,21 +594,21 @@ model LeadChangeLog {
 // ---------------------------------------------------------
 
 model CallLog {
-  id                   String                      @id @default(uuid())
-  tenantId             String
-  tenant               Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  callerId             String
-  caller               User                        @relation("CallerCallLogs", fields: [callerId], references: [id], onDelete: Restrict)
-  callType             CallTargetType
-  propertyId           String?
-  property             Property?                   @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  leadId               String?
-  lead                 Lead?                       @relation(fields: [leadId], references: [id], onDelete: Cascade)
-  propertyDisposition  PropertyCallingDisposition?
-  leadDisposition      LeadCallingDisposition?
-  notes                String?
-  callbackScheduledAt  DateTime?
-  calledAt             DateTime                    @default(now())
+  id                  String                      @id @default(uuid())
+  tenantId            String
+  tenant              Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  callerId            String
+  caller              User                        @relation("CallerCallLogs", fields: [callerId], references: [id], onDelete: Restrict)
+  callType            CallTargetType
+  propertyId          String?
+  property            Property?                   @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  leadId              String?
+  lead                Lead?                       @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  propertyDisposition PropertyCallingDisposition?
+  leadDisposition     LeadCallingDisposition?
+  notes               String?
+  callbackScheduledAt DateTime?
+  calledAt            DateTime                    @default(now())
 
   @@unique([id, tenantId])
   @@index([tenantId, propertyId, calledAt])
@@ -664,15 +679,15 @@ model BuyerPropertyInterest {
 // ---------------------------------------------------------
 
 model SiteVisit {
-  id                   String            @id @default(uuid())
+  id                   String          @id @default(uuid())
   tenantId             String
-  tenant               Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant               Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   leadId               String
-  lead                 Lead              @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  lead                 Lead            @relation(fields: [leadId], references: [id], onDelete: Cascade)
   assignedSalesAgentId String
-  assignedSalesAgent   User              @relation("AssignedSalesAgent", fields: [assignedSalesAgentId], references: [id], onDelete: Restrict)
+  assignedSalesAgent   User            @relation("AssignedSalesAgent", fields: [assignedSalesAgentId], references: [id], onDelete: Restrict)
   scheduledDate        DateTime
-  status               SiteVisitStatus   @default(TENTATIVE_AWAITING_OWNER)
+  status               SiteVisitStatus @default(TENTATIVE_AWAITING_OWNER)
 
   // Telecaller Final Confirmation (PRD §8.3)
   telecallerConfirmedAt       DateTime?
@@ -774,3 +789,19 @@ model SiteVisitAccessLink {
   @@map("site_visit_access_links")
 }
 
+model UserAuditLog {
+  id           String   @id @default(uuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  targetUserId String?
+  targetUser   User?    @relation("AuditTargetUser", fields: [targetUserId], references: [id], onDelete: Cascade)
+  actorUserId  String
+  actorUser    User     @relation("AuditActorUser", fields: [actorUserId], references: [id], onDelete: Restrict)
+  action       String
+  details      Json?
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, targetUserId, createdAt])
+  @@index([tenantId, actorUserId, createdAt])
+  @@map("user_audit_logs")
+}

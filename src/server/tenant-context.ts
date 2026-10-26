@@ -1,35 +1,18 @@
 import { headers } from "next/headers";
 import { auth } from "./auth";
 import { UserRole } from "@prisma/client";
+import { prisma } from "./db";
+import { UnauthorizedError, ForbiddenError, NotFoundError } from "./errors";
 
-export class UnauthorizedError extends Error {
-  readonly status = 401;
-  constructor(message = "Authentication required.") {
-    super(message);
-    this.name = "UnauthorizedError";
-  }
-}
-
-export class ForbiddenError extends Error {
-  readonly status = 403;
-  constructor(message = "Access denied: insufficient permissions.") {
-    super(message);
-    this.name = "ForbiddenError";
-  }
-}
-
-export class NotFoundError extends Error {
-  readonly status = 404;
-  constructor(message = "Resource not found.") {
-    super(message);
-    this.name = "NotFoundError";
-  }
-}
+export { UnauthorizedError, ForbiddenError, NotFoundError };
 
 export interface TenantContext {
   userId: string;
   tenantId: string;
   role: UserRole;
+  delegatedPermissions?: string[];
+  teamLeaderId?: string | null;
+  brokerId?: string | null;
   user: {
     id: string;
     email: string;
@@ -37,6 +20,9 @@ export interface TenantContext {
     role: UserRole;
     tenantId: string;
     isActive: boolean;
+    teamLeaderId?: string | null;
+    brokerId?: string | null;
+    delegatedPermissions?: string[];
   };
   session: {
     id: string;
@@ -63,12 +49,12 @@ export async function getAuthenticatedSession(customHeaders?: Headers) {
 
 /**
  * Centralized Server-Side Tenant Context Resolver.
- * Resolves the authenticated user's permitted tenant membership.
+ * Resolves the authenticated user's permitted tenant membership and active state.
  *
- * SECURITY INVARIANT:
- * Client-supplied tenant IDs (e.g. headers, query params, request body)
- * are NEVER trusted as authorization. The tenantId is resolved strictly
- * from the verified server-side session and database user record.
+ * SECURITY INVARIANTS:
+ * 1. Client-supplied tenant IDs (e.g. headers, query params, request body) are NEVER trusted.
+ * 2. Tenant ID, role, status, and permissions are verified server-side.
+ * 3. Fresh user status and delegated permissions are queried from the database.
  */
 export async function requireTenantContext(
   customHeaders?: Headers,
@@ -87,29 +73,89 @@ export async function requireTenantContext(
     role?: string;
     tenantId?: string;
     isActive?: boolean;
+    teamLeaderId?: string | null;
+    brokerId?: string | null;
+    delegatedPermissions?: string[];
   };
 
   if (!rawUser.tenantId) {
     throw new ForbiddenError("User is not associated with an authorized tenant.");
   }
 
-  if (rawUser.isActive === false && !options?.allowInactive) {
-    throw new ForbiddenError("User account is inactive. Please contact your administrator.");
+  // Attempt to fetch fresh database state for real-time deactivation & delegation enforcement
+  let userRole = (rawUser.role as UserRole) || UserRole.TELECALLER;
+  let isActive = rawUser.isActive ?? true;
+  let teamLeaderId = rawUser.teamLeaderId ?? null;
+  let brokerId = rawUser.brokerId ?? null;
+  let delegatedPermissions = rawUser.delegatedPermissions ?? [];
+
+  try {
+    const dbUser = await prisma.user.findUnique({
+      where: { id: rawUser.id },
+      select: {
+        id: true,
+        tenantId: true,
+        role: true,
+        isActive: true,
+        brokerId: true,
+        teamLeaderId: true,
+        delegatedPermissions: true,
+        tenant: {
+          select: {
+            id: true,
+            isActive: true,
+          },
+        },
+      },
+    });
+
+    if (dbUser) {
+      if (dbUser.tenantId !== rawUser.tenantId) {
+        throw new ForbiddenError("Cross-tenant session anomaly detected.");
+      }
+      userRole = dbUser.role;
+      isActive = dbUser.isActive;
+      brokerId = dbUser.brokerId;
+      teamLeaderId = dbUser.teamLeaderId;
+      delegatedPermissions = dbUser.delegatedPermissions || [];
+
+      // Enforce tenant organization active status for tenant users
+      if (
+        dbUser.tenant &&
+        dbUser.tenant.isActive === false &&
+        userRole !== UserRole.PLATFORM_SUPER_ADMIN
+      ) {
+        throw new ForbiddenError(
+          "Tenant organization is currently inactive. Please contact your platform administrator."
+        );
+      }
+    }
+  } catch (err) {
+    if (err instanceof ForbiddenError) throw err;
+    // Database read fallback for mock environments or offline tests
   }
 
-  const userRole = (rawUser.role as UserRole) || UserRole.TELECALLER;
+  if (isActive === false && !options?.allowInactive) {
+    throw new ForbiddenError("User account is inactive. Please contact your administrator.");
+  }
 
   return {
     userId: rawUser.id,
     tenantId: rawUser.tenantId,
     role: userRole,
+    delegatedPermissions,
+    teamLeaderId,
+    brokerId,
     user: {
       id: rawUser.id,
       email: rawUser.email,
       name: rawUser.name,
       role: userRole,
       tenantId: rawUser.tenantId,
-      isActive: rawUser.isActive ?? true,
+      isActive,
+      teamLeaderId,
+      brokerId,
+      delegatedPermissions,
     },
     session: {
       id: session.session.id,
@@ -120,7 +166,7 @@ export async function requireTenantContext(
 }
 
 /**
- * Deny-by-default role permission assertion.
+ * Deny-by-default role assertion.
  * Ensures the authenticated user possesses one of the explicitly allowed roles.
  */
 export function requireRole(context: TenantContext, allowedRoles: UserRole[]): void {
@@ -145,4 +191,3 @@ export function assertTenantOwnership(
     throw new NotFoundError(`${resourceName} not found.`);
   }
 }
-

@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { UserRole } from "@prisma/client";
-import { hasPermission, assertPermission } from "@/server/permissions";
+import {
+  hasPermission,
+  assertPermission,
+  canAssignRole,
+  canDelegatePermission,
+  canAdministerUser,
+} from "@/server/permissions";
 import { TenantContext, ForbiddenError } from "@/server/tenant-context";
 
 describe("RBAC Permissions Matrix (PRD §3)", () => {
@@ -98,12 +104,16 @@ describe("RBAC Permissions Matrix (PRD §3)", () => {
   describe("Field Verifier Role", () => {
     const verifierContext = createContext(UserRole.FIELD_VERIFIER);
 
-    it("only has property onboarding and media upload permissions", () => {
+    it("has property onboarding, media upload, and assigned view permissions, but strictly denied validation approval", () => {
       expect(hasPermission(UserRole.FIELD_VERIFIER, "supply:create")).toBe(true);
       expect(hasPermission(UserRole.FIELD_VERIFIER, "supply:upload_media")).toBe(true);
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "supply:view_assigned")).toBe(true);
 
-      // Denied everything else
-      expect(hasPermission(UserRole.FIELD_VERIFIER, "supply:view_assigned")).toBe(false);
+      // Creation is strictly separated from verification approval (PRD §3)
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "supply:validate")).toBe(false);
+      expect(() => assertPermission(verifierContext, "supply:validate")).toThrow(ForbiddenError);
+
+      // Denied non-verifier operations
       expect(hasPermission(UserRole.FIELD_VERIFIER, "demand:create")).toBe(false);
       expect(hasPermission(UserRole.FIELD_VERIFIER, "visits:view_assigned")).toBe(false);
       expect(() => assertPermission(verifierContext, "demand:create")).toThrow(ForbiddenError);
@@ -158,6 +168,202 @@ describe("RBAC Permissions Matrix (PRD §3)", () => {
 
       expect(() => assertPermission(superAdminContext, "supply:view_all")).toThrow(ForbiddenError);
       expect(() => assertPermission(superAdminContext, "demand:view_all")).toThrow(ForbiddenError);
+    });
+  });
+
+  describe("Role Assignment Boundaries (canAssignRole)", () => {
+    it("allows Broker Owner to assign team leaders and operational agents, but not tenant admin or platform super admin", () => {
+      expect(canAssignRole(UserRole.BROKER_OWNER, UserRole.TEAM_LEADER)).toBe(true);
+      expect(canAssignRole(UserRole.BROKER_OWNER, UserRole.TELECALLER)).toBe(true);
+      expect(canAssignRole(UserRole.BROKER_OWNER, UserRole.FIELD_VERIFIER)).toBe(true);
+      expect(canAssignRole(UserRole.BROKER_OWNER, UserRole.FIELD_SALES_AGENT)).toBe(true);
+      expect(canAssignRole(UserRole.BROKER_OWNER, UserRole.CRM_TENANT_ADMIN)).toBe(false);
+      expect(canAssignRole(UserRole.BROKER_OWNER, UserRole.BROKER_OWNER)).toBe(false);
+      expect(canAssignRole(UserRole.BROKER_OWNER, UserRole.PLATFORM_SUPER_ADMIN)).toBe(false);
+    });
+
+    it("allows CRM Tenant Admin to assign broker owners, team leaders, and operational roles, but not platform admin", () => {
+      expect(canAssignRole(UserRole.CRM_TENANT_ADMIN, UserRole.BROKER_OWNER)).toBe(true);
+      expect(canAssignRole(UserRole.CRM_TENANT_ADMIN, UserRole.TEAM_LEADER)).toBe(true);
+      expect(canAssignRole(UserRole.CRM_TENANT_ADMIN, UserRole.TELECALLER)).toBe(true);
+      expect(canAssignRole(UserRole.CRM_TENANT_ADMIN, UserRole.FIELD_VERIFIER)).toBe(true);
+      expect(canAssignRole(UserRole.CRM_TENANT_ADMIN, UserRole.FIELD_SALES_AGENT)).toBe(true);
+      expect(canAssignRole(UserRole.CRM_TENANT_ADMIN, UserRole.CRM_TENANT_ADMIN)).toBe(false);
+      expect(canAssignRole(UserRole.CRM_TENANT_ADMIN, UserRole.PLATFORM_SUPER_ADMIN)).toBe(false);
+    });
+
+    it("allows Platform Super Admin to assign CRM Tenant Admin only", () => {
+      expect(canAssignRole(UserRole.PLATFORM_SUPER_ADMIN, UserRole.CRM_TENANT_ADMIN)).toBe(true);
+      expect(canAssignRole(UserRole.PLATFORM_SUPER_ADMIN, UserRole.BROKER_OWNER)).toBe(false);
+      expect(canAssignRole(UserRole.PLATFORM_SUPER_ADMIN, UserRole.TEAM_LEADER)).toBe(false);
+      expect(canAssignRole(UserRole.PLATFORM_SUPER_ADMIN, UserRole.PLATFORM_SUPER_ADMIN)).toBe(false);
+    });
+
+    it("allows Team Leader to assign only subordinate tiers", () => {
+      expect(canAssignRole(UserRole.TEAM_LEADER, UserRole.TELECALLER)).toBe(true);
+      expect(canAssignRole(UserRole.TEAM_LEADER, UserRole.FIELD_VERIFIER)).toBe(true);
+      expect(canAssignRole(UserRole.TEAM_LEADER, UserRole.FIELD_SALES_AGENT)).toBe(true);
+
+      // Cannot assign equal or superior roles
+      expect(canAssignRole(UserRole.TEAM_LEADER, UserRole.TEAM_LEADER)).toBe(false);
+      expect(canAssignRole(UserRole.TEAM_LEADER, UserRole.CRM_TENANT_ADMIN)).toBe(false);
+      expect(canAssignRole(UserRole.TEAM_LEADER, UserRole.BROKER_OWNER)).toBe(false);
+      expect(canAssignRole(UserRole.TEAM_LEADER, UserRole.PLATFORM_SUPER_ADMIN)).toBe(false);
+    });
+
+    it("denies operational roles from assigning any roles", () => {
+      expect(canAssignRole(UserRole.TELECALLER, UserRole.TELECALLER)).toBe(false);
+      expect(canAssignRole(UserRole.FIELD_VERIFIER, UserRole.FIELD_VERIFIER)).toBe(false);
+      expect(canAssignRole(UserRole.FIELD_SALES_AGENT, UserRole.FIELD_SALES_AGENT)).toBe(false);
+    });
+  });
+
+  describe("Permission Delegation Invariants (canDelegatePermission)", () => {
+    it("allows delegating permissions that the granter possesses", () => {
+      expect(canDelegatePermission(UserRole.BROKER_OWNER, "supply:validate")).toBe(true);
+      expect(canDelegatePermission(UserRole.TEAM_LEADER, "supply:log_call")).toBe(true);
+      expect(canDelegatePermission(UserRole.TEAM_LEADER, "visits:schedule")).toBe(true);
+    });
+
+    it("prohibits delegating core administrative privileges even if possessed", () => {
+      expect(canDelegatePermission(UserRole.BROKER_OWNER, "admin:manage_users")).toBe(false);
+      expect(canDelegatePermission(UserRole.BROKER_OWNER, "admin:manage_roles")).toBe(false);
+      expect(canDelegatePermission(UserRole.BROKER_OWNER, "admin:delegate_permissions")).toBe(false);
+      expect(canDelegatePermission(UserRole.BROKER_OWNER, "platform:manage_tenants")).toBe(false);
+    });
+
+    it("prohibits delegating permissions that the granter does not possess", () => {
+      expect(canDelegatePermission(UserRole.TELECALLER, "supply:view_all")).toBe(false);
+      expect(canDelegatePermission(UserRole.FIELD_VERIFIER, "demand:create")).toBe(false);
+      expect(canDelegatePermission(UserRole.TEAM_LEADER, "platform:manage_tenants")).toBe(false);
+    });
+
+    it("allows delegation of permitted actions granted via existing delegated permissions", () => {
+      // Telecaller who was delegated "supply:view_all"
+      expect(
+        canDelegatePermission(UserRole.TELECALLER, "supply:view_all", ["supply:view_all"])
+      ).toBe(true);
+    });
+  });
+
+  describe("User Administration Scope (canAdministerUser)", () => {
+    const ownerContext = createContext(UserRole.BROKER_OWNER, "tenant-apex");
+    const tlContext = createContext(UserRole.TEAM_LEADER, "tenant-apex");
+    const adminContext = createContext(UserRole.CRM_TENANT_ADMIN, "tenant-apex");
+
+    it("enforces strict cross-tenant barrier", () => {
+      const foreignUser = {
+        id: "foreign-1",
+        tenantId: "tenant-horizon",
+        role: UserRole.TELECALLER,
+      };
+
+      expect(canAdministerUser(ownerContext, foreignUser)).toBe(false);
+      expect(canAdministerUser(tlContext, foreignUser)).toBe(false);
+      expect(canAdministerUser(adminContext, foreignUser)).toBe(false);
+    });
+
+    it("enforces self-escalation barrier: users cannot administer themselves", () => {
+      const selfOwner = {
+        id: ownerContext.userId,
+        tenantId: "tenant-apex",
+        role: UserRole.BROKER_OWNER,
+      };
+      const selfTl = {
+        id: tlContext.userId,
+        tenantId: "tenant-apex",
+        role: UserRole.TEAM_LEADER,
+      };
+
+      expect(canAdministerUser(ownerContext, selfOwner)).toBe(false);
+      expect(canAdministerUser(tlContext, selfTl)).toBe(false);
+    });
+
+    it("allows Broker Owner to administer anyone in their tenant except another Broker Owner", () => {
+      const telecaller = {
+        id: "tc-1",
+        tenantId: "tenant-apex",
+        role: UserRole.TELECALLER,
+        brokerId: ownerContext.userId,
+      };
+      const otherOwner = {
+        id: "owner-2",
+        tenantId: "tenant-apex",
+        role: UserRole.BROKER_OWNER,
+      };
+
+      expect(canAdministerUser(ownerContext, telecaller)).toBe(true);
+      expect(canAdministerUser(ownerContext, otherOwner)).toBe(false);
+    });
+
+    it("enforces broker team boundary: Broker 1 cannot administer users assigned to Broker 2", () => {
+      const broker2Subordinate = {
+        id: "tc-b2",
+        tenantId: "tenant-apex",
+        role: UserRole.TELECALLER,
+        brokerId: "other-broker-2",
+      };
+
+      expect(canAdministerUser(ownerContext, broker2Subordinate)).toBe(false);
+    });
+
+    it("allows CRM Tenant Admin to administer all brokers and team members within the tenant", () => {
+      const broker1 = {
+        id: "broker-1",
+        tenantId: "tenant-apex",
+        role: UserRole.BROKER_OWNER,
+      };
+      const broker2Member = {
+        id: "tc-b2",
+        tenantId: "tenant-apex",
+        role: UserRole.TELECALLER,
+        brokerId: "broker-2",
+      };
+
+      expect(canAdministerUser(adminContext, broker1)).toBe(true);
+      expect(canAdministerUser(adminContext, broker2Member)).toBe(true);
+    });
+
+    it("allows Team Leader to administer ONLY direct subordinates within authorized roles", () => {
+      const subordinateTelecaller = {
+        id: "sub-tc-1",
+        tenantId: "tenant-apex",
+        role: UserRole.TELECALLER,
+        teamLeaderId: tlContext.userId,
+      };
+      const unassignedTelecaller = {
+        id: "other-tc-2",
+        tenantId: "tenant-apex",
+        role: UserRole.TELECALLER,
+        teamLeaderId: "other-tl-id",
+      };
+      const peerTeamLeader = {
+        id: "peer-tl-1",
+        tenantId: "tenant-apex",
+        role: UserRole.TEAM_LEADER,
+        teamLeaderId: tlContext.userId, // Even if assigned, TeamLeader role cannot be administered by peer TL
+      };
+
+      expect(canAdministerUser(tlContext, subordinateTelecaller)).toBe(true);
+      expect(canAdministerUser(tlContext, unassignedTelecaller)).toBe(false);
+      expect(canAdministerUser(tlContext, peerTeamLeader)).toBe(false);
+    });
+  });
+
+  describe("Delegated Permissions Dynamic Enforcement", () => {
+    it("grants access to delegated action not normally available to the base role", () => {
+      // Telecaller does not normally have supply:view_all
+      expect(hasPermission(UserRole.TELECALLER, "supply:view_all")).toBe(false);
+
+      // With delegated permission, access is granted
+      expect(hasPermission(UserRole.TELECALLER, "supply:view_all", ["supply:view_all"])).toBe(true);
+
+      const contextWithDelegation: TenantContext = {
+        ...createContext(UserRole.TELECALLER),
+        delegatedPermissions: ["supply:view_all"],
+      };
+
+      expect(() => assertPermission(contextWithDelegation, "supply:view_all")).not.toThrow();
     });
   });
 });
