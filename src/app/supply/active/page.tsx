@@ -28,6 +28,10 @@ async function ActiveSupplyPoolData() {
     redirect("/platform");
   }
 
+  if (context.role === UserRole.CRM_TENANT_ADMIN) {
+    redirect("/users");
+  }
+
   let properties: Property[] = [];
   let leads: Lead[] = [];
 

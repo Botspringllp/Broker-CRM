@@ -285,6 +285,11 @@ export function canDelegatePermission(
     return false;
   }
 
+  // CRM Tenant Admin has authority to configure operational permissions for tenant users
+  if (actorRole === UserRole.CRM_TENANT_ADMIN) {
+    return true;
+  }
+
   // Actor must possess the permission to delegate it
   return hasPermission(actorRole, action, actorDelegated);
 }

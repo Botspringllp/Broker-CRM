@@ -31,6 +31,8 @@ export default function LoginPage() {
 
         if (role === "PLATFORM_SUPER_ADMIN" || email.toLowerCase().trim() === "superadmin@crm.in") {
           router.push("/platform");
+        } else if (role === "CRM_TENANT_ADMIN") {
+          router.push("/users");
         } else {
           router.push("/");
         }

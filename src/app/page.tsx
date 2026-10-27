@@ -32,6 +32,11 @@ async function OverviewData() {
     redirect("/platform");
   }
 
+  // 3. If CRM Tenant Admin, redirect directly to /users (User & Team Management only)
+  if (context.role === UserRole.CRM_TENANT_ADMIN) {
+    redirect("/users");
+  }
+
   // 3. For authenticated tenant users, load operational data
   let properties: Property[] = [];
   let leads: Lead[] = [];

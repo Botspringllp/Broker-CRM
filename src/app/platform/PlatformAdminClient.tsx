@@ -219,7 +219,7 @@ export function PlatformAdminClient({ initialTenants }: PlatformAdminClientProps
         </div>
 
         {/* Platform Metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="bg-white rounded-lg p-5 border border-[#E4DFD5] shadow-xs">
             <span className="text-xs font-medium text-[#667085] uppercase tracking-wider">Total Tenants</span>
             <div className="text-2xl font-bold text-[#1E2A32] mt-1">{metrics.total}</div>
@@ -234,11 +234,6 @@ export function PlatformAdminClient({ initialTenants }: PlatformAdminClientProps
             <span className="text-xs font-medium text-[#667085] uppercase tracking-wider">Total Seats Allocated</span>
             <div className="text-2xl font-bold text-[#1E2A32] mt-1">{metrics.totalSeats}</div>
             <div className="text-xs text-[#3B5BA9] mt-1">{metrics.totalUsers} active user accounts</div>
-          </div>
-          <div className="bg-white rounded-lg p-5 border border-[#E4DFD5] shadow-xs">
-            <span className="text-xs font-medium text-[#667085] uppercase tracking-wider">Data Confidentiality</span>
-            <div className="text-2xl font-bold text-[#2E7D4F] mt-1">Enforced</div>
-            <div className="text-xs text-[#667085] mt-1">Direct CRM customer data isolated</div>
           </div>
         </div>
 

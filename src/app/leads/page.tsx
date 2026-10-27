@@ -24,6 +24,10 @@ async function LeadValidationData() {
     redirect("/platform");
   }
 
+  if (context.role === UserRole.CRM_TENANT_ADMIN) {
+    redirect("/users");
+  }
+
   let leads: Lead[] = [];
 
   try {

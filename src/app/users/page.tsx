@@ -1,9 +1,9 @@
 import { Suspense } from "react";
 import { requireTenantContext } from "@/server/tenant-context";
-import { listTenantUsers, listUserAuditLogs } from "@/server/dal/users";
+import { listTenantUsers } from "@/server/dal/users";
 import { prisma } from "@/server/db";
 import { UserRole } from "@prisma/client";
-import { UsersManagementClient, UserViewItem, UserAuditItem } from "./UsersManagementClient";
+import { UsersManagementClient, UserViewItem } from "./UsersManagementClient";
 import { AppShell } from "@/components/layout/AppShell";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -28,12 +28,11 @@ async function UsersManagementData() {
   let users: UserViewItem[] = [];
   let teamLeaders: { id: string; name: string; email: string; brokerId?: string | null }[] = [];
   let brokers: { id: string; name: string; email: string }[] = [];
-  let auditLogs: UserAuditItem[] = [];
   const currentUserRole: UserRole = context.role;
   const currentUserId = context.userId;
 
   try {
-    const [rawUsers, leaders, rawBrokers, rawLogs] = await Promise.all([
+    const [rawUsers, leaders, rawBrokers] = await Promise.all([
       listTenantUsers(context).catch(() => []),
       prisma.user.findMany({
         where: {
@@ -51,7 +50,6 @@ async function UsersManagementData() {
         },
         select: { id: true, name: true, email: true },
       }).catch(() => []),
-      listUserAuditLogs(context).catch(() => []),
     ]);
 
     users = rawUsers.map((u) => ({
@@ -78,14 +76,6 @@ async function UsersManagementData() {
 
     teamLeaders = leaders;
     brokers = rawBrokers;
-    auditLogs = rawLogs.map((l) => ({
-      id: l.id,
-      action: l.action,
-      createdAt: l.createdAt.toISOString(),
-      details: l.details as Record<string, unknown> | null,
-      actorUser: l.actorUser,
-      targetUser: l.targetUser || { id: "", name: "System", role: UserRole.PLATFORM_SUPER_ADMIN },
-    }));
   } catch (err: unknown) {
     // If forbidden or unauthenticated, render clear access boundary state
     const isForbidden =
@@ -124,7 +114,6 @@ async function UsersManagementData() {
       initialUsers={users}
       teamLeaders={teamLeaders}
       brokers={brokers}
-      auditLogs={auditLogs}
       currentUserRole={currentUserRole}
       currentUserId={currentUserId}
     />

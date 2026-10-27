@@ -25,6 +25,10 @@ async function SupplyValidationData() {
     redirect("/platform");
   }
 
+  if (context.role === UserRole.CRM_TENANT_ADMIN) {
+    redirect("/users");
+  }
+
   let properties: Property[] = [];
   let eligibleTelecallers: EligibleTelecaller[] = [];
   const canAssign = hasPermission(

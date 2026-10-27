@@ -32,41 +32,85 @@ export interface UserViewItem {
   subordinates?: { id: string; name: string; email: string; role: UserRole; isActive: boolean }[];
 }
 
-export interface UserAuditItem {
-  id: string;
-  action: string;
-  createdAt: string | Date;
-  details?: Record<string, unknown> | null;
-  actorUser: { id: string; name: string; role: UserRole };
-  targetUser: { id: string; name: string; role: UserRole };
-}
-
 interface UsersManagementClientProps {
   initialUsers: UserViewItem[];
   teamLeaders: { id: string; name: string; email: string; brokerId?: string | null }[];
   brokers?: { id: string; name: string; email: string }[];
-  auditLogs?: UserAuditItem[];
   currentUserRole?: UserRole;
   currentUserId?: string;
 }
 
-const DELEGABLE_PERMISSIONS: { action: AppAction; label: string; domain: string }[] = [
-  { action: "supply:validate", label: "Approve Property Validation", domain: "Supply" },
-  { action: "supply:mark_sold_rented", label: "Mark Property Sold/Rented", domain: "Supply" },
-  { action: "demand:activate", label: "Activate / Confirm Demand", domain: "Demand" },
-  { action: "demand:inactivate", label: "Deactivate Lead", domain: "Demand" },
-  { action: "matching:query_active_pool", label: "Access Active Supply Pool", domain: "Matching" },
-  { action: "visits:schedule", label: "Schedule Site Visits", domain: "Site Visits" },
-  { action: "visits:confirm_final", label: "Confirm Final Visit Outcome", domain: "Site Visits" },
-  { action: "assignment:assign_telecaller", label: "Assign Telecaller to Supply/Leads", domain: "Assignments" },
-  { action: "assignment:assign_sales_agent", label: "Assign Sales Agent to Visits", domain: "Assignments" },
+export interface OperationalPermissionItem {
+  action: AppAction;
+  label: string;
+  description: string;
+}
+
+export interface OperationalPermissionGroup {
+  category: string;
+  permissions: OperationalPermissionItem[];
+}
+
+export const OPERATIONAL_PERMISSION_GROUPS: OperationalPermissionGroup[] = [
+  {
+    category: "Supply Validation & Properties",
+    permissions: [
+      { action: "supply:create", label: "Add Properties", description: "Manual entry and CSV bulk upload" },
+      { action: "supply:log_call", label: "Log Call Outcomes", description: "Record owner call notes and dispositions" },
+      { action: "supply:upload_media", label: "Upload Photos & Videos", description: "Upload property photos and YouTube walkthroughs" },
+      { action: "supply:validate", label: "Approve Validation", description: "Confirm owner willingness and approve property" },
+      { action: "supply:mark_sold_rented", label: "Mark Sold / Rented", description: "Update status when property deal closes" },
+      { action: "supply:view_assigned", label: "View Assigned Supply", description: "Access properties assigned to this user" },
+      { action: "supply:view_all", label: "View All Supply", description: "Access all brokerage supply records in queue" },
+    ],
+  },
+  {
+    category: "Matching & Active Supply Pool",
+    permissions: [
+      { action: "matching:query_active_pool", label: "Query Active Pool", description: "Search verified properties ready for matching" },
+      { action: "matching:view_matches", label: "View Property Matches", description: "View automated supply-demand match cards" },
+      { action: "matching:share_details", label: "Share Details with Buyers", description: "Generate sanitized property sharing links" },
+    ],
+  },
+  {
+    category: "Demand & Lead Validation",
+    permissions: [
+      { action: "demand:create", label: "Create Inquiries", description: "Register new buyer or tenant inquiries" },
+      { action: "demand:log_call", label: "Log Buyer Calls", description: "Record buyer disposition and preferences" },
+      { action: "demand:activate", label: "Activate / Validate Demand", description: "Qualify inquiry into active matching" },
+      { action: "demand:inactivate", label: "Deactivate Inquiries", description: "Mark lost or unqualified leads" },
+      { action: "demand:view_assigned", label: "View Assigned Leads", description: "Access inquiries assigned to user" },
+      { action: "demand:view_all", label: "View All Leads", description: "Access all brokerage demand inquiries" },
+    ],
+  },
+  {
+    category: "Site Visits",
+    permissions: [
+      { action: "visits:schedule", label: "Schedule Site Visits", description: "Create buyer property visit slots" },
+      { action: "visits:record_outcome", label: "Record Visit Outcome", description: "Log completed, client no-show, etc." },
+      { action: "visits:confirm_final", label: "Confirm Final Review", description: "Telecaller review of visit report" },
+      { action: "visits:record_feedback", label: "Record Visit Feedback", description: "Log buyer property feedback notes" },
+      { action: "visits:view_assigned", label: "View Assigned Visits", description: "Access visits assigned to user" },
+      { action: "visits:view_all", label: "View All Visits", description: "Access all scheduled brokerage visits" },
+    ],
+  },
+  {
+    category: "Assignments",
+    permissions: [
+      { action: "assignment:assign_telecaller", label: "Assign Telecallers", description: "Assign properties & leads to telecallers" },
+      { action: "assignment:assign_sales_agent", label: "Assign Sales Agents", description: "Assign site visits to field agents" },
+    ],
+  },
 ];
+
+export const ALL_OPERATIONAL_ACTIONS: AppAction[] = OPERATIONAL_PERMISSION_GROUPS.flatMap(
+  (g) => g.permissions.map((p) => p.action)
+);
 
 export function UsersManagementClient({
   initialUsers,
   teamLeaders,
   brokers = [],
-  auditLogs = [],
   currentUserRole = UserRole.BROKER_OWNER,
   currentUserId = "",
 }: UsersManagementClientProps) {
@@ -91,11 +135,16 @@ export function UsersManagementClient({
   const [newRole, setNewRole] = useState<UserRole>(UserRole.TELECALLER);
   const [newBrokerId, setNewBrokerId] = useState<string>("");
   const [newTeamLeaderId, setNewTeamLeaderId] = useState<string>("");
+  const [newSelectedPermissions, setNewSelectedPermissions] = useState<AppAction[]>([]);
   const [targetRoleToAssign, setTargetRoleToAssign] = useState<UserRole>(UserRole.TELECALLER);
   const [selectedLeaderId, setSelectedLeaderId] = useState<string>("");
   const [selectedBrokerId, setSelectedBrokerId] = useState<string>("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [loadingAction, setLoadingAction] = useState(false);
+
+  // Interactive permission editing for selected user
+  const [isEditingPermissions, setIsEditingPermissions] = useState(false);
+  const [editingPermissions, setEditingPermissions] = useState<AppAction[]>([]);
 
   const actorRole = (session?.user as { role?: UserRole })?.role || currentUserRole;
   const actorId = session?.user?.id || currentUserId;
@@ -143,10 +192,23 @@ export function UsersManagementClient({
     setNewEmail("");
     setNewPhone("");
     setNewPassword("BrokerTemp1234!");
-    setNewRole(assignableRoles[0] || UserRole.TELECALLER);
+    const initialRole = assignableRoles[0] || UserRole.TELECALLER;
+    setNewRole(initialRole);
     setNewBrokerId("");
     setNewTeamLeaderId("");
+    const defaults = Array.from(ROLE_PERMISSIONS[initialRole] || []).filter((a) =>
+      ALL_OPERATIONAL_ACTIONS.includes(a as AppAction)
+    ) as AppAction[];
+    setNewSelectedPermissions(defaults);
     setIsCreateModalOpen(true);
+  };
+
+  const handleRoleChangeInCreate = (role: UserRole) => {
+    setNewRole(role);
+    const defaults = Array.from(ROLE_PERMISSIONS[role] || []).filter((a) =>
+      ALL_OPERATIONAL_ACTIONS.includes(a as AppAction)
+    ) as AppAction[];
+    setNewSelectedPermissions(defaults);
   };
 
   const handleCreateUser = async (e: React.FormEvent) => {
@@ -161,6 +223,7 @@ export function UsersManagementClient({
       role: newRole,
       brokerId: newBrokerId || null,
       teamLeaderId: newTeamLeaderId || null,
+      delegatedPermissions: newSelectedPermissions,
     });
 
     setLoadingAction(false);
@@ -181,7 +244,7 @@ export function UsersManagementClient({
       isActive: res.user.isActive,
       brokerId: (res.user as { brokerId?: string }).brokerId,
       teamLeaderId: res.user.teamLeaderId,
-      delegatedPermissions: res.user.delegatedPermissions,
+      delegatedPermissions: res.user.delegatedPermissions || newSelectedPermissions,
       createdAt: new Date(),
       broker: assignedBroker || null,
       teamLeader: assignedLeader ? { ...assignedLeader, role: UserRole.TEAM_LEADER } : null,
@@ -189,6 +252,7 @@ export function UsersManagementClient({
 
     setUsers((prev) => [created, ...prev]);
     setSelectedUser(created);
+    setIsEditingPermissions(false);
     setIsCreateModalOpen(false);
     setToastMessage(`User ${created.name} successfully created with role ${created.role}.`);
   };
@@ -300,33 +364,47 @@ export function UsersManagementClient({
     setToastMessage(`Team hierarchy updated for ${selectedUser.name}.`);
   };
 
-  const handleTogglePermission = async (action: AppAction) => {
+  // User's effective operational permissions
+  const userEffectivePermissions = useMemo(() => {
+    if (!selectedUser) return [];
+    const roleDefaults = Array.from(ROLE_PERMISSIONS[selectedUser.role] || []).filter((a) =>
+      ALL_OPERATIONAL_ACTIONS.includes(a as AppAction)
+    );
+    const custom = (selectedUser.delegatedPermissions || []) as AppAction[];
+    return Array.from(new Set([...roleDefaults, ...custom]));
+  }, [selectedUser]);
+
+  const handleStartEditPermissions = () => {
     if (!selectedUser) return;
+    setEditingPermissions(userEffectivePermissions as AppAction[]);
+    setIsEditingPermissions(true);
+  };
 
-    const current = selectedUser.delegatedPermissions || [];
-    const updated = current.includes(action)
-      ? current.filter((p) => p !== action)
-      : [...current, action];
+  const handleToggleEditPermission = (action: AppAction) => {
+    setEditingPermissions((prev) =>
+      prev.includes(action) ? prev.filter((a) => a !== action) : [...prev, action]
+    );
+  };
 
-    const res = await updateDelegatedPermissionsAction(selectedUser.id, updated as AppAction[]);
+  const handleSaveUserPermissions = async () => {
+    if (!selectedUser) return;
+    setLoadingAction(true);
+
+    const res = await updateDelegatedPermissionsAction(selectedUser.id, editingPermissions);
+    setLoadingAction(false);
+
     if (!res.success) {
       setToastMessage(`Error: ${res.error}`);
       return;
     }
 
     setUsers((prev) =>
-      prev.map((u) => (u.id === selectedUser.id ? { ...u, delegatedPermissions: updated } : u))
+      prev.map((u) => (u.id === selectedUser.id ? { ...u, delegatedPermissions: editingPermissions } : u))
     );
-    setSelectedUser({ ...selectedUser, delegatedPermissions: updated });
-    setToastMessage(`Delegated permissions updated for ${selectedUser.name}.`);
+    setSelectedUser({ ...selectedUser, delegatedPermissions: editingPermissions });
+    setIsEditingPermissions(false);
+    setToastMessage(`Permissions updated successfully for ${selectedUser.name}.`);
   };
-
-  // Static permissions of selected user's role
-  const staticRolePermissions = useMemo(() => {
-    if (!selectedUser) return [];
-    const set = ROLE_PERMISSIONS[selectedUser.role];
-    return set ? Array.from(set) : [];
-  }, [selectedUser]);
 
   return (
     <AppShell>
@@ -629,128 +707,172 @@ export function UsersManagementClient({
                   </div>
                 </div>
 
-                {/* Static Role Permissions */}
+                {/* Operational Permissions Section */}
                 <div>
-                  <div className="flex items-center justify-between border-b border-crm-border pb-1.5 mb-2">
-                    <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                      Core Role Permissions ({staticRolePermissions.length})
-                    </h4>
-                    <span className="text-[10px] text-crm-muted">Fixed by PRD Matrix</span>
-                  </div>
-
-                  <div className="flex flex-wrap gap-1">
-                    {staticRolePermissions.map((action) => (
-                      <span
-                        key={action}
-                        className="px-2 py-0.5 rounded bg-stone-100 text-crm-text text-[10px] font-mono border border-crm-border"
-                      >
-                        {action}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Delegated Permissions Workspace */}
-                <div>
-                  <div className="flex items-center justify-between border-b border-crm-border pb-1.5 mb-2">
+                  <div className="flex items-center justify-between border-b border-crm-border pb-2 mb-3">
                     <div>
                       <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                        Delegated Action Overrides
+                        Operational Permissions ({userEffectivePermissions.length})
                       </h4>
                       <p className="text-[10px] text-crm-muted">
-                        Granter can only delegate permissions they possess.
+                        {isEditingPermissions
+                          ? "Check or uncheck permissions to customize access for this user."
+                          : "Permissions currently active for this user."}
                       </p>
                     </div>
-                  </div>
 
-                  <div className="space-y-2">
-                    {DELEGABLE_PERMISSIONS.map((item) => {
-                      const isGranted = (selectedUser.delegatedPermissions || []).includes(item.action);
-                      const isActorPermitted = canDelegatePermission(actorRole, item.action);
-                      const isAlreadyCore = staticRolePermissions.includes(item.action);
-
-                      return (
-                        <div
-                          key={item.action}
-                          className="flex items-center justify-between p-2 rounded border border-crm-border bg-stone-50/40 text-[11px]"
-                        >
-                          <div>
-                            <span className="font-bold text-crm-text block">{item.label}</span>
-                            <span className="text-[10px] font-mono text-crm-muted">{item.action}</span>
-                          </div>
-
-                          {isAlreadyCore ? (
-                            <span className="text-[10px] font-semibold text-crm-muted italic">
-                              Included in Role
-                            </span>
-                          ) : selectedUser.id === actorId ? (
-                            <span className="text-[10px] text-crm-muted">Self-lock</span>
-                          ) : (
+                    {selectedUser.id !== actorId && (
+                      <div>
+                        {isEditingPermissions ? (
+                          <div className="flex items-center gap-1.5">
                             <button
-                              disabled={!isActorPermitted || loadingAction}
-                              onClick={() => handleTogglePermission(item.action)}
-                              className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors ${
-                                isGranted
-                                  ? "bg-teal-600 text-white hover:bg-teal-700"
-                                  : "border border-crm-border bg-white text-crm-text hover:bg-stone-50"
-                              } ${!isActorPermitted ? "opacity-40 cursor-not-allowed" : ""}`}
+                              type="button"
+                              onClick={() => setIsEditingPermissions(false)}
+                              className="px-2 py-1 text-xs rounded border border-crm-border bg-white text-crm-muted hover:text-crm-text transition-colors"
                             >
-                              {isGranted ? "Granted ✓" : "Grant Override"}
+                              Cancel
                             </button>
-                          )}
-                        </div>
-                      );
-                    })}
+                            <button
+                              type="button"
+                              disabled={loadingAction}
+                              onClick={handleSaveUserPermissions}
+                              className="px-3 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs transition-colors"
+                            >
+                              {loadingAction ? "Saving..." : "Save Permissions"}
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={handleStartEditPermissions}
+                            className="px-2.5 py-1 text-xs font-semibold rounded border border-crm-border bg-white text-crm-text hover:bg-stone-50 transition-colors shadow-2xs"
+                          >
+                            ✎ Edit Permissions
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
+
+                  {isEditingPermissions ? (
+                    <div className="space-y-3 bg-stone-50/60 p-3 rounded-md border border-crm-border">
+                      <div className="flex items-center justify-between pb-2 border-b border-crm-border text-[11px]">
+                        <span className="font-semibold text-crm-text">
+                          {editingPermissions.length} of {ALL_OPERATIONAL_ACTIONS.length} selected
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setEditingPermissions([...ALL_OPERATIONAL_ACTIONS])}
+                            className="text-crm-primary font-semibold hover:underline"
+                          >
+                            Select All
+                          </button>
+                          <span className="text-crm-muted">•</span>
+                          <button
+                            type="button"
+                            onClick={() => setEditingPermissions([])}
+                            className="text-crm-muted font-semibold hover:underline"
+                          >
+                            Clear All
+                          </button>
+                          <span className="text-crm-muted">•</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const defaults = Array.from(ROLE_PERMISSIONS[selectedUser.role] || []).filter((a) =>
+                                ALL_OPERATIONAL_ACTIONS.includes(a as AppAction)
+                              ) as AppAction[];
+                              setEditingPermissions(defaults);
+                            }}
+                            className="text-crm-muted font-semibold hover:underline"
+                          >
+                            Reset Defaults
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3.5 max-h-80 overflow-y-auto pr-1">
+                        {OPERATIONAL_PERMISSION_GROUPS.map((group) => (
+                          <div key={group.category} className="space-y-1.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">
+                              {group.category}
+                            </div>
+                            <div className="grid grid-cols-1 gap-1.5">
+                              {group.permissions.map((item) => {
+                                const isChecked = editingPermissions.includes(item.action);
+                                return (
+                                  <label
+                                    key={item.action}
+                                    className={`flex items-start gap-2 p-2 rounded border text-xs cursor-pointer transition-colors ${
+                                      isChecked
+                                        ? "bg-white border-crm-primary/40 text-crm-text"
+                                        : "bg-stone-50 border-crm-border text-crm-muted"
+                                    }`}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => handleToggleEditPermission(item.action)}
+                                      className="mt-0.5 rounded text-crm-primary focus:ring-crm-primary"
+                                    />
+                                    <div>
+                                      <span className="font-semibold block text-[11px] text-crm-text leading-tight">
+                                        {item.label}
+                                      </span>
+                                      <span className="text-[10px] text-crm-muted block leading-tight">
+                                        {item.description}
+                                      </span>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {OPERATIONAL_PERMISSION_GROUPS.map((group) => {
+                        const grantedInGroup = group.permissions.filter((p) =>
+                          userEffectivePermissions.includes(p.action)
+                        );
+
+                        return (
+                          <div key={group.category} className="space-y-1">
+                            <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-crm-muted">
+                              <span>{group.category}</span>
+                              <span className="font-normal text-[9px]">
+                                {grantedInGroup.length}/{group.permissions.length}
+                              </span>
+                            </div>
+                            {grantedInGroup.length === 0 ? (
+                              <p className="text-[10px] text-crm-muted italic pl-1">No permissions granted</p>
+                            ) : (
+                              <div className="flex flex-wrap gap-1">
+                                {grantedInGroup.map((item) => (
+                                  <span
+                                    key={item.action}
+                                    className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1"
+                                    title={item.action}
+                                  >
+                                    <span className="text-emerald-600 font-bold">✓</span>
+                                    {item.label}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
           )}
         </div>
-
-        {/* Audit Log Section */}
-        {auditLogs.length > 0 && (
-          <div className="rounded-lg bg-crm-surface border border-crm-border shadow-2xs overflow-hidden">
-            <div className="px-4 py-2.5 bg-stone-50 border-b border-crm-border text-xs font-semibold text-crm-text">
-              User Administration Audit Trail (Last 50 Events)
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-stone-50/50 border-b border-crm-border text-crm-muted uppercase tracking-wider font-semibold text-[10px]">
-                  <tr>
-                    <th className="px-4 py-2.5">Timestamp</th>
-                    <th className="px-3 py-2.5">Action</th>
-                    <th className="px-3 py-2.5">Actor</th>
-                    <th className="px-3 py-2.5">Target User</th>
-                    <th className="px-4 py-2.5">Details</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-crm-border font-mono text-[11px]">
-                  {auditLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-stone-50/60">
-                      <td className="px-4 py-2 text-crm-muted">
-                        {new Date(log.createdAt).toLocaleString("en-IN", {
-                          dateStyle: "short",
-                          timeStyle: "medium",
-                        })}
-                      </td>
-                      <td className="px-3 py-2 font-bold text-crm-text">{log.action}</td>
-                      <td className="px-3 py-2 text-crm-text">
-                        {log.actorUser?.name || "System"} ({log.actorUser?.role || "SYSTEM"})
-                      </td>
-                      <td className="px-3 py-2 text-crm-text">
-                        {log.targetUser?.name || "—"} ({log.targetUser?.role || "—"})
-                      </td>
-                      <td className="px-4 py-2 text-[10px] text-crm-muted truncate max-w-xs">
-                        {log.details ? JSON.stringify(log.details) : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
 
         {/* Modal: Create User */}
         <Modal
@@ -830,7 +952,7 @@ export function UsersManagementClient({
               <label className="block font-semibold text-crm-text mb-1">Assigned Role</label>
               <select
                 value={newRole}
-                onChange={(e) => setNewRole(e.target.value as UserRole)}
+                onChange={(e) => handleRoleChangeInCreate(e.target.value as UserRole)}
                 className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
               >
                 {assignableRoles.map((role) => (
@@ -882,6 +1004,96 @@ export function UsersManagementClient({
                 </select>
               </div>
             )}
+
+            {/* Operational Permissions Selector */}
+            <div className="border border-crm-border rounded-md p-3 bg-stone-50/50 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-semibold text-xs text-crm-text block">
+                    Operational Permissions ({newSelectedPermissions.length} selected)
+                  </span>
+                  <span className="text-[10px] text-crm-muted">
+                    Customise exact operations permitted for this user
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-[10px]">
+                  <button
+                    type="button"
+                    onClick={() => setNewSelectedPermissions([...ALL_OPERATIONAL_ACTIONS])}
+                    className="text-crm-primary font-semibold hover:underline"
+                  >
+                    Select All
+                  </button>
+                  <span className="text-crm-border">|</span>
+                  <button
+                    type="button"
+                    onClick={() => setNewSelectedPermissions([])}
+                    className="text-crm-muted font-semibold hover:underline"
+                  >
+                    Clear
+                  </button>
+                  <span className="text-crm-border">|</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const defaults = Array.from(ROLE_PERMISSIONS[newRole] || []).filter((a) =>
+                        ALL_OPERATIONAL_ACTIONS.includes(a as AppAction)
+                      ) as AppAction[];
+                      setNewSelectedPermissions(defaults);
+                    }}
+                    className="text-crm-muted font-semibold hover:underline"
+                  >
+                    Reset Defaults
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-3 max-h-56 overflow-y-auto pr-1 pt-1 border-t border-crm-border/60">
+                {OPERATIONAL_PERMISSION_GROUPS.map((group) => (
+                  <div key={group.category} className="space-y-1">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-crm-muted">
+                      {group.category}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {group.permissions.map((item) => {
+                        const checked = newSelectedPermissions.includes(item.action);
+                        return (
+                          <label
+                            key={item.action}
+                            className={`flex items-start gap-2 p-1.5 rounded border text-[11px] cursor-pointer transition-colors ${
+                              checked
+                                ? "bg-white border-crm-primary/40 text-crm-text shadow-2xs"
+                                : "bg-stone-50 border-crm-border text-crm-muted"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setNewSelectedPermissions((prev) => [...prev, item.action]);
+                                } else {
+                                  setNewSelectedPermissions((prev) => prev.filter((a) => a !== item.action));
+                                }
+                              }}
+                              className="mt-0.5 rounded text-crm-primary focus:ring-crm-primary"
+                            />
+                            <div>
+                              <span className="font-semibold block leading-tight text-crm-text">
+                                {item.label}
+                              </span>
+                              <span className="text-[9px] text-crm-muted block leading-tight">
+                                {item.description}
+                              </span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
 
             <div className="p-3 rounded bg-stone-50 border border-crm-border text-[11px] text-crm-muted">
               <strong>Security Notice:</strong> The account will be provisioned directly within the active tenant with secure scrypt password credentials and enforced seat quota.

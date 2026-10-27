@@ -24,6 +24,10 @@ async function SiteVisitsData() {
     redirect("/platform");
   }
 
+  if (context.role === UserRole.CRM_TENANT_ADMIN) {
+    redirect("/users");
+  }
+
   let visits: SiteVisit[] = [];
 
   try {

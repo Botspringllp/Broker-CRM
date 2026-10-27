@@ -332,12 +332,20 @@ export function SupplyValidationClient({
       }
 
       // Success
-      setProperties((prev) => [res.property, ...prev]);
-      setIsCreateModalOpen(false);
-      resetCreateForm();
-      setToastMessage(
-        `Property posted successfully: ${res.property.societyName} Flat ${res.property.flatNumber}`
-      );
+      if (currentUserRole === "TELECALLER") {
+        setIsCreateModalOpen(false);
+        resetCreateForm();
+        setToastMessage(
+          `Property posted successfully: ${res.property.societyName} Flat ${res.property.flatNumber}. It will appear in your calling queue once assigned by a manager.`
+        );
+      } else {
+        setProperties((prev) => [res.property, ...prev]);
+        setIsCreateModalOpen(false);
+        resetCreateForm();
+        setToastMessage(
+          `Property posted successfully: ${res.property.societyName} Flat ${res.property.flatNumber}`
+        );
+      }
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : "Failed to create property.");
     } finally {
@@ -855,24 +863,35 @@ export function SupplyValidationClient({
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-bold tracking-tight text-crm-text">
-                Supply Validation Queue
+                {currentUserRole === "TELECALLER"
+                  ? "My Assigned Calling Queue"
+                  : "Supply Validation Queue"}
               </h2>
               <span className="px-2 py-0.5 rounded text-xs font-semibold bg-stone-100 text-crm-muted border border-crm-border">
                 {filteredProperties.length} Properties
               </span>
+              {currentUserRole === "TELECALLER" && (
+                <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  Assigned to You
+                </span>
+              )}
             </div>
             <p className="text-xs text-crm-muted mt-1">
-              Verify property details, establish owner mandate willingness, and manage calling dispositions (PRD §4).
+              {currentUserRole === "TELECALLER"
+                ? "Properties actively assigned to you for owner verification and call disposition logging (PRD §4.3)."
+                : "Verify property details, establish owner mandate willingness, and manage calling dispositions (PRD §4)."}
             </p>
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleOpenBulkModal}
-              className="px-3 py-1.5 text-xs font-medium rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs cursor-pointer"
-            >
-              📥 Upload CSV / Excel
-            </button>
+            {canAssignTelecaller && (
+              <button
+                onClick={handleOpenBulkModal}
+                className="px-3 py-1.5 text-xs font-medium rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs cursor-pointer"
+              >
+                📥 Upload CSV / Excel
+              </button>
+            )}
             <button
               onClick={() => {
                 resetCreateForm();
@@ -990,20 +1009,31 @@ export function SupplyValidationClient({
             </div>
 
             {/* Assignment Filter */}
-            <div>
-              <label className="block text-[11px] font-semibold text-crm-muted mb-1">
-                Assignment
-              </label>
-              <select
-                value={assignmentFilter}
-                onChange={(e) => setAssignmentFilter(e.target.value)}
-                className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-              >
-                <option value="All">All Assignments</option>
-                <option value="Assigned">Assigned Only</option>
-                <option value="Unassigned">Unassigned Only</option>
-              </select>
-            </div>
+            {currentUserRole !== "TELECALLER" ? (
+              <div>
+                <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                  Assignment
+                </label>
+                <select
+                  value={assignmentFilter}
+                  onChange={(e) => setAssignmentFilter(e.target.value)}
+                  className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                >
+                  <option value="All">All Assignments</option>
+                  <option value="Assigned">Assigned Only</option>
+                  <option value="Unassigned">Unassigned Only</option>
+                </select>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                  Assigned Scope
+                </label>
+                <div className="w-full px-2.5 py-1.5 text-xs rounded border border-emerald-200 bg-emerald-50/60 text-emerald-800 font-semibold flex items-center gap-1">
+                  <span>✓ My Calling Queue</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1110,7 +1140,7 @@ export function SupplyValidationClient({
                             {prop.currentAssignment ? (
                               <div>
                                 <div className="font-medium text-crm-text flex items-center gap-1">
-                                  <span>👤 {prop.currentAssignment.assignedUserName}</span>
+                                  <span>👤 {currentUserRole === "TELECALLER" ? "Assigned to You" : prop.currentAssignment.assignedUserName}</span>
                                 </div>
                                 <div className="text-[10px] text-crm-muted flex items-center gap-1 mt-0.5">
                                   <span className="px-1.5 py-0.2 bg-teal-50 text-teal-800 rounded border border-teal-200">
@@ -1261,7 +1291,7 @@ export function SupplyValidationClient({
                     </h4>
                     {selectedProperty.currentAssignment ? (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                        Active Assignment
+                        {currentUserRole === "TELECALLER" ? "Assigned to You" : "Active Assignment"}
                       </span>
                     ) : (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
@@ -1274,7 +1304,11 @@ export function SupplyValidationClient({
                     <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-crm-border/60">
                       <div>
                         <span className="text-crm-muted block text-[10px]">Assigned Telecaller</span>
-                        <strong className="text-crm-text text-xs">{selectedProperty.currentAssignment.assignedUserName}</strong>
+                        <strong className="text-crm-text text-xs">
+                          {currentUserRole === "TELECALLER"
+                            ? "You (Active Assignee)"
+                            : selectedProperty.currentAssignment.assignedUserName}
+                        </strong>
                       </div>
                       <div>
                         <span className="text-crm-muted block text-[10px]">Method & Time</span>
