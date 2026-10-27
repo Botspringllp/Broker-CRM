@@ -8,9 +8,17 @@ import { useSession, signOut } from "@/lib/auth-client";
 interface AppShellProps {
   children: React.ReactNode;
   activePage?: string;
+  userName?: string;
+  userRole?: string;
+  isAuthenticated?: boolean;
 }
 
-export function AppShell({ children }: AppShellProps) {
+export function AppShell({
+  children,
+  userName: propUserName,
+  userRole: propUserRole,
+  isAuthenticated: propIsAuth,
+}: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -21,9 +29,9 @@ export function AppShell({ children }: AppShellProps) {
     router.push("/login");
   };
 
-  const isAuthenticated = !!session?.user;
-  const userName = session?.user?.name || (isAuthenticated ? "User" : "Not signed in");
-  const rawRole = (session?.user as { role?: string })?.role;
+  const isAuthenticated = propIsAuth ?? !!session?.user;
+  const userName = session?.user?.name || propUserName || (isAuthenticated ? "User" : "Not signed in");
+  const rawRole = (session?.user as { role?: string })?.role || propUserRole?.replace(/ /g, "_");
   const userRole = rawRole?.replace(/_/g, " ") || (isAuthenticated ? "Member" : "");
 
   const isPlatformSuperAdmin = rawRole === "PLATFORM_SUPER_ADMIN";

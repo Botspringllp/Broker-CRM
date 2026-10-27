@@ -13,6 +13,7 @@ import {
   Locality as PrismaLocality,
   LeadRequirementLocality as PrismaLeadRequirementLocality,
   User as PrismaUser,
+  Assignment as PrismaAssignment,
 } from "@prisma/client";
 
 export function formatIndianCurrency(amount: number, isRent = false): string {
@@ -30,6 +31,10 @@ type FullPrismaProperty = PrismaProperty & {
   media?: PrismaPropertyMedia[];
   callLogs?: (PrismaCallLog & { caller?: PrismaUser | null; callerUser?: PrismaUser | null })[];
   siteVisitItems?: PrismaSiteVisitItem[];
+  assignments?: (PrismaAssignment & {
+    assignedUser?: PrismaUser | null;
+    assignedByUser?: PrismaUser | null;
+  })[];
 };
 
 export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
@@ -172,6 +177,90 @@ export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
         ? "In Progress"
         : "None",
     visitCount: p.siteVisitItems?.length || 0,
+    currentAssignment: (() => {
+      const active = p.assignments?.find(
+        (a) => a.status === "ACTIVE" && a.targetType === "PROPERTY"
+      );
+      if (!active) return null;
+      const assignedDate = new Date(active.assignedAt);
+      const formattedAssignedAt = !isNaN(assignedDate.getTime())
+        ? assignedDate.toLocaleString("en-IN", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: true,
+          })
+        : "Recently";
+
+      return {
+        id: active.id,
+        assignedUserId: active.assignedUserId,
+        assignedUserName: active.assignedUser?.name || "Telecaller",
+        assignedByUserId: active.assignedByUserId,
+        assignedByUserName: active.assignedByUser?.name || null,
+        assignmentMethod:
+          active.assignmentMethod === "ROUND_ROBIN"
+            ? ("Round Robin" as const)
+            : ("Manual" as const),
+        status: "Active" as const,
+        assignedAt: formattedAssignedAt,
+        notes: active.notes || null,
+      };
+    })(),
+    assignmentHistory:
+      p.assignments?.map((a) => {
+        const assignedDate = new Date(a.assignedAt);
+        const formattedAssignedAt = !isNaN(assignedDate.getTime())
+          ? assignedDate.toLocaleString("en-IN", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true,
+            })
+          : "Recently";
+
+        let formattedUnassignedAt: string | null = null;
+        if (a.unassignedAt) {
+          const uDate = new Date(a.unassignedAt);
+          if (!isNaN(uDate.getTime())) {
+            formattedUnassignedAt = uDate.toLocaleString("en-IN", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true,
+            });
+          }
+        }
+
+        return {
+          id: a.id,
+          assignedUserId: a.assignedUserId,
+          assignedUserName: a.assignedUser?.name || "Telecaller",
+          assignedByUserId: a.assignedByUserId,
+          assignedByUserName: a.assignedByUser?.name || null,
+          assignmentMethod:
+            a.assignmentMethod === "ROUND_ROBIN"
+              ? ("Round Robin" as const)
+              : ("Manual" as const),
+          status:
+            a.status === "ACTIVE"
+              ? ("Active" as const)
+              : a.status === "REASSIGNED"
+              ? ("Reassigned" as const)
+              : a.status === "COMPLETED"
+              ? ("Completed" as const)
+              : ("Cancelled" as const),
+          assignedAt: formattedAssignedAt,
+          unassignedAt: formattedUnassignedAt,
+          notes: a.notes || null,
+        };
+      }) || [],
   };
 }
 

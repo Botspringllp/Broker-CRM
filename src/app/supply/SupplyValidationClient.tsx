@@ -1,18 +1,64 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { Property } from "@/types/crm";
-import { createPropertyAction, logPropertyCallAction } from "./actions";
+import {
+  createPropertyAction,
+  logPropertyCallAction,
+  assignPropertyAction,
+  assignPropertyRoundRobinAction,
+  downloadImportTemplateAction,
+  previewBulkPropertyUploadAction,
+  confirmBulkPropertyUploadAction,
+} from "./actions";
+import type { BulkImportPreview, BulkImportResult } from "@/server/dal/bulk-import";
+
+function downloadBase64File(base64: string, filename: string, mimeType: string) {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export interface EligibleTelecallerItem {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: string;
+  isActive: boolean;
+}
 
 interface SupplyValidationClientProps {
   initialProperties: Property[];
+  currentUserRole?: string;
+  canAssignTelecaller?: boolean;
+  initialTelecallers?: EligibleTelecallerItem[];
 }
 
-export function SupplyValidationClient({ initialProperties }: SupplyValidationClientProps) {
+export function SupplyValidationClient({
+  initialProperties,
+  currentUserRole,
+  canAssignTelecaller = false,
+  initialTelecallers = [],
+}: SupplyValidationClientProps) {
+  const router = useRouter();
   const [properties, setProperties] = useState<Property[]>(initialProperties);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -21,6 +67,28 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
   const [typeFilter, setTypeFilter] = useState("All");
   const [preferenceFilter, setPreferenceFilter] = useState("All");
   const [bhkFilter, setBhkFilter] = useState("All");
+  const [assignmentFilter, setAssignmentFilter] = useState("All");
+
+  // Assignment Modal & Execution State
+  const [telecallers] = useState<EligibleTelecallerItem[]>(initialTelecallers);
+  const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [propertyToAssign, setPropertyToAssign] = useState<Property | null>(null);
+  const [selectedTelecallerId, setSelectedTelecallerId] = useState<string>("");
+  const [assignmentNotes, setAssignmentNotes] = useState<string>("");
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [assignModalError, setAssignModalError] = useState<string | null>(null);
+  const [isRoundRobinRunning, setIsRoundRobinRunning] = useState(false);
+
+  // Bulk Upload Modal & State
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [bulkStep, setBulkStep] = useState<"SELECT" | "PREVIEW" | "IMPORTING" | "SUMMARY">("SELECT");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkPreview, setBulkPreview] = useState<BulkImportPreview | null>(null);
+  const [overrideDuplicates, setOverrideDuplicates] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkImportResult | null>(null);
+  const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
 
   // Call Logging Modal state
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
@@ -289,9 +357,208 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
         if (bhkFilter !== "4+" && prop.bedroomCount.toString() !== bhkFilter) return false;
       }
 
+      // Assignment Filter
+      if (assignmentFilter === "Assigned" && !prop.currentAssignment) return false;
+      if (assignmentFilter === "Unassigned" && prop.currentAssignment) return false;
+
       return true;
     });
-  }, [properties, searchTerm, validationFilter, availabilityFilter, typeFilter, preferenceFilter, bhkFilter]);
+  }, [
+    properties,
+    searchTerm,
+    validationFilter,
+    availabilityFilter,
+    typeFilter,
+    preferenceFilter,
+    bhkFilter,
+    assignmentFilter,
+  ]);
+
+  // Assignment Handlers
+  const handleOpenAssignModal = (prop: Property) => {
+    setPropertyToAssign(prop);
+    const existingAssignee = prop.currentAssignment?.assignedUserId;
+    if (existingAssignee && telecallers.some((t) => t.id === existingAssignee)) {
+      setSelectedTelecallerId(existingAssignee);
+    } else {
+      setSelectedTelecallerId(telecallers[0]?.id || "");
+    }
+    setAssignmentNotes(prop.currentAssignment?.notes || "");
+    setAssignModalError(null);
+    setIsAssignModalOpen(true);
+  };
+
+  const handleManualAssign = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!propertyToAssign) return;
+    if (!selectedTelecallerId) {
+      setAssignModalError("Please select an eligible telecaller.");
+      return;
+    }
+
+    setIsAssigning(true);
+    setAssignModalError(null);
+
+    const res = await assignPropertyAction({
+      propertyId: propertyToAssign.id,
+      telecallerId: selectedTelecallerId,
+      notes: assignmentNotes.trim() || undefined,
+    });
+
+    setIsAssigning(false);
+
+    if (!res.success) {
+      setAssignModalError(res.error || "Failed to assign property.");
+      return;
+    }
+
+    setProperties((prev) =>
+      prev.map((p) => (p.id === res.property.id ? res.property : p))
+    );
+    if (selectedProperty?.id === res.property.id) {
+      setSelectedProperty(res.property);
+    }
+    setIsAssignModalOpen(false);
+    setPropertyToAssign(null);
+    setToastMessage(
+      `Property assigned to ${res.property.currentAssignment?.assignedUserName || "telecaller"} successfully.`
+    );
+  };
+
+  const handleRoundRobinAssign = async (targetProp?: Property) => {
+    const prop = targetProp || propertyToAssign;
+    if (!prop) return;
+
+    setIsRoundRobinRunning(true);
+    setAssignModalError(null);
+
+    const res = await assignPropertyRoundRobinAction({
+      propertyId: prop.id,
+      notes: assignmentNotes.trim() || undefined,
+    });
+
+    setIsRoundRobinRunning(false);
+
+    if (!res.success) {
+      setAssignModalError(res.error || "Failed to execute round-robin assignment.");
+      if (!isAssignModalOpen) {
+        setToastMessage(`Auto-assignment failed: ${res.error}`);
+      }
+      return;
+    }
+
+    setProperties((prev) =>
+      prev.map((p) => (p.id === res.property.id ? res.property : p))
+    );
+    if (selectedProperty?.id === res.property.id) {
+      setSelectedProperty(res.property);
+    }
+    if (isAssignModalOpen) {
+      setIsAssignModalOpen(false);
+      setPropertyToAssign(null);
+    }
+    setToastMessage(
+      `Auto-assigned to ${res.property.currentAssignment?.assignedUserName || "telecaller"} via round-robin.`
+    );
+  };
+
+  // Bulk Upload Handlers
+  const handleOpenBulkModal = () => {
+    setBulkStep("SELECT");
+    setSelectedFile(null);
+    setIsAnalyzing(false);
+    setBulkError(null);
+    setBulkPreview(null);
+    setOverrideDuplicates(false);
+    setBulkResult(null);
+    setIsBulkModalOpen(true);
+  };
+
+  const handleDownloadTemplate = async (format: "csv" | "xlsx") => {
+    setIsDownloadingTemplate(true);
+    setBulkError(null);
+    try {
+      const res = await downloadImportTemplateAction(format);
+      if (!res.success || !res.base64) {
+        setBulkError(res.error || "Failed to download template.");
+        return;
+      }
+      downloadBase64File(res.base64, res.filename, res.mimeType);
+      setToastMessage(`Template downloaded (${format.toUpperCase()}).`);
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : "Failed to download template.");
+    } finally {
+      setIsDownloadingTemplate(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setSelectedFile(e.target.files[0]);
+      setBulkError(null);
+    }
+  };
+
+  const handleAnalyzeFile = async () => {
+    if (!selectedFile) {
+      setBulkError("Please choose a CSV or Excel file to analyze.");
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setBulkError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      const res = await previewBulkPropertyUploadAction(formData);
+
+      if (!res.success || !res.preview) {
+        setBulkError(res.error || "Failed to analyze file.");
+        return;
+      }
+
+      if (res.preview.hasHeadersError) {
+        setBulkError(res.preview.headersErrorMessage || "Missing required headers.");
+        return;
+      }
+
+      setBulkPreview(res.preview);
+      setBulkStep("PREVIEW");
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : "Failed to parse file.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!bulkPreview) return;
+
+    setBulkStep("IMPORTING");
+    setBulkError(null);
+
+    try {
+      const res = await confirmBulkPropertyUploadAction({
+        rows: bulkPreview.rows,
+        overrideDuplicates,
+      });
+
+      if (!res.success || !res.result) {
+        setBulkError(res.error || "Failed to import properties.");
+        setBulkStep("PREVIEW");
+        return;
+      }
+
+      setBulkResult(res.result);
+      setBulkStep("SUMMARY");
+      setToastMessage(`Bulk import complete: ${res.result.importedCount} properties imported.`);
+      router.refresh();
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : "Import failed.");
+      setBulkStep("PREVIEW");
+    }
+  };
 
   const handleOpenCallModal = (prop: Property) => {
     setSelectedProperty(prop);
@@ -367,8 +634,8 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setToastMessage("Bulk upload via CSV is ready for template ingestion.")}
-              className="px-3 py-1.5 text-xs font-medium rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs"
+              onClick={handleOpenBulkModal}
+              className="px-3 py-1.5 text-xs font-medium rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs cursor-pointer"
             >
               📥 Upload CSV / Excel
             </button>
@@ -377,7 +644,7 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
                 resetCreateForm();
                 setIsCreateModalOpen(true);
               }}
-              className="px-3 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs"
+              className="px-3 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer"
             >
               + Post Property
             </button>
@@ -386,7 +653,7 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
 
         {/* Filter Controls Bar */}
         <div className="p-4 rounded-lg bg-crm-surface border border-crm-border shadow-2xs space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
             {/* Search Input */}
             <div className="sm:col-span-2">
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
@@ -487,6 +754,22 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
                 <option value="4+">4+ BHK</option>
               </select>
             </div>
+
+            {/* Assignment Filter */}
+            <div>
+              <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                Assignment
+              </label>
+              <select
+                value={assignmentFilter}
+                onChange={(e) => setAssignmentFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              >
+                <option value="All">All Assignments</option>
+                <option value="Assigned">Assigned Only</option>
+                <option value="Unassigned">Unassigned Only</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -507,6 +790,7 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
                     <th className="px-3 py-3">Price / Rent</th>
                     <th className="px-3 py-3">Owner Contact</th>
                     <th className="px-3 py-3">Validation Status</th>
+                    <th className="px-3 py-3">Assigned Telecaller</th>
                     <th className="px-3 py-3">Calling Disposition</th>
                     <th className="px-4 py-3 text-right">Action</th>
                   </tr>
@@ -514,18 +798,29 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
                 <tbody className="divide-y divide-crm-border">
                   {properties.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-crm-muted">
+                      <td colSpan={8} className="px-4 py-12 text-center text-crm-muted">
                         <div className="max-w-sm mx-auto space-y-1">
-                          <p className="font-semibold text-crm-text text-sm">No properties added yet</p>
-                          <p className="text-xs text-crm-muted">
-                            Use &quot;+ Post Property&quot; or &quot;Upload CSV / Excel&quot; to add resale and rental inventory.
-                          </p>
+                          {currentUserRole === "TELECALLER" ? (
+                            <>
+                              <p className="font-semibold text-crm-text text-sm">No Assigned Properties in Queue</p>
+                              <p className="text-xs text-crm-muted">
+                                You do not currently have any properties assigned for validation calling. When a manager assigns properties to you, they will appear here in your calling queue.
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <p className="font-semibold text-crm-text text-sm">No properties added yet</p>
+                              <p className="text-xs text-crm-muted">
+                                Use &quot;+ Post Property&quot; or &quot;Upload CSV / Excel&quot; to add resale and rental inventory.
+                              </p>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
                   ) : filteredProperties.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-crm-muted">
+                      <td colSpan={8} className="px-4 py-8 text-center text-crm-muted">
                         No properties found matching current filter criteria.
                       </td>
                     </tr>
@@ -576,13 +871,60 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
                             <div><StatusBadge status={prop.availabilityStatus} /></div>
                           </td>
 
+                          {/* Assigned Telecaller */}
+                          <td className="px-3 py-3">
+                            {prop.currentAssignment ? (
+                              <div>
+                                <div className="font-medium text-crm-text flex items-center gap-1">
+                                  <span>👤 {prop.currentAssignment.assignedUserName}</span>
+                                </div>
+                                <div className="text-[10px] text-crm-muted flex items-center gap-1 mt-0.5">
+                                  <span className="px-1.5 py-0.2 bg-teal-50 text-teal-800 rounded border border-teal-200">
+                                    {prop.currentAssignment.assignmentMethod}
+                                  </span>
+                                  <span className="truncate max-w-[90px]">{prop.currentAssignment.assignedAt}</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <div>
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                                  ⚠️ Unassigned
+                                </span>
+                                {canAssignTelecaller && (
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRoundRobinAssign(prop);
+                                    }}
+                                    disabled={isRoundRobinRunning}
+                                    className="block text-[10px] text-crm-primary hover:underline font-semibold mt-1"
+                                    title="Auto-assign to telecaller via round robin"
+                                  >
+                                    ⚡ Auto-Assign
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </td>
+
                           {/* Calling Disposition */}
                           <td className="px-3 py-3">
                             <StatusBadge status={prop.currentDisposition} />
                           </td>
 
                           {/* Action */}
-                          <td className="px-4 py-3 text-right">
+                          <td className="px-4 py-3 text-right space-x-1.5 whitespace-nowrap">
+                            {canAssignTelecaller && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenAssignModal(prop);
+                                }}
+                                className="px-2 py-1 text-xs font-semibold rounded bg-stone-100 text-stone-700 hover:bg-stone-200 border border-stone-300 shadow-2xs"
+                              >
+                                {prop.currentAssignment ? "Reassign" : "Assign"}
+                              </button>
+                            )}
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -677,6 +1019,70 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
                   </div>
                 </div>
 
+                {/* Assignment & Telecaller Status Card */}
+                <div className="p-3.5 rounded-lg border border-crm-border bg-stone-50/60 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-crm-text text-xs uppercase tracking-wider flex items-center gap-1.5">
+                      <span>👤 Telecaller Assignment</span>
+                    </h4>
+                    {selectedProperty.currentAssignment ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        Active Assignment
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                        Unassigned
+                      </span>
+                    )}
+                  </div>
+
+                  {selectedProperty.currentAssignment ? (
+                    <div className="grid grid-cols-2 gap-2 text-[11px] pt-1 border-t border-crm-border/60">
+                      <div>
+                        <span className="text-crm-muted block text-[10px]">Assigned Telecaller</span>
+                        <strong className="text-crm-text text-xs">{selectedProperty.currentAssignment.assignedUserName}</strong>
+                      </div>
+                      <div>
+                        <span className="text-crm-muted block text-[10px]">Method & Time</span>
+                        <span className="text-crm-text font-medium">
+                          {selectedProperty.currentAssignment.assignmentMethod} • {selectedProperty.currentAssignment.assignedAt}
+                        </span>
+                      </div>
+                      {selectedProperty.currentAssignment.assignedByUserName && (
+                        <div className="col-span-2 text-[10px] text-crm-muted">
+                          Assigned by: <strong className="text-crm-text">{selectedProperty.currentAssignment.assignedByUserName}</strong>
+                          {selectedProperty.currentAssignment.notes && (
+                            <span className="italic block mt-0.5">Note: &quot;{selectedProperty.currentAssignment.notes}&quot;</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-crm-muted italic">
+                      This property is not yet assigned to any telecaller. Telecallers cannot log calls on unassigned properties.
+                    </p>
+                  )}
+
+                  {canAssignTelecaller && (
+                    <div className="flex gap-2 pt-1.5 border-t border-crm-border/40">
+                      <button
+                        onClick={() => handleOpenAssignModal(selectedProperty)}
+                        className="flex-1 py-1.5 px-2.5 text-xs font-semibold rounded bg-white text-crm-text hover:bg-stone-100 border border-crm-border shadow-2xs text-center"
+                      >
+                        {selectedProperty.currentAssignment ? "🔄 Reassign Telecaller" : "👤 Assign Telecaller"}
+                      </button>
+                      <button
+                        onClick={() => handleRoundRobinAssign(selectedProperty)}
+                        disabled={isRoundRobinRunning}
+                        className="py-1.5 px-3 text-xs font-semibold rounded bg-teal-50 text-teal-800 hover:bg-teal-100 border border-teal-200 shadow-2xs"
+                        title="Distribute via Fair Round Robin"
+                      >
+                        {isRoundRobinRunning ? "Assigning..." : "⚡ Auto-Assign"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {/* Owner & Key Holder Contacts */}
                 <div>
                   <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px] mb-2 border-b border-crm-border pb-1">
@@ -754,6 +1160,58 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
                     </div>
                   )}
                 </div>
+
+                {/* Assignment Audit History */}
+                {selectedProperty.assignmentHistory && selectedProperty.assignmentHistory.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2 border-b border-crm-border pb-1">
+                      <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
+                        Assignment History ({selectedProperty.assignmentHistory.length})
+                      </h4>
+                      <span className="text-[10px] text-crm-muted">Audit Trail</span>
+                    </div>
+                    <div className="space-y-2 max-h-48 overflow-y-auto pr-0.5">
+                      {selectedProperty.assignmentHistory.map((assign) => (
+                        <div
+                          key={assign.id}
+                          className="p-2.5 rounded border border-crm-border bg-stone-50/40 text-[11px] space-y-1"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold text-crm-text">👤 {assign.assignedUserName}</span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                assign.status === "Active"
+                                  ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                                  : "bg-stone-100 text-stone-600 border border-stone-200"
+                              }`}
+                            >
+                              {assign.status}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-crm-muted flex items-center justify-between">
+                            <span>Method: <strong>{assign.assignmentMethod}</strong></span>
+                            <span>{assign.assignedAt}</span>
+                          </div>
+                          {assign.unassignedAt && (
+                            <div className="text-[10px] text-stone-500 italic">
+                              Reassigned at: {assign.unassignedAt}
+                            </div>
+                          )}
+                          {assign.assignedByUserName && (
+                            <div className="text-[10px] text-crm-muted">
+                              Assigned by: <strong className="text-crm-text">{assign.assignedByUserName}</strong>
+                            </div>
+                          )}
+                          {assign.notes && (
+                            <div className="text-[10px] text-crm-muted italic bg-white p-1 rounded border border-stone-200 mt-1">
+                              &quot;{assign.notes}&quot;
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Media Section */}
                 <div>

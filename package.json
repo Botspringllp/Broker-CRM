@@ -13,6 +13,7 @@
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "better-auth": "^1.7.12",
+    "exceljs": "^4.4.0",
     "next": "16.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0"

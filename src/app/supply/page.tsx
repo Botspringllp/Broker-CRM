@@ -1,7 +1,8 @@
 import { Suspense } from "react";
 import { requireTenantContext } from "@/server/tenant-context";
-import { listProperties } from "@/server/dal/properties";
+import { listProperties, listEligibleTelecallers, EligibleTelecaller } from "@/server/dal/properties";
 import { mapPrismaPropertyToView } from "@/server/dal/mappers";
+import { hasPermission } from "@/server/permissions";
 import { Property } from "@/types/crm";
 import { SupplyValidationClient } from "./SupplyValidationClient";
 import { UserRole } from "@prisma/client";
@@ -25,15 +26,32 @@ async function SupplyValidationData() {
   }
 
   let properties: Property[] = [];
+  let eligibleTelecallers: EligibleTelecaller[] = [];
+  const canAssign = hasPermission(
+    context.role,
+    "assignment:assign_telecaller",
+    context.user.delegatedPermissions
+  );
 
   try {
     const dbProperties = await listProperties(context);
     properties = dbProperties.map(mapPrismaPropertyToView);
+    if (canAssign) {
+      eligibleTelecallers = await listEligibleTelecallers(context);
+    }
   } catch {
     properties = [];
+    eligibleTelecallers = [];
   }
 
-  return <SupplyValidationClient initialProperties={properties} />;
+  return (
+    <SupplyValidationClient
+      initialProperties={properties}
+      currentUserRole={context.role}
+      canAssignTelecaller={canAssign}
+      initialTelecallers={eligibleTelecallers}
+    />
+  );
 }
 
 export default function SupplyValidationPage() {

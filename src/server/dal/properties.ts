@@ -20,7 +20,11 @@ import {
   CallTargetType,
   SupplyValidationStatus,
   PropertyAvailabilityStatus,
+  AssignmentStatus,
+  AssignmentTargetType,
 } from "@prisma/client";
+
+export * from "./assignments";
 
 /**
  * Checks whether a property qualifies for the Active Supply Pool.
@@ -109,17 +113,36 @@ export async function listProperties(
   if (context.role === UserRole.FIELD_VERIFIER) {
     where.OR = [
       { submittingAgentId: context.userId },
-      { assignments: { some: { assignedUserId: context.userId, status: "ACTIVE" } } },
+      {
+        assignments: {
+          some: {
+            assignedUserId: context.userId,
+            status: AssignmentStatus.ACTIVE,
+            targetType: AssignmentTargetType.PROPERTY,
+          },
+        },
+      },
     ];
   }
 
-  // Telecaller scoping: if not viewing the active pool, restrict to assigned supply
-  if (context.role === UserRole.TELECALLER && filters?.isActiveSupply !== true) {
-    where.OR = [
-      { submittingAgentId: context.userId },
-      { assignments: { some: { assignedUserId: context.userId, status: "ACTIVE" } } },
-      { isActiveSupply: true }, // can always view active pool
-    ];
+  // Telecaller scoping:
+  // - If viewing Active Supply Pool (filters.isActiveSupply === true), allow browsing active pool.
+  // - If viewing validation queue (filters.isActiveSupply !== true), strictly restrict to properties
+  //   where the telecaller has an ACTIVE assignment for property validation.
+  //   Submitting agent relationship does NOT bypass validation assignment.
+  //   Active supply properties must NEVER leak into the validation calling queue.
+  if (context.role === UserRole.TELECALLER) {
+    if (filters?.isActiveSupply === true) {
+      where.isActiveSupply = true;
+    } else {
+      where.assignments = {
+        some: {
+          assignedUserId: context.userId,
+          status: AssignmentStatus.ACTIVE,
+          targetType: AssignmentTargetType.PROPERTY,
+        },
+      };
+    }
   }
 
   if (filters?.validationStatus) where.validationStatus = filters.validationStatus;
@@ -152,6 +175,13 @@ export async function listProperties(
         orderBy: { calledAt: "desc" },
         include: { caller: true },
       },
+      assignments: {
+        orderBy: { assignedAt: "desc" },
+        include: {
+          assignedUser: true,
+          assignedByUser: true,
+        },
+      },
     },
   });
 }
@@ -172,7 +202,15 @@ export async function getPropertyById(context: TenantContext, propertyId: string
   if (context.role === UserRole.FIELD_VERIFIER) {
     where.OR = [
       { submittingAgentId: context.userId },
-      { assignments: { some: { assignedUserId: context.userId, status: "ACTIVE" } } },
+      {
+        assignments: {
+          some: {
+            assignedUserId: context.userId,
+            status: AssignmentStatus.ACTIVE,
+            targetType: AssignmentTargetType.PROPERTY,
+          },
+        },
+      },
     ];
   }
 
@@ -185,11 +223,31 @@ export async function getPropertyById(context: TenantContext, propertyId: string
         orderBy: { calledAt: "desc" },
         include: { caller: true },
       },
+      assignments: {
+        orderBy: { assignedAt: "desc" },
+        include: {
+          assignedUser: true,
+          assignedByUser: true,
+        },
+      },
     },
   });
 
   if (!property) {
     throw new NotFoundError("Property not found.");
+  }
+
+  // Telecaller can only view actively assigned properties or active supply pool
+  if (context.role === UserRole.TELECALLER && property.assignments) {
+    const isAssigned = property.assignments.some(
+      (a) =>
+        a.assignedUserId === context.userId &&
+        a.status === AssignmentStatus.ACTIVE &&
+        (!a.targetType || a.targetType === AssignmentTargetType.PROPERTY)
+    );
+    if (!isAssigned && !property.isActiveSupply) {
+      throw new NotFoundError("Property not found.");
+    }
   }
 
   return property;
@@ -463,7 +521,8 @@ export async function logPropertyCall(context: TenantContext, input: LogProperty
     include: {
       assignments: {
         where: {
-          status: "ACTIVE",
+          status: AssignmentStatus.ACTIVE,
+          targetType: AssignmentTargetType.PROPERTY,
         },
       },
     },
@@ -473,16 +532,19 @@ export async function logPropertyCall(context: TenantContext, input: LogProperty
     throw new NotFoundError("Property not found.");
   }
 
-  // Telecaller scoping: must be actively assigned or be submitting agent
+  // Telecaller scoping: must have an active assignment to validate this property
+  // Submitting agent relationship does NOT bypass validation assignment requirement
   if (context.role === UserRole.TELECALLER) {
-    const isAssigned = property.assignments.some(
-      (a) => a.assignedUserId === context.userId
+    const isActivelyAssigned = property.assignments.some(
+      (a) =>
+        a.assignedUserId === context.userId &&
+        a.status === AssignmentStatus.ACTIVE &&
+        (!a.targetType || a.targetType === AssignmentTargetType.PROPERTY)
     );
-    const isSubmittingAgent = property.submittingAgentId === context.userId;
 
-    if (!isAssigned && !isSubmittingAgent) {
+    if (!isActivelyAssigned) {
       throw new ForbiddenError(
-        "Access denied: You are not assigned to validate this property."
+        "Access denied: You are not actively assigned to validate this property."
       );
     }
   }
@@ -606,6 +668,13 @@ export async function logPropertyCall(context: TenantContext, input: LogProperty
         callLogs: {
           orderBy: { calledAt: "desc" },
           include: { caller: true },
+        },
+        assignments: {
+          orderBy: { assignedAt: "desc" },
+          include: {
+            assignedUser: true,
+            assignedByUser: true,
+          },
         },
       },
     }),

@@ -23,6 +23,19 @@ export interface PropertyMedia {
   caption: string;
 }
 
+export interface PropertyAssignment {
+  id: string;
+  assignedUserId: string;
+  assignedUserName: string;
+  assignedByUserId?: string | null;
+  assignedByUserName?: string | null;
+  assignmentMethod: "Manual" | "Round Robin";
+  status: "Active" | "Reassigned" | "Completed" | "Cancelled";
+  assignedAt: string;
+  unassignedAt?: string | null;
+  notes?: string | null;
+}
+
 export interface Property {
   id: string;
   flatNumber: string;
@@ -54,6 +67,8 @@ export interface Property {
   rentedAt?: string;
   revalidationStatus?: "None" | "Due" | "In Progress";
   visitCount: number;
+  currentAssignment?: PropertyAssignment | null;
+  assignmentHistory?: PropertyAssignment[];
 }
 
 export interface MatchingPropertySummary {
