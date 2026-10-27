@@ -7,6 +7,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { Property, CallLogItem } from "@/types/crm";
 import { useSession } from "@/lib/auth-client";
+import { createPropertyAction } from "./actions";
 
 interface SupplyValidationClientProps {
   initialProperties: Property[];
@@ -29,6 +30,225 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
   const [callNotes, setCallNotes] = useState("");
   const [callbackTime, setCallbackTime] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Manual Property Entry Modal State
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    message: string;
+    existing: {
+      societyName: string;
+      flatNumber: string;
+      bedroomCount: number;
+      propertyType: string;
+    };
+  } | null>(null);
+  const [confirmDuplicate, setConfirmDuplicate] = useState(false);
+
+  // Form Field States
+  const [formSociety, setFormSociety] = useState("");
+  const [formFlatNumber, setFormFlatNumber] = useState("");
+  const [formLocality, setFormLocality] = useState("");
+  const [formCity, setFormCity] = useState("Gurgaon");
+  const [formPreference, setFormPreference] = useState<"SALE" | "RENT">("SALE");
+  const [formPropertyType, setFormPropertyType] = useState<
+    "APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT"
+  >("APARTMENT");
+  const [formFurnishing, setFormFurnishing] = useState<
+    "UNFURNISHED" | "SEMI_FURNISHED" | "FURNISHED"
+  >("SEMI_FURNISHED");
+  const [formConstruction, setFormConstruction] = useState<
+    "READY_TO_MOVE" | "UNDER_CONSTRUCTION"
+  >("READY_TO_MOVE");
+  const [formBedrooms, setFormBedrooms] = useState("3");
+  const [formBathrooms, setFormBathrooms] = useState("3");
+  const [formBalconies, setFormBalconies] = useState("1");
+  const [formArea, setFormArea] = useState("");
+  const [formAreaType, setFormAreaType] = useState<
+    "CARPET" | "BUILT_UP" | "SUPER_BUILT_UP"
+  >("SUPER_BUILT_UP");
+  const [formPrice, setFormPrice] = useState("");
+  const [formAmenities, setFormAmenities] = useState("Lift, Power Backup, Security");
+  const [formOwnerName, setFormOwnerName] = useState("");
+  const [formOwnerMobile, setFormOwnerMobile] = useState("");
+
+  // Optional KeyHolder states
+  const [hasKeyHolder, setHasKeyHolder] = useState(false);
+  const [formKhName, setFormKhName] = useState("");
+  const [formKhMobile, setFormKhMobile] = useState("");
+  const [formKhPersona, setFormKhPersona] = useState<
+    "GUARD" | "MAINTENANCE_OFFICE" | "NEIGHBOUR" | "OWNER" | "OTHER"
+  >("GUARD");
+  const [formKhNotes, setFormKhNotes] = useState("");
+
+  const resetCreateForm = () => {
+    setFormSociety("");
+    setFormFlatNumber("");
+    setFormLocality("");
+    setFormCity("Gurgaon");
+    setFormPreference("SALE");
+    setFormPropertyType("APARTMENT");
+    setFormFurnishing("SEMI_FURNISHED");
+    setFormConstruction("READY_TO_MOVE");
+    setFormBedrooms("3");
+    setFormBathrooms("3");
+    setFormBalconies("1");
+    setFormArea("");
+    setFormAreaType("SUPER_BUILT_UP");
+    setFormPrice("");
+    setFormAmenities("Lift, Power Backup, Security");
+    setFormOwnerName("");
+    setFormOwnerMobile("");
+    setHasKeyHolder(false);
+    setFormKhName("");
+    setFormKhMobile("");
+    setFormKhPersona("GUARD");
+    setFormKhNotes("");
+    setFormError(null);
+    setDuplicateWarning(null);
+    setConfirmDuplicate(false);
+  };
+
+  const handleCreateProperty = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setFormError(null);
+
+    // Client-side validations
+    if (!formSociety.trim()) {
+      setFormError("Society name is required.");
+      return;
+    }
+    if (!formFlatNumber.trim()) {
+      setFormError("Flat number is required.");
+      return;
+    }
+    if (!formLocality.trim()) {
+      setFormError("Locality is required.");
+      return;
+    }
+    if (!formCity.trim()) {
+      setFormError("City is required.");
+      return;
+    }
+    if (!formOwnerName.trim()) {
+      setFormError("Owner name is required.");
+      return;
+    }
+    const cleanOwnerMobile = formOwnerMobile.replace(/\D/g, "");
+    const normalizedMobile =
+      cleanOwnerMobile.length === 12 && cleanOwnerMobile.startsWith("91")
+        ? cleanOwnerMobile.slice(2)
+        : cleanOwnerMobile.length === 11 && cleanOwnerMobile.startsWith("0")
+        ? cleanOwnerMobile.slice(1)
+        : cleanOwnerMobile;
+
+    if (!/^[6-9]\d{9}$/.test(normalizedMobile)) {
+      setFormError("Owner mobile must be a valid 10-digit Indian mobile number.");
+      return;
+    }
+
+    const areaNum = parseFloat(formArea);
+    if (isNaN(areaNum) || areaNum <= 0) {
+      setFormError("Please enter a valid property area in sq ft.");
+      return;
+    }
+
+    const priceNum = parseFloat(formPrice);
+    if (isNaN(priceNum) || priceNum <= 0) {
+      setFormError("Please enter a valid price in INR.");
+      return;
+    }
+
+    const bhkNum = parseInt(formBedrooms, 10);
+    const bathNum = parseInt(formBathrooms, 10);
+    const balconyNum = parseInt(formBalconies, 10) || 0;
+
+    // Key holder validation if provided
+    let keyHolderPayload: {
+      name: string;
+      mobile: string;
+      persona: "GUARD" | "MAINTENANCE_OFFICE" | "NEIGHBOUR" | "OWNER" | "OTHER";
+      notes?: string;
+    } | null = null;
+
+    if (hasKeyHolder && formKhName.trim()) {
+      let khMobileNormalized = "";
+      if (formKhMobile.trim()) {
+        const cleanKh = formKhMobile.replace(/\D/g, "");
+        khMobileNormalized =
+          cleanKh.length === 12 && cleanKh.startsWith("91")
+            ? cleanKh.slice(2)
+            : cleanKh.length === 11 && cleanKh.startsWith("0")
+            ? cleanKh.slice(1)
+            : cleanKh;
+        if (!/^[6-9]\d{9}$/.test(khMobileNormalized)) {
+          setFormError("Key-holder mobile must be a valid 10-digit Indian mobile number.");
+          return;
+        }
+      }
+      keyHolderPayload = {
+        name: formKhName.trim(),
+        mobile: khMobileNormalized || normalizedMobile,
+        persona: formKhPersona,
+        notes: formKhNotes.trim() || undefined,
+      };
+    }
+
+    setIsSubmitting(true);
+    try {
+      const parsedAmenities = formAmenities
+        .split(",")
+        .map((a) => a.trim())
+        .filter(Boolean);
+
+      const res = await createPropertyAction({
+        societyName: formSociety.trim(),
+        flatNumber: formFlatNumber.trim(),
+        localityName: formLocality.trim(),
+        city: formCity.trim(),
+        preference: formPreference,
+        propertyType: formPropertyType,
+        furnishingStatus: formFurnishing,
+        constructionStatus: formConstruction,
+        bedroomCount: bhkNum,
+        bathroomCount: bathNum,
+        balconyCount: balconyNum,
+        area: areaNum,
+        areaType: formAreaType,
+        price: priceNum,
+        ownerName: formOwnerName.trim(),
+        ownerMobile: normalizedMobile,
+        amenities: parsedAmenities,
+        keyHolder: keyHolderPayload,
+        confirmDuplicate: confirmDuplicate,
+      });
+
+      if (!res.success) {
+        if (res.isDuplicate && res.duplicateProperty) {
+          setDuplicateWarning({
+            message: res.error,
+            existing: res.duplicateProperty,
+          });
+        } else {
+          setFormError(res.error);
+        }
+        return;
+      }
+
+      // Success
+      setProperties((prev) => [res.property, ...prev]);
+      setIsCreateModalOpen(false);
+      resetCreateForm();
+      setToastMessage(
+        `Property posted successfully: ${res.property.societyName} Flat ${res.property.flatNumber}`
+      );
+    } catch (err: unknown) {
+      setFormError(err instanceof Error ? err.message : "Failed to create property.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   // Filtered Properties
   const filteredProperties = useMemo(() => {
@@ -163,7 +383,10 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
               📥 Upload CSV / Excel
             </button>
             <button
-              onClick={() => setToastMessage("Manual property addition flow is ready.")}
+              onClick={() => {
+                resetCreateForm();
+                setIsCreateModalOpen(true);
+              }}
               className="px-3 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs"
             >
               + Post Property
@@ -641,6 +864,458 @@ export function SupplyValidationClient({ initialProperties }: SupplyValidationCl
             <strong>PRD Rule (§4.8):</strong> Selecting <em>&quot;Property Available&quot;</em> confirms both owner willingness and property details, moving this property into the Active Supply Pool.
           </div>
         </div>
+      </Modal>
+
+      {/* Manual Property Entry Modal */}
+      <Modal
+        isOpen={isCreateModalOpen}
+        onClose={() => {
+          if (!isSubmitting) {
+            setIsCreateModalOpen(false);
+            resetCreateForm();
+          }
+        }}
+        title="Post New Property"
+        subtitle="Manually register an inventory unit for owner calling and verification workflow (PRD §4)."
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setIsCreateModalOpen(false);
+                resetCreateForm();
+              }}
+              disabled={isSubmitting}
+              className="px-3.5 py-1.5 text-xs rounded border border-crm-border text-crm-muted hover:text-crm-text disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => handleCreateProperty()}
+              disabled={isSubmitting}
+              className="px-4 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {isSubmitting ? (
+                <>
+                  <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full" />
+                  <span>Submitting...</span>
+                </>
+              ) : (
+                <span>Submit Property</span>
+              )}
+            </button>
+          </>
+        }
+      >
+        <form onSubmit={handleCreateProperty} className="space-y-4 text-xs">
+          {formError && (
+            <div className="p-3 rounded-md bg-red-50 border border-red-200 text-red-700 font-medium">
+              ⚠️ {formError}
+            </div>
+          )}
+
+          {duplicateWarning && (
+            <div className="p-3.5 rounded-md bg-amber-50 border border-amber-300 text-amber-900 space-y-2">
+              <div className="font-semibold flex items-center gap-1.5">
+                <span>⚠️ Potential Duplicate Inventory Detected</span>
+              </div>
+              <p className="text-[11px] leading-relaxed">
+                A property matching <strong>{duplicateWarning.existing.societyName} (Flat {duplicateWarning.existing.flatNumber})</strong> already exists in your brokerage database ({duplicateWarning.existing.bedroomCount} BHK {duplicateWarning.existing.propertyType}).
+              </p>
+              <label className="flex items-start gap-2 pt-1 font-semibold text-amber-950 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={confirmDuplicate}
+                  onChange={(e) => setConfirmDuplicate(e.target.checked)}
+                  className="mt-0.5 rounded border-amber-400 text-crm-primary focus:ring-crm-primary"
+                />
+                <span className="text-[11px]">
+                  I confirm this is a distinct unit or separate re-listing and wish to proceed.
+                </span>
+              </label>
+            </div>
+          )}
+
+          {/* Section 1: Property Location & Unit */}
+          <div className="space-y-2.5">
+            <h4 className="text-[11px] font-bold text-crm-text uppercase tracking-wider border-b border-crm-border pb-1">
+              1. Location & Identification
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Society / Project Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. DLF Phase 5, Sobha City"
+                  value={formSociety}
+                  onChange={(e) => {
+                    setFormSociety(e.target.value);
+                    if (duplicateWarning) setDuplicateWarning(null);
+                  }}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Flat / Unit Number *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Tower B - 1204"
+                  value={formFlatNumber}
+                  onChange={(e) => {
+                    setFormFlatNumber(e.target.value);
+                    if (duplicateWarning) setDuplicateWarning(null);
+                  }}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Locality / Sector *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Sector 54, Golf Course Road"
+                  value={formLocality}
+                  onChange={(e) => setFormLocality(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  City *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Gurgaon, Noida, Delhi"
+                  value={formCity}
+                  onChange={(e) => setFormCity(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section 2: Property Type & Specs */}
+          <div className="space-y-2.5 pt-1">
+            <h4 className="text-[11px] font-bold text-crm-text uppercase tracking-wider border-b border-crm-border pb-1">
+              2. Configuration & Specifications
+            </h4>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Transaction Preference *
+                </label>
+                <select
+                  value={formPreference}
+                  onChange={(e) => setFormPreference(e.target.value as "SALE" | "RENT")}
+                  className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                >
+                  <option value="SALE">Sale (Resale)</option>
+                  <option value="RENT">Rent (Lease)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Property Type *
+                </label>
+                <select
+                  value={formPropertyType}
+                  onChange={(e) =>
+                    setFormPropertyType(
+                      e.target.value as "APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT"
+                    )
+                  }
+                  className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                >
+                  <option value="APARTMENT">Apartment</option>
+                  <option value="BUILDER_FLOOR">Builder Floor</option>
+                  <option value="VILLA">Villa</option>
+                  <option value="INDEPENDENT_HOUSE">Independent House</option>
+                  <option value="PLOT">Plot</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Furnishing Status *
+                </label>
+                <select
+                  value={formFurnishing}
+                  onChange={(e) =>
+                    setFormFurnishing(
+                      e.target.value as "UNFURNISHED" | "SEMI_FURNISHED" | "FURNISHED"
+                    )
+                  }
+                  className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                >
+                  <option value="SEMI_FURNISHED">Semi-furnished</option>
+                  <option value="FURNISHED">Furnished</option>
+                  <option value="UNFURNISHED">Unfurnished</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Bedrooms (BHK) *
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  required
+                  value={formBedrooms}
+                  onChange={(e) => setFormBedrooms(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Bathrooms *
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  required
+                  value={formBathrooms}
+                  onChange={(e) => setFormBathrooms(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Balconies
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={formBalconies}
+                  onChange={(e) => setFormBalconies(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Area (sq ft) *
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  required
+                  placeholder="e.g. 1850"
+                  value={formArea}
+                  onChange={(e) => setFormArea(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Area Type *
+                </label>
+                <select
+                  value={formAreaType}
+                  onChange={(e) =>
+                    setFormAreaType(
+                      e.target.value as "CARPET" | "BUILT_UP" | "SUPER_BUILT_UP"
+                    )
+                  }
+                  className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                >
+                  <option value="SUPER_BUILT_UP">Super Built-up</option>
+                  <option value="BUILT_UP">Built-up</option>
+                  <option value="CARPET">Carpet Area</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Construction Status *
+                </label>
+                <select
+                  value={formConstruction}
+                  onChange={(e) =>
+                    setFormConstruction(
+                      e.target.value as "READY_TO_MOVE" | "UNDER_CONSTRUCTION"
+                    )
+                  }
+                  className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                >
+                  <option value="READY_TO_MOVE">Ready to Move</option>
+                  <option value="UNDER_CONSTRUCTION">Under Construction</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  {formPreference === "SALE" ? "Asking Price (INR) *" : "Monthly Rent (INR) *"}
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  required
+                  placeholder={formPreference === "SALE" ? "e.g. 24500000 (2.45 Cr)" : "e.g. 65000"}
+                  value={formPrice}
+                  onChange={(e) => setFormPrice(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Amenities / Features
+                </label>
+                <input
+                  type="text"
+                  placeholder="Lift, Security, Power Backup, Gym"
+                  value={formAmenities}
+                  onChange={(e) => setFormAmenities(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section 3: Owner Details */}
+          <div className="space-y-2.5 pt-1">
+            <h4 className="text-[11px] font-bold text-crm-text uppercase tracking-wider border-b border-crm-border pb-1">
+              3. Owner Contact Information
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Owner Full Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Rajesh Khurana"
+                  value={formOwnerName}
+                  onChange={(e) => setFormOwnerName(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-crm-text mb-1">
+                  Owner Mobile Number *
+                </label>
+                <input
+                  type="tel"
+                  required
+                  placeholder="10-digit Indian mobile (e.g. 9811234567)"
+                  value={formOwnerMobile}
+                  onChange={(e) => setFormOwnerMobile(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section 4: Key-Holder Details (Optional) */}
+          <div className="space-y-2.5 pt-1">
+            <div className="flex items-center justify-between border-b border-crm-border pb-1">
+              <h4 className="text-[11px] font-bold text-crm-text uppercase tracking-wider">
+                4. Key-Holder Details (Optional)
+              </h4>
+              <label className="flex items-center gap-1.5 font-medium text-crm-muted cursor-pointer text-[11px]">
+                <input
+                  type="checkbox"
+                  checked={hasKeyHolder}
+                  onChange={(e) => setHasKeyHolder(e.target.checked)}
+                  className="rounded border-crm-border text-crm-primary focus:ring-crm-primary"
+                />
+                <span>Specify physical key custodian</span>
+              </label>
+            </div>
+
+            {hasKeyHolder && (
+              <div className="p-3 rounded-md bg-stone-50/60 border border-crm-border space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block font-semibold text-crm-text mb-1">
+                      Key-Holder Name *
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Bahadur Singh"
+                      value={formKhName}
+                      onChange={(e) => setFormKhName(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-crm-text mb-1">
+                      Key-Holder Mobile
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="10-digit mobile"
+                      value={formKhMobile}
+                      onChange={(e) => setFormKhMobile(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-crm-text mb-1">
+                      Custodian Persona *
+                    </label>
+                    <select
+                      value={formKhPersona}
+                      onChange={(e) =>
+                        setFormKhPersona(
+                          e.target.value as "GUARD" | "MAINTENANCE_OFFICE" | "NEIGHBOUR" | "OWNER" | "OTHER"
+                        )
+                      }
+                      className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-white focus:outline-hidden"
+                    >
+                      <option value="GUARD">Society Guard</option>
+                      <option value="MAINTENANCE_OFFICE">Maintenance Office</option>
+                      <option value="NEIGHBOUR">Neighbour</option>
+                      <option value="OWNER">Owner</option>
+                      <option value="OTHER">Other Representative</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-crm-text mb-1">
+                    Key Location & Access Notes
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Keys at Tower B reception desk from 9 AM to 6 PM"
+                    value={formKhNotes}
+                    onChange={(e) => setFormKhNotes(e.target.value)}
+                    className="w-full px-3 py-1.5 rounded border border-crm-border bg-white focus:outline-hidden"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="p-2.5 rounded bg-stone-50 border border-crm-border text-crm-muted text-[11px] leading-relaxed">
+            ℹ️ <strong>Supply Validation Rule:</strong> Newly created properties enter the calling queue as <em>Not Validated</em>. They will only qualify for the Active Supply Pool after owner willingness is confirmed and availability is validated.
+          </div>
+        </form>
       </Modal>
 
       <Toast message={toastMessage} onClose={() => setToastMessage(null)} />

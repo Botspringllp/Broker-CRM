@@ -78,11 +78,21 @@ export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
       p.constructionStatus === "READY_TO_MOVE" ? "Ready to Move" : "Under Construction",
     ownerName: p.ownerName,
     ownerMobile: p.ownerMobile,
+    ownerWillingnessConfirmed: p.ownerWillingnessConfirmed ?? false,
     keyHolder: keyHolderData
       ? {
           name: keyHolderData.name,
           mobile: keyHolderData.mobile,
-          persona: keyHolderData.persona === "GUARD" ? "Guard" : keyHolderData.persona === "OWNER" ? "Owner" : "Other",
+          persona:
+            keyHolderData.persona === "GUARD"
+              ? "Guard"
+              : keyHolderData.persona === "MAINTENANCE_OFFICE"
+              ? "Maintenance Office"
+              : keyHolderData.persona === "NEIGHBOUR"
+              ? "Neighbour"
+              : keyHolderData.persona === "OWNER"
+              ? "Owner"
+              : "Other",
           notes: keyHolderData.notes || undefined,
         }
       : {

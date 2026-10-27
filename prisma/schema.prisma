@@ -383,8 +383,9 @@ model Property {
   constructionStatus ConstructionStatus
 
   // Owner Contacts (Masked from unauthenticated & buyer-facing views)
-  ownerName   String
-  ownerMobile String // Normalized mobile number
+  ownerName                 String
+  ownerMobile               String // Normalized mobile number
+  ownerWillingnessConfirmed Boolean @default(false)
 
   // Status & Lifecycle Separation
   validationStatus   SupplyValidationStatus     @default(NOT_VALIDATED)
@@ -418,6 +419,7 @@ model Property {
   @@index([tenantId, validationStatus])
   @@index([tenantId, availabilityStatus])
   @@index([tenantId, isActiveSupply])
+  @@index([tenantId, ownerWillingnessConfirmed])
   @@index([tenantId, city, preference])
   @@index([tenantId, price])
   @@index([tenantId, revalidationStatus])

@@ -43,6 +43,7 @@ export interface Property {
   constructionStatus: "Ready to Move" | "Under Construction";
   ownerName: string;
   ownerMobile: string; // Masked in buyer-facing views
+  ownerWillingnessConfirmed: boolean;
   keyHolder: KeyHolder;
   validationStatus: "Not Validated" | "In Validation" | "Validated" | "Mandate Declined";
   availabilityStatus: "Available" | "Temporarily Unavailable" | "Sold" | "Rented";

@@ -2,9 +2,9 @@ import { headers } from "next/headers";
 import { auth } from "./auth";
 import { UserRole } from "@prisma/client";
 import { prisma } from "./db";
-import { UnauthorizedError, ForbiddenError, NotFoundError } from "./errors";
+import { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError, DuplicatePropertyError } from "./errors";
 
-export { UnauthorizedError, ForbiddenError, NotFoundError };
+export { UnauthorizedError, ForbiddenError, NotFoundError, ValidationError, DuplicatePropertyError };
 
 export interface TenantContext {
   userId: string;
