@@ -262,6 +262,7 @@ model User {
   scheduleChangesRecorded SiteVisitScheduleHistory[] @relation("ScheduleChangedByUser")
   siteVisitAccessLinks    SiteVisitAccessLink[]      @relation("SalesAgentAccessLinks")
   submittedProperties     Property[]                 @relation("SubmittingAgentProperties")
+  uploadedPropertyMedia   PropertyMedia[]            @relation("PropertyMediaUploader")
 
   // Team Hierarchy & Delegated Permissions
   brokerId             String?
@@ -449,14 +450,17 @@ model PropertyMedia {
   tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   propertyId      String
   property        Property             @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  uploadedById    String?
+  uploadedBy      User?                @relation("PropertyMediaUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
   mediaType       MediaType
   storageProvider MediaStorageProvider @default(OBJECT_STORAGE)
-  url             String // S3/R2/Blob object storage URL or YouTube link
+  url             String // Storage key/path or YouTube link
   caption         String?
   displayOrder    Int                  @default(0)
   createdAt       DateTime             @default(now())
 
   @@index([tenantId, propertyId])
+  @@index([tenantId, uploadedById])
   @@map("property_media")
 }
 

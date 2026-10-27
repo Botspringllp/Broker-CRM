@@ -6,7 +6,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
-import { Property } from "@/types/crm";
+import { Property, PropertyMedia } from "@/types/crm";
 import {
   createPropertyAction,
   logPropertyCallAction,
@@ -15,6 +15,9 @@ import {
   downloadImportTemplateAction,
   previewBulkPropertyUploadAction,
   confirmBulkPropertyUploadAction,
+  uploadPropertyPhotosAction,
+  attachPropertyVideoAction,
+  deletePropertyMediaAction,
 } from "./actions";
 import type { BulkImportPreview, BulkImportResult } from "@/server/dal/bulk-import";
 
@@ -49,6 +52,7 @@ interface SupplyValidationClientProps {
   initialProperties: Property[];
   currentUserRole?: string;
   canAssignTelecaller?: boolean;
+  canUploadMedia?: boolean;
   initialTelecallers?: EligibleTelecallerItem[];
 }
 
@@ -56,6 +60,7 @@ export function SupplyValidationClient({
   initialProperties,
   currentUserRole,
   canAssignTelecaller = false,
+  canUploadMedia = false,
   initialTelecallers = [],
 }: SupplyValidationClientProps) {
   const router = useRouter();
@@ -89,6 +94,27 @@ export function SupplyValidationClient({
   const [overrideDuplicates, setOverrideDuplicates] = useState(false);
   const [bulkResult, setBulkResult] = useState<BulkImportResult | null>(null);
   const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
+
+  // Media Upload & Gallery State
+  const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
+  const [mediaTargetProperty, setMediaTargetProperty] = useState<Property | null>(null);
+  const [mediaTab, setMediaTab] = useState<"PHOTOS" | "VIDEO">("PHOTOS");
+  const [selectedPhotos, setSelectedPhotos] = useState<File[]>([]);
+  const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
+  const [photoCaption, setPhotoCaption] = useState("");
+  const [videoUrl, setVideoUrl] = useState("");
+  const [videoCaption, setVideoCaption] = useState("");
+  const [videoParsedInfo, setVideoParsedInfo] = useState<{
+    videoId: string;
+    canonicalUrl: string;
+    embedUrl: string;
+    thumbnailUrl: string;
+  } | null>(null);
+  const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+  const [mediaModalError, setMediaModalError] = useState<string | null>(null);
+  const [activeViewerMedia, setActiveViewerMedia] = useState<PropertyMedia | null>(null);
+  const [mediaToDelete, setMediaToDelete] = useState<PropertyMedia | null>(null);
+  const [isDeletingMedia, setIsDeletingMedia] = useState(false);
 
   // Call Logging Modal state
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
@@ -557,6 +583,214 @@ export function SupplyValidationClient({
     } catch (err) {
       setBulkError(err instanceof Error ? err.message : "Import failed.");
       setBulkStep("PREVIEW");
+    }
+  };
+
+  // Media Handlers
+  const handleOpenMediaModal = (prop: Property) => {
+    setMediaTargetProperty(prop);
+    setMediaTab("PHOTOS");
+    setSelectedPhotos([]);
+    setPhotoPreviews([]);
+    setPhotoCaption("");
+    setVideoUrl("");
+    setVideoCaption("");
+    setVideoParsedInfo(null);
+    setMediaModalError(null);
+    setIsMediaModalOpen(true);
+  };
+
+  const handlePhotoFilesSelected = (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setMediaModalError(null);
+
+    const newFiles = Array.from(files);
+    const combined = [...selectedPhotos, ...newFiles];
+
+    if (combined.length > 10) {
+      setMediaModalError("Maximum 10 photos can be uploaded per batch.");
+      return;
+    }
+
+    // Validate size and basic type
+    for (const f of newFiles) {
+      if (f.size > 5 * 1024 * 1024) {
+        setMediaModalError(`"${f.name}" exceeds the 5 MB limit (${(f.size / (1024 * 1024)).toFixed(1)} MB).`);
+        return;
+      }
+      if (!["image/jpeg", "image/png", "image/webp"].includes(f.type)) {
+        setMediaModalError(`"${f.name}" has an unsupported format. Only JPEG, PNG, and WebP are allowed.`);
+        return;
+      }
+    }
+
+    setSelectedPhotos(combined);
+    const newPreviews = newFiles.map((f) => URL.createObjectURL(f));
+    setPhotoPreviews((prev) => [...prev, ...newPreviews]);
+  };
+
+  const handleRemoveSelectedPhoto = (index: number) => {
+    const updatedFiles = selectedPhotos.filter((_, i) => i !== index);
+    const updatedPreviews = photoPreviews.filter((_, i) => i !== index);
+    setSelectedPhotos(updatedFiles);
+    setPhotoPreviews(updatedPreviews);
+  };
+
+  const handleUploadPhotosSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mediaTargetProperty) return;
+    if (selectedPhotos.length === 0) {
+      setMediaModalError("Please select at least one photo to upload.");
+      return;
+    }
+
+    setIsUploadingMedia(true);
+    setMediaModalError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("propertyId", mediaTargetProperty.id);
+      if (photoCaption.trim()) {
+        formData.append("caption", photoCaption.trim());
+      }
+      selectedPhotos.forEach((f) => formData.append("files", f));
+
+      const res = await uploadPropertyPhotosAction(formData);
+
+      if (!res.success) {
+        setMediaModalError(res.error || "Failed to upload photos.");
+        setIsUploadingMedia(false);
+        return;
+      }
+
+      if (res.property) {
+        setProperties((prev) =>
+          prev.map((p) => (p.id === res.property!.id ? res.property! : p))
+        );
+        if (selectedProperty?.id === res.property.id) {
+          setSelectedProperty(res.property);
+        }
+      }
+
+      setIsMediaModalOpen(false);
+      setToastMessage(`Successfully uploaded ${res.uploadedCount} photo(s).`);
+    } catch (err) {
+      setMediaModalError(err instanceof Error ? err.message : "Upload failed.");
+    } finally {
+      setIsUploadingMedia(false);
+    }
+  };
+
+  const handleVideoUrlChange = (url: string) => {
+    setVideoUrl(url);
+    setMediaModalError(null);
+
+    if (!url.trim()) {
+      setVideoParsedInfo(null);
+      return;
+    }
+
+    try {
+      const parsed = new URL(url.trim());
+      const host = parsed.hostname.toLowerCase();
+      let videoId: string | null = null;
+
+      if (host === "youtube.com" || host === "www.youtube.com" || host === "m.youtube.com") {
+        if (parsed.pathname === "/watch") {
+          videoId = parsed.searchParams.get("v");
+        } else if (parsed.pathname.startsWith("/shorts/") || parsed.pathname.startsWith("/embed/")) {
+          videoId = parsed.pathname.split("/").filter(Boolean)[1] || null;
+        }
+      } else if (host === "youtu.be") {
+        videoId = parsed.pathname.split("/").filter(Boolean)[0] || null;
+      }
+
+      if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+        setVideoParsedInfo({
+          videoId,
+          canonicalUrl: `https://www.youtube.com/watch?v=${videoId}`,
+          embedUrl: `https://www.youtube.com/embed/${videoId}`,
+          thumbnailUrl: `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`,
+        });
+      } else {
+        setVideoParsedInfo(null);
+      }
+    } catch {
+      setVideoParsedInfo(null);
+    }
+  };
+
+  const handleAttachVideoSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!mediaTargetProperty) return;
+    if (!videoUrl.trim()) {
+      setMediaModalError("Please enter a YouTube video URL.");
+      return;
+    }
+
+    setIsUploadingMedia(true);
+    setMediaModalError(null);
+
+    try {
+      const res = await attachPropertyVideoAction({
+        propertyId: mediaTargetProperty.id,
+        youtubeUrl: videoUrl.trim(),
+        caption: videoCaption.trim() || undefined,
+      });
+
+      if (!res.success) {
+        setMediaModalError(res.error || "Failed to attach YouTube video.");
+        setIsUploadingMedia(false);
+        return;
+      }
+
+      if (res.property) {
+        setProperties((prev) =>
+          prev.map((p) => (p.id === res.property!.id ? res.property! : p))
+        );
+        if (selectedProperty?.id === res.property.id) {
+          setSelectedProperty(res.property);
+        }
+      }
+
+      setIsMediaModalOpen(false);
+      setToastMessage("YouTube walkthrough video attached successfully.");
+    } catch (err) {
+      setMediaModalError(err instanceof Error ? err.message : "Failed to attach video.");
+    } finally {
+      setIsUploadingMedia(false);
+    }
+  };
+
+  const handleConfirmDeleteMedia = async () => {
+    if (!selectedProperty || !mediaToDelete || !mediaToDelete.id) return;
+
+    setIsDeletingMedia(true);
+    try {
+      const res = await deletePropertyMediaAction({
+        propertyId: selectedProperty.id,
+        mediaId: mediaToDelete.id,
+      });
+
+      if (!res.success) {
+        setToastMessage(`Delete failed: ${res.error}`);
+        setIsDeletingMedia(false);
+        return;
+      }
+
+      if (res.property) {
+        setProperties((prev) =>
+          prev.map((p) => (p.id === res.property!.id ? res.property! : p))
+        );
+        setSelectedProperty(res.property);
+      }
+
+      setMediaToDelete(null);
+      setToastMessage("Media item deleted successfully.");
+    } catch (err) {
+      setToastMessage(`Delete failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+    } finally {
+      setIsDeletingMedia(false);
     }
   };
 
@@ -1215,34 +1449,117 @@ export function SupplyValidationClient({
 
                 {/* Media Section */}
                 <div>
-                  <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px] mb-2 border-b border-crm-border pb-1">
-                    Property Media ({selectedProperty.media.length})
-                  </h4>
+                  <div className="flex items-center justify-between mb-2 border-b border-crm-border pb-1">
+                    <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
+                      Property Media ({selectedProperty.media.length})
+                    </h4>
+                    {canUploadMedia && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenMediaModal(selectedProperty)}
+                        className="px-2 py-0.5 text-[10px] font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs transition-colors flex items-center gap-1"
+                      >
+                        + Upload Media
+                      </button>
+                    )}
+                  </div>
+
                   {selectedProperty.media.length === 0 ? (
-                    <div className="text-crm-muted italic text-center py-3 bg-stone-50 rounded border border-crm-border">
-                      No photos or videos uploaded yet.
+                    <div className="text-crm-muted italic text-center py-4 bg-stone-50 rounded border border-crm-border text-xs">
+                      <div>No photos or videos uploaded yet.</div>
+                      {canUploadMedia && (
+                        <div className="mt-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenMediaModal(selectedProperty)}
+                            className="text-crm-primary font-semibold hover:underline text-[11px]"
+                          >
+                            Upload photos or attach YouTube video →
+                          </button>
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      {selectedProperty.media.map((m, i) => (
-                        <div
-                          key={i}
-                          className="flex items-center justify-between p-2 rounded border border-crm-border bg-stone-50/50 text-[11px]"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span>{m.type === "PHOTO" ? "🖼️" : "🎥"}</span>
-                            <span className="font-medium text-crm-text">{m.caption}</span>
-                          </div>
-                          <a
-                            href={m.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-crm-link hover:underline text-[10px]"
+                    <div className="grid grid-cols-2 gap-2">
+                      {selectedProperty.media.map((m, i) => {
+                        const isVideo = m.type === "VIDEO";
+                        let ytThumb = "";
+                        if (isVideo) {
+                          const match = m.url.match(/(?:watch\?v=|youtu\.be\/|shorts\/|embed\/)([a-zA-Z0-9_-]{11})/);
+                          if (match) {
+                            ytThumb = `https://img.youtube.com/vi/${match[1]}/hqdefault.jpg`;
+                          }
+                        }
+
+                        return (
+                          <div
+                            key={m.id || i}
+                            className="group relative rounded-md border border-crm-border overflow-hidden bg-white hover:border-crm-primary transition-all flex flex-col justify-between shadow-2xs"
                           >
-                            View Link ↗
-                          </a>
-                        </div>
-                      ))}
+                            <div
+                              onClick={() => setActiveViewerMedia(m)}
+                              className="cursor-pointer relative aspect-video bg-stone-100 overflow-hidden flex items-center justify-center"
+                            >
+                              {isVideo ? (
+                                <>
+                                  {ytThumb ? (
+                                    <img
+                                      src={ytThumb}
+                                      alt={m.caption || "YouTube Video"}
+                                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                                    />
+                                  ) : (
+                                    <div className="text-2xl">🎥</div>
+                                  )}
+                                  <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
+                                    <div className="w-7 h-7 rounded-full bg-red-600 text-white flex items-center justify-center shadow-md text-xs pl-0.5">
+                                      ▶
+                                    </div>
+                                  </div>
+                                </>
+                              ) : (
+                                <img
+                                  src={m.url}
+                                  alt={m.caption || "Property Photo"}
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                                />
+                              )}
+
+                              <div className="absolute top-1 left-1">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase shadow-2xs ${
+                                    isVideo ? "bg-red-600 text-white" : "bg-stone-900/80 text-white"
+                                  }`}
+                                >
+                                  {isVideo ? "Video" : "Photo"}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="p-1.5 flex items-center justify-between text-[10px]">
+                              <span
+                                className="font-medium text-crm-text truncate max-w-[95px]"
+                                title={m.caption || (isVideo ? "YouTube Video" : "Property Photo")}
+                              >
+                                {m.caption || (isVideo ? "YouTube Video" : "Property Photo")}
+                              </span>
+                              {canUploadMedia && m.id && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setMediaToDelete(m);
+                                  }}
+                                  className="text-crm-muted hover:text-red-600 p-0.5 rounded transition-colors text-xs leading-none font-bold"
+                                  title="Delete media"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1829,6 +2146,767 @@ export function SupplyValidationClient({
           </div>
         </form>
       </Modal>
+
+      {/* Property Assignment Modal */}
+      <Modal
+        isOpen={isAssignModalOpen}
+        onClose={() => {
+          setIsAssignModalOpen(false);
+          setPropertyToAssign(null);
+          setAssignModalError(null);
+        }}
+        title="Assign Property to Telecaller"
+        subtitle="Assign this property to an eligible telecaller for owner verification calling."
+      >
+        <form onSubmit={handleManualAssign} className="space-y-4">
+          {propertyToAssign && (
+            <div className="p-3 rounded-lg bg-stone-50 border border-crm-border text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-crm-text">
+                  {propertyToAssign.flatNumber}, {propertyToAssign.societyName}
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-stone-200 text-stone-800">
+                  {propertyToAssign.preference}
+                </span>
+              </div>
+              <div className="text-crm-muted">
+                {propertyToAssign.bedroomCount} BHK • {propertyToAssign.locality}, {propertyToAssign.city}
+              </div>
+              <div className="pt-1 text-[11px] flex items-center gap-1.5">
+                <span className="text-crm-muted">Current Assignment:</span>
+                {propertyToAssign.currentAssignment ? (
+                  <span className="font-semibold text-crm-primary">
+                    {propertyToAssign.currentAssignment.assignedUserName} ({propertyToAssign.currentAssignment.status})
+                  </span>
+                ) : (
+                  <span className="font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                    Unassigned
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {assignModalError && (
+            <div className="p-2.5 text-xs rounded bg-red-50 border border-red-200 text-red-700 font-medium">
+              {assignModalError}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-crm-text mb-1">
+              Select Eligible Telecaller *
+            </label>
+            {telecallers.length === 0 ? (
+              <div className="p-3 text-xs rounded bg-amber-50 border border-amber-200 text-amber-800">
+                No active telecallers found in your tenant. Please add or activate a telecaller in Team Management.
+              </div>
+            ) : (
+              <select
+                value={selectedTelecallerId}
+                onChange={(e) => setSelectedTelecallerId(e.target.value)}
+                className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+              >
+                {telecallers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.email})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-crm-text mb-1">
+              Assignment Notes (Optional)
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Priority calling required; owner available after 4 PM"
+              value={assignmentNotes}
+              onChange={(e) => setAssignmentNotes(e.target.value)}
+              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+            />
+          </div>
+
+          <div className="pt-2 flex items-center justify-between border-t border-crm-border">
+            <button
+              type="button"
+              onClick={() => handleRoundRobinAssign()}
+              disabled={isRoundRobinRunning || isAssigning || telecallers.length === 0}
+              className="px-3 py-1.5 text-xs font-medium rounded border border-crm-border text-crm-primary hover:bg-stone-50 transition-colors disabled:opacity-50"
+            >
+              {isRoundRobinRunning ? "Assigning..." : "⚡ Auto Round-Robin"}
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAssignModalOpen(false);
+                  setPropertyToAssign(null);
+                  setAssignModalError(null);
+                }}
+                className="px-3 py-1.5 text-xs font-medium rounded border border-crm-border text-crm-muted hover:text-crm-text hover:bg-stone-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isAssigning || isRoundRobinRunning || telecallers.length === 0}
+                className="px-3.5 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs transition-colors disabled:opacity-50"
+              >
+                {isAssigning ? "Assigning..." : "Assign Property"}
+              </button>
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Bulk Property Upload Modal */}
+      <Modal
+        isOpen={isBulkModalOpen}
+        onClose={() => {
+          if (bulkStep !== "IMPORTING") {
+            setIsBulkModalOpen(false);
+            setBulkStep("SELECT");
+            setSelectedFile(null);
+            setBulkPreview(null);
+            setBulkResult(null);
+            setBulkError(null);
+          }
+        }}
+        title="Bulk Property Upload (CSV / Excel)"
+        subtitle="Import multiple residential properties into the Supply Validation calling queue at once."
+      >
+        <div className="space-y-4 text-xs">
+          {bulkError && (
+            <div className="p-3 text-xs rounded bg-red-50 border border-red-200 text-red-700 font-medium whitespace-pre-line">
+              {bulkError}
+            </div>
+          )}
+
+          {/* Step 1: SELECT */}
+          {bulkStep === "SELECT" && (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-stone-50 border border-crm-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-crm-text">Download Official PRD Template</div>
+                  <div className="text-[11px] text-crm-muted">
+                    Pre-formatted with all 20 required and optional columns and sample data.
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={isDownloadingTemplate}
+                    onClick={() => handleDownloadTemplate("csv")}
+                    className="px-2.5 py-1.5 rounded border border-crm-border bg-white text-crm-text hover:border-crm-primary font-medium shadow-2xs disabled:opacity-50"
+                  >
+                    CSV Template
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isDownloadingTemplate}
+                    onClick={() => handleDownloadTemplate("xlsx")}
+                    className="px-2.5 py-1.5 rounded bg-crm-primary text-white hover:bg-crm-primary-hover font-medium shadow-2xs disabled:opacity-50"
+                  >
+                    Excel (.xlsx) Template
+                  </button>
+                </div>
+              </div>
+
+              <div className="border-2 border-dashed border-crm-border hover:border-crm-primary rounded-lg p-6 text-center space-y-2 bg-white transition-colors">
+                <svg className="w-8 h-8 text-crm-muted mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                <div className="font-semibold text-crm-text">
+                  Choose a CSV or Excel file to upload
+                </div>
+                <div className="text-[11px] text-crm-muted">
+                  Supports .csv, .xlsx, and .xls (Max 5 MB, up to 500 rows per batch)
+                </div>
+                <input
+                  type="file"
+                  accept=".csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+                  onChange={handleFileChange}
+                  className="block mx-auto text-xs text-crm-muted file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-crm-primary file:text-white hover:file:bg-crm-primary-hover cursor-pointer"
+                />
+                {selectedFile && (
+                  <div className="pt-2 text-xs font-semibold text-crm-primary">
+                    Selected: {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
+                  </div>
+                )}
+              </div>
+
+              <div className="p-2.5 rounded bg-amber-50 border border-amber-200 text-amber-800 text-[11px] leading-relaxed">
+                ℹ️ <strong>Active Supply Pool Protection:</strong> Imported properties are automatically created with status <em>Not Validated</em> and unassigned. They will NOT appear in the Active Supply Pool or lead matching until owner willingness is confirmed by a telecaller.
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-crm-border">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkModalOpen(false)}
+                  className="px-3 py-1.5 rounded border border-crm-border text-crm-muted hover:text-crm-text"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!selectedFile || isAnalyzing}
+                  onClick={handleAnalyzeFile}
+                  className="px-4 py-1.5 rounded bg-crm-primary text-white font-semibold hover:bg-crm-primary-hover shadow-2xs disabled:opacity-50"
+                >
+                  {isAnalyzing ? "Analyzing File..." : "Analyze & Preview Rows →"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: PREVIEW */}
+          {bulkStep === "PREVIEW" && bulkPreview && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-4 gap-2">
+                <div className="p-2.5 rounded border border-crm-border bg-stone-50 text-center">
+                  <div className="text-[10px] uppercase font-bold text-crm-muted">Total Rows</div>
+                  <div className="text-base font-bold text-crm-text mt-0.5">{bulkPreview.totalRows}</div>
+                </div>
+                <div className="p-2.5 rounded border border-emerald-200 bg-emerald-50 text-center">
+                  <div className="text-[10px] uppercase font-bold text-emerald-800">Valid</div>
+                  <div className="text-base font-bold text-emerald-700 mt-0.5">{bulkPreview.validCount}</div>
+                </div>
+                <div className="p-2.5 rounded border border-red-200 bg-red-50 text-center">
+                  <div className="text-[10px] uppercase font-bold text-red-800">Errors</div>
+                  <div className="text-base font-bold text-red-700 mt-0.5">{bulkPreview.errorCount}</div>
+                </div>
+                <div className="p-2.5 rounded border border-amber-200 bg-amber-50 text-center">
+                  <div className="text-[10px] uppercase font-bold text-amber-800">Duplicates</div>
+                  <div className="text-base font-bold text-amber-700 mt-0.5">{bulkPreview.duplicateCount}</div>
+                </div>
+              </div>
+
+              {bulkPreview.duplicateCount > 0 && (
+                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 space-y-2">
+                  <div className="font-semibold text-amber-900 text-xs">
+                    ⚠️ Potential Duplicate Properties Detected ({bulkPreview.duplicateCount})
+                  </div>
+                  <p className="text-[11px] text-amber-800 leading-relaxed">
+                    Some rows match properties that already exist in this brokerage or appear multiple times in this file. By default, duplicate rows will be skipped during import.
+                  </p>
+                  <label className="flex items-center gap-2 pt-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={overrideDuplicates}
+                      onChange={(e) => setOverrideDuplicates(e.target.checked)}
+                      className="rounded border-amber-400 text-crm-primary focus:ring-crm-primary"
+                    />
+                    <span className="text-xs font-semibold text-amber-900">
+                      Import duplicate rows anyway (Override warnings)
+                    </span>
+                  </label>
+                </div>
+              )}
+
+              <div className="border border-crm-border rounded-lg overflow-hidden">
+                <div className="max-h-60 overflow-y-auto">
+                  <table className="w-full text-left border-collapse text-[11px]">
+                    <thead className="bg-stone-50 border-b border-crm-border sticky top-0">
+                      <tr>
+                        <th className="py-2 px-2.5 font-bold text-crm-muted">Row</th>
+                        <th className="py-2 px-2.5 font-bold text-crm-muted">Society & Flat</th>
+                        <th className="py-2 px-2.5 font-bold text-crm-muted">BHK / Type</th>
+                        <th className="py-2 px-2.5 font-bold text-crm-muted">Price</th>
+                        <th className="py-2 px-2.5 font-bold text-crm-muted">Owner</th>
+                        <th className="py-2 px-2.5 font-bold text-crm-muted">Status / Validation</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-crm-border bg-white">
+                      {bulkPreview.rows.map((row) => (
+                        <tr
+                          key={row.rowNumber}
+                          className={
+                            !row.isValid
+                              ? "bg-red-50/50"
+                              : row.isDuplicate
+                              ? "bg-amber-50/40"
+                              : "hover:bg-stone-50"
+                          }
+                        >
+                          <td className="py-2 px-2.5 font-mono text-crm-muted">{row.rowNumber}</td>
+                          <td className="py-2 px-2.5">
+                            <span className="font-semibold text-crm-text">
+                              {row.flatNumber || "—"}, {row.societyName || "—"}
+                            </span>
+                            <div className="text-[10px] text-crm-muted">
+                              {row.localityName}, {row.city}
+                            </div>
+                          </td>
+                          <td className="py-2 px-2.5">
+                            {row.bedroomCount} BHK {row.propertyType}
+                            <div className="text-[10px] text-crm-muted">{row.preference}</div>
+                          </td>
+                          <td className="py-2 px-2.5 font-mono">
+                            ₹{row.price ? row.price.toLocaleString("en-IN") : "0"}
+                          </td>
+                          <td className="py-2 px-2.5">
+                            <div>{row.ownerName || "—"}</div>
+                            <div className="font-mono text-[10px] text-crm-muted">{row.ownerMobile}</div>
+                          </td>
+                          <td className="py-2 px-2.5">
+                            {!row.isValid ? (
+                              <div className="text-red-700 font-semibold">
+                                ✕ Invalid
+                                <div className="text-[10px] text-red-600 font-normal">
+                                  {row.errors.slice(0, 2).join("; ")}
+                                </div>
+                              </div>
+                            ) : row.isDuplicate ? (
+                              <div className="text-amber-700 font-semibold">
+                                ⚠️ Duplicate
+                                <div className="text-[10px] text-amber-600 font-normal">
+                                  {row.duplicateWarning}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-emerald-700 font-semibold">✓ Ready to Import</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-between border-t border-crm-border">
+                <button
+                  type="button"
+                  onClick={() => setBulkStep("SELECT")}
+                  className="px-3 py-1.5 rounded border border-crm-border text-crm-muted hover:text-crm-text"
+                >
+                  ← Choose Different File
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkModalOpen(false)}
+                    className="px-3 py-1.5 rounded border border-crm-border text-crm-muted hover:text-crm-text"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      bulkPreview.validCount === 0 ||
+                      (!overrideDuplicates && bulkPreview.validCount === bulkPreview.duplicateCount)
+                    }
+                    onClick={handleConfirmImport}
+                    className="px-4 py-1.5 rounded bg-crm-primary text-white font-semibold hover:bg-crm-primary-hover shadow-2xs disabled:opacity-50"
+                  >
+                    Confirm & Import Valid Properties
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: IMPORTING */}
+          {bulkStep === "IMPORTING" && (
+            <div className="py-12 text-center space-y-3">
+              <div className="w-8 h-8 border-3 border-crm-primary border-t-transparent rounded-full animate-spin mx-auto" />
+              <div className="font-semibold text-crm-text text-sm">
+                Importing properties into database transaction...
+              </div>
+              <div className="text-crm-muted text-xs">
+                Saving verified records, initializing key-holders, and placing properties in calling queue.
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: SUMMARY */}
+          {bulkStep === "SUMMARY" && bulkResult && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-center space-y-1">
+                <div className="text-emerald-700 text-xl font-bold">Import Completed</div>
+                <div className="text-xs text-emerald-800">{bulkResult.message}</div>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2 text-center">
+                <div className="p-2 rounded border border-crm-border bg-stone-50">
+                  <div className="text-[10px] text-crm-muted uppercase font-bold">Total</div>
+                  <div className="text-sm font-bold text-crm-text mt-0.5">{bulkResult.totalProcessed}</div>
+                </div>
+                <div className="p-2 rounded border border-emerald-200 bg-emerald-50">
+                  <div className="text-[10px] text-emerald-800 uppercase font-bold">Imported</div>
+                  <div className="text-sm font-bold text-emerald-700 mt-0.5">{bulkResult.importedCount}</div>
+                </div>
+                <div className="p-2 rounded border border-amber-200 bg-amber-50">
+                  <div className="text-[10px] text-amber-800 uppercase font-bold">Skipped</div>
+                  <div className="text-sm font-bold text-amber-700 mt-0.5">{bulkResult.skippedCount}</div>
+                </div>
+                <div className="p-2 rounded border border-red-200 bg-red-50">
+                  <div className="text-[10px] text-red-800 uppercase font-bold">Failed</div>
+                  <div className="text-sm font-bold text-red-700 mt-0.5">{bulkResult.failedCount}</div>
+                </div>
+              </div>
+
+              {bulkResult.failures.length > 0 && (
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 space-y-1.5">
+                  <div className="font-semibold text-red-800 text-xs">Unimported / Skipped Rows:</div>
+                  <ul className="text-[11px] text-red-700 list-disc list-inside space-y-0.5 max-h-32 overflow-y-auto">
+                    {bulkResult.failures.map((f) => (
+                      <li key={f.rowNumber}>
+                        Row {f.rowNumber}: {f.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="pt-2 flex justify-end border-t border-crm-border">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBulkModalOpen(false);
+                    setBulkStep("SELECT");
+                    setSelectedFile(null);
+                    setBulkPreview(null);
+                    setBulkResult(null);
+                  }}
+                  className="px-4 py-1.5 rounded bg-crm-primary text-white font-semibold hover:bg-crm-primary-hover shadow-2xs"
+                >
+                  Done & View Validation Queue
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Upload Property Media Modal */}
+      <Modal
+        isOpen={isMediaModalOpen}
+        onClose={() => {
+          if (!isUploadingMedia) {
+            setIsMediaModalOpen(false);
+            setMediaTargetProperty(null);
+            setSelectedPhotos([]);
+            setPhotoPreviews([]);
+            setPhotoCaption("");
+            setVideoUrl("");
+            setVideoCaption("");
+            setVideoParsedInfo(null);
+            setMediaModalError(null);
+          }
+        }}
+        title="Upload Property Media"
+        subtitle={
+          mediaTargetProperty
+            ? `${mediaTargetProperty.flatNumber}, ${mediaTargetProperty.societyName} (${mediaTargetProperty.locality}, ${mediaTargetProperty.city})`
+            : "Upload verified property photos or attach YouTube walkthrough video."
+        }
+      >
+        <div className="space-y-4 text-xs">
+          {mediaModalError && (
+            <div className="p-2.5 rounded bg-red-50 border border-red-200 text-red-700 font-medium">
+              {mediaModalError}
+            </div>
+          )}
+
+          {/* Tab selector */}
+          <div className="flex border-b border-crm-border">
+            <button
+              type="button"
+              onClick={() => {
+                setMediaTab("PHOTOS");
+                setMediaModalError(null);
+              }}
+              className={`pb-2 px-4 font-semibold text-xs border-b-2 transition-colors ${
+                mediaTab === "PHOTOS"
+                  ? "border-crm-primary text-crm-primary"
+                  : "border-transparent text-crm-muted hover:text-crm-text"
+              }`}
+            >
+              🖼️ Upload Photos
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMediaTab("VIDEO");
+                setMediaModalError(null);
+              }}
+              className={`pb-2 px-4 font-semibold text-xs border-b-2 transition-colors ${
+                mediaTab === "VIDEO"
+                  ? "border-crm-primary text-crm-primary"
+                  : "border-transparent text-crm-muted hover:text-crm-text"
+              }`}
+            >
+              🎥 Attach YouTube Walkthrough
+            </button>
+          </div>
+
+          {/* Tab 1: PHOTOS */}
+          {mediaTab === "PHOTOS" && (
+            <form onSubmit={handleUploadPhotosSubmit} className="space-y-4">
+              <div className="border-2 border-dashed border-crm-border hover:border-crm-primary rounded-lg p-5 text-center space-y-2 bg-stone-50/50 transition-colors">
+                <svg className="w-8 h-8 text-crm-muted mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <div className="font-semibold text-crm-text">
+                  Choose property photos to upload
+                </div>
+                <div className="text-[11px] text-crm-muted">
+                  Supports JPEG, PNG, and WebP (Max 5 MB per file, up to 10 photos per batch)
+                </div>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => handlePhotoFilesSelected(e.target.files)}
+                  className="block mx-auto text-xs text-crm-muted file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-crm-primary file:text-white hover:file:bg-crm-primary-hover cursor-pointer"
+                />
+              </div>
+
+              {selectedPhotos.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs text-crm-muted font-medium">
+                    <span>Selected Photos ({selectedPhotos.length}/10)</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPhotos([]);
+                        setPhotoPreviews([]);
+                      }}
+                      className="text-red-600 hover:underline text-[11px]"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2 max-h-44 overflow-y-auto p-1 border border-crm-border rounded bg-stone-50">
+                    {photoPreviews.map((src, idx) => (
+                      <div key={idx} className="relative aspect-square rounded border border-crm-border overflow-hidden bg-white group">
+                        <img src={src} alt="Preview" className="w-full h-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSelectedPhoto(idx)}
+                          className="absolute top-1 right-1 bg-black/70 hover:bg-red-600 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] transition-colors"
+                        >
+                          ✕
+                        </button>
+                        <div className="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-white px-1 py-0.5 truncate">
+                          {selectedPhotos[idx]?.name}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-crm-text mb-1">
+                  Photo Caption / Description (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Master Bedroom, Modular Kitchen, Society Clubhouse"
+                  value={photoCaption}
+                  onChange={(e) => setPhotoCaption(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+
+              <div className="p-2.5 rounded bg-stone-50 border border-crm-border text-crm-muted text-[11px] leading-relaxed">
+                🔒 <strong>Tenant Storage Rule:</strong> Photos are stored securely in tenant-isolated storage and accessible only by authenticated brokerage users.
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-crm-border">
+                <button
+                  type="button"
+                  onClick={() => setIsMediaModalOpen(false)}
+                  className="px-3 py-1.5 rounded border border-crm-border text-crm-muted hover:text-crm-text"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={selectedPhotos.length === 0 || isUploadingMedia}
+                  className="px-4 py-1.5 rounded bg-crm-primary text-white font-semibold hover:bg-crm-primary-hover shadow-2xs transition-colors disabled:opacity-50"
+                >
+                  {isUploadingMedia ? "Uploading Photos..." : `Upload ${selectedPhotos.length} Photo(s)`}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Tab 2: VIDEO */}
+          {mediaTab === "VIDEO" && (
+            <form onSubmit={handleAttachVideoSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-crm-text mb-1">
+                  YouTube Walkthrough Video URL *
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://www.youtube.com/watch?v=... or https://youtu.be/..."
+                  value={videoUrl}
+                  onChange={(e) => handleVideoUrlChange(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+                <div className="text-[11px] text-crm-muted mt-1">
+                  Accepts public or unlisted YouTube video links (desktop, mobile, or YouTube Shorts).
+                </div>
+              </div>
+
+              {videoParsedInfo && (
+                <div className="p-3 rounded-lg border border-emerald-200 bg-emerald-50/50 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-semibold text-emerald-800">
+                    <span>✓ Valid YouTube Video Identified</span>
+                    <span className="font-mono text-[10px] text-crm-muted">ID: {videoParsedInfo.videoId}</span>
+                  </div>
+                  <div className="aspect-video max-w-xs mx-auto rounded overflow-hidden border border-crm-border shadow-xs">
+                    <iframe
+                      src={videoParsedInfo.embedUrl}
+                      title="YouTube Preview"
+                      className="w-full h-full"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-semibold text-crm-text mb-1">
+                  Video Caption / Description (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Full 3 BHK Walkthrough Video Tour"
+                  value={videoCaption}
+                  onChange={(e) => setVideoCaption(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+
+              <div className="p-2.5 rounded bg-stone-50 border border-crm-border text-crm-muted text-[11px] leading-relaxed">
+                ℹ️ <strong>PRD Storage Strategy (Decision Q11):</strong> Video files are hosted on YouTube to avoid heavy transcoding overhead. The CRM stores and embeds the validated walkthrough URL.
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-crm-border">
+                <button
+                  type="button"
+                  onClick={() => setIsMediaModalOpen(false)}
+                  className="px-3 py-1.5 rounded border border-crm-border text-crm-muted hover:text-crm-text"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!videoParsedInfo || isUploadingMedia}
+                  className="px-4 py-1.5 rounded bg-crm-primary text-white font-semibold hover:bg-crm-primary-hover shadow-2xs transition-colors disabled:opacity-50"
+                >
+                  {isUploadingMedia ? "Attaching Video..." : "Attach YouTube Video"}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </Modal>
+
+      {/* Lightbox / Media Viewer Modal */}
+      {activeViewerMedia && (
+        <Modal
+          isOpen={!!activeViewerMedia}
+          onClose={() => setActiveViewerMedia(null)}
+          title={activeViewerMedia.caption || (activeViewerMedia.type === "VIDEO" ? "Walkthrough Video" : "Property Photo")}
+          subtitle={activeViewerMedia.type === "VIDEO" ? "YouTube Walkthrough Video" : "Verified Property Photo"}
+        >
+          <div className="space-y-3">
+            {activeViewerMedia.type === "VIDEO" ? (
+              <div className="aspect-video w-full rounded overflow-hidden border border-crm-border shadow-xs bg-black">
+                {(() => {
+                  const match = activeViewerMedia.url.match(/(?:watch\?v=|youtu\.be\/|shorts\/|embed\/)([a-zA-Z0-9_-]{11})/);
+                  const embedUrl = match ? `https://www.youtube.com/embed/${match[1]}?autoplay=1` : activeViewerMedia.url;
+                  return (
+                    <iframe
+                      src={embedUrl}
+                      title={activeViewerMedia.caption || "YouTube Video"}
+                      className="w-full h-full"
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                    />
+                  );
+                })()}
+              </div>
+            ) : (
+              <div className="max-h-[65vh] flex items-center justify-center bg-stone-900 rounded overflow-hidden">
+                <img
+                  src={activeViewerMedia.url}
+                  alt={activeViewerMedia.caption || "Property Photo"}
+                  className="max-h-[65vh] w-auto object-contain"
+                />
+              </div>
+            )}
+
+            <div className="flex items-center justify-between text-xs pt-2 border-t border-crm-border">
+              <div className="text-crm-muted">
+                {activeViewerMedia.caption && <span className="font-medium text-crm-text mr-2">{activeViewerMedia.caption}</span>}
+                {activeViewerMedia.createdAt && (
+                  <span>Added {new Date(activeViewerMedia.createdAt).toLocaleDateString("en-IN")}</span>
+                )}
+              </div>
+              {activeViewerMedia.type === "VIDEO" && (
+                <a
+                  href={activeViewerMedia.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-crm-primary font-semibold hover:underline flex items-center gap-1"
+                >
+                  Open on YouTube ↗
+                </a>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete Media Confirmation Modal */}
+      {mediaToDelete && (
+        <Modal
+          isOpen={!!mediaToDelete}
+          onClose={() => {
+            if (!isDeletingMedia) setMediaToDelete(null);
+          }}
+          title="Delete Property Media"
+          subtitle="Are you sure you want to permanently delete this media item?"
+        >
+          <div className="space-y-4 text-xs">
+            <p className="text-crm-text">
+              This action will remove the {mediaToDelete.type === "VIDEO" ? "YouTube video link" : "photo"}
+              {mediaToDelete.caption ? ` ("${mediaToDelete.caption}")` : ""} from this property and delete its storage object. This cannot be undone.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-crm-border">
+              <button
+                type="button"
+                disabled={isDeletingMedia}
+                onClick={() => setMediaToDelete(null)}
+                className="px-3 py-1.5 rounded border border-crm-border text-crm-muted hover:text-crm-text"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingMedia}
+                onClick={handleConfirmDeleteMedia}
+                className="px-3.5 py-1.5 rounded bg-red-600 text-white font-semibold hover:bg-red-700 shadow-2xs disabled:opacity-50"
+              >
+                {isDeletingMedia ? "Deleting..." : "Delete Media Item"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
     </AppShell>

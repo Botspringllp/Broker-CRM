@@ -165,9 +165,12 @@ export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
       }) || [],
     media:
       p.media?.map((m) => ({
+        id: m.id,
         type: m.mediaType,
         url: m.url,
         caption: m.caption || "",
+        displayOrder: m.displayOrder,
+        createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : undefined,
       })) || [],
     rentedAt: p.rentedAt ? new Date(p.rentedAt).toISOString() : undefined,
     revalidationStatus:

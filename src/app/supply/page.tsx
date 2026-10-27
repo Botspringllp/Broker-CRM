@@ -32,6 +32,11 @@ async function SupplyValidationData() {
     "assignment:assign_telecaller",
     context.user.delegatedPermissions
   );
+  const canUploadMedia = hasPermission(
+    context.role,
+    "supply:upload_media",
+    context.user.delegatedPermissions
+  );
 
   try {
     const dbProperties = await listProperties(context);
@@ -49,6 +54,7 @@ async function SupplyValidationData() {
       initialProperties={properties}
       currentUserRole={context.role}
       canAssignTelecaller={canAssign}
+      canUploadMedia={canUploadMedia}
       initialTelecallers={eligibleTelecallers}
     />
   );

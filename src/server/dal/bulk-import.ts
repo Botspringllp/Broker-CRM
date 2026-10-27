@@ -116,7 +116,8 @@ function normalizePropertyType(val: string): PropertyType | null {
   if (v === "independenthouse" || v === "house" || v === "kothi" || v === "bungalow")
     return PropertyType.INDEPENDENT_HOUSE;
   if (v === "villa") return PropertyType.VILLA;
-  if (v === "builderfloor" || v === "floor") return PropertyType.BUILDER_FLOOR;
+  if (v === "builderfloor" || v === "floor" || v === "independentfloor")
+    return PropertyType.BUILDER_FLOOR;
   if (v === "plot" || v === "land") return PropertyType.PLOT;
   if (v === "commercial" || v === "office" || v === "shop") return PropertyType.COMMERCIAL;
   if (v === "other") return PropertyType.OTHER;
@@ -431,7 +432,7 @@ export async function parseAndPreviewImportFile(
   headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
     const rawText = String(cell.value || "")
       .toLowerCase()
-      .replace(/[\s*_()/[\]\\-]/g, "");
+      .replace(/[\s*_.()/[\]\\-]/g, "");
     const canonicalKey = CANONICAL_HEADER_MAP[rawText];
     if (canonicalKey) {
       columnKeyMap.set(colNumber, canonicalKey);
@@ -456,6 +457,13 @@ export async function parseAndPreviewImportFile(
       hasHeadersError: true,
       headersErrorMessage: `Missing required template columns: ${missingLabels}. Please download the official template.`,
     };
+  }
+
+  // Check max rows limit
+  if (worksheet.rowCount - 1 > MAX_IMPORT_ROW_COUNT) {
+    throw new ValidationError(
+      `File exceeds the maximum limit of ${MAX_IMPORT_ROW_COUNT} rows per upload. Found ${worksheet.rowCount - 1} rows.`
+    );
   }
 
   // 2. Parse & Validate Data Rows
@@ -631,6 +639,7 @@ export async function parseAndPreviewImportFile(
       keyHolder,
       isValid: rowErrors.length === 0,
       errors: rowErrors,
+      isDuplicate: isInternalDuplicate,
       isInternalDuplicate,
       duplicateWarning,
     });

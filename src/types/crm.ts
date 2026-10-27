@@ -18,9 +18,13 @@ export interface CallLogItem {
 }
 
 export interface PropertyMedia {
+  id?: string;
   type: "PHOTO" | "VIDEO";
   url: string;
   caption: string;
+  displayOrder?: number;
+  uploadedByName?: string;
+  createdAt?: string;
 }
 
 export interface PropertyAssignment {
