@@ -28,7 +28,7 @@ export function formatIndianCurrency(amount: number, isRent = false): string {
 type FullPrismaProperty = PrismaProperty & {
   keyHolders?: PrismaKeyHolder[];
   media?: PrismaPropertyMedia[];
-  callLogs?: (PrismaCallLog & { callerUser?: PrismaUser | null })[];
+  callLogs?: (PrismaCallLog & { caller?: PrismaUser | null; callerUser?: PrismaUser | null })[];
   siteVisitItems?: PrismaSiteVisitItem[];
 };
 
@@ -117,18 +117,47 @@ export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
         ? "Rented"
         : "Temporarily Unavailable",
     isActiveSupply: p.isActiveSupply,
-    currentDisposition: p.callLogs?.[0]?.propertyDisposition?.replace(/_/g, " ") || "Not Called",
+    currentDisposition: p.callLogs?.[0]?.propertyDisposition
+      ? p.callLogs[0].propertyDisposition.replace(/_/g, " ")
+      : "Not Called",
     callHistory:
-      p.callLogs?.map((c) => ({
-        id: c.id,
-        calledAt: new Date(c.calledAt).toLocaleDateString("en-IN"),
-        callerName: c.callerUser?.name || "Caller",
-        disposition: c.propertyDisposition ? c.propertyDisposition.replace(/_/g, " ") : "Called",
-        notes: c.notes || "",
-        callbackDate: c.callbackScheduledAt
-          ? new Date(c.callbackScheduledAt).toLocaleDateString("en-IN")
-          : undefined,
-      })) || [],
+      p.callLogs?.map((c) => {
+        const calledDate = new Date(c.calledAt);
+        const formattedCalledAt = !isNaN(calledDate.getTime())
+          ? calledDate.toLocaleString("en-IN", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true,
+            })
+          : "Recently";
+
+        let formattedCallback: string | undefined;
+        if (c.callbackScheduledAt) {
+          const cbDate = new Date(c.callbackScheduledAt);
+          if (!isNaN(cbDate.getTime())) {
+            formattedCallback = cbDate.toLocaleString("en-IN", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true,
+            });
+          }
+        }
+
+        return {
+          id: c.id,
+          calledAt: formattedCalledAt,
+          callerName: c.caller?.name || c.callerUser?.name || "Caller",
+          disposition: c.propertyDisposition ? c.propertyDisposition.replace(/_/g, " ") : "Called",
+          notes: c.notes || "",
+          callbackDate: formattedCallback,
+        };
+      }) || [],
     media:
       p.media?.map((m) => ({
         type: m.mediaType,

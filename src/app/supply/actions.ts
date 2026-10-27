@@ -4,7 +4,9 @@ import { requireTenantContext, DuplicatePropertyError } from "@/server/tenant-co
 import {
   createProperty,
   checkDuplicateProperty,
+  logPropertyCall,
   CreatePropertyInput,
+  LogPropertyCallInput,
 } from "@/server/dal/properties";
 import { mapPrismaPropertyToView } from "@/server/dal/mappers";
 import { revalidatePath } from "next/cache";
@@ -51,4 +53,25 @@ export async function checkDuplicatePropertyAction(params: {
     return { success: false, isDuplicate: false, duplicate: null, error: message };
   }
 }
+
+export async function logPropertyCallAction(input: LogPropertyCallInput) {
+  try {
+    const context = await requireTenantContext();
+    const result = await logPropertyCall(context, input);
+    revalidatePath("/supply");
+    revalidatePath("/supply/active");
+    revalidatePath("/");
+    return {
+      success: true as const,
+      property: mapPrismaPropertyToView(result),
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to record call outcome.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
 

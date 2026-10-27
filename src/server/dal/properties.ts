@@ -1,7 +1,26 @@
 import { prisma } from "../db";
-import { TenantContext, NotFoundError, ValidationError, DuplicatePropertyError } from "../tenant-context";
+import {
+  TenantContext,
+  NotFoundError,
+  ForbiddenError,
+  ValidationError,
+  DuplicatePropertyError,
+} from "../tenant-context";
 import { assertPermission } from "../permissions";
-import { Prisma, UserRole, KeyHolderPersona, PropertyType, TransactionType, FurnishingStatus, ConstructionStatus, AreaUnitType } from "@prisma/client";
+import {
+  Prisma,
+  UserRole,
+  KeyHolderPersona,
+  PropertyType,
+  TransactionType,
+  FurnishingStatus,
+  ConstructionStatus,
+  AreaUnitType,
+  PropertyCallingDisposition,
+  CallTargetType,
+  SupplyValidationStatus,
+  PropertyAvailabilityStatus,
+} from "@prisma/client";
 
 /**
  * Checks whether a property qualifies for the Active Supply Pool.
@@ -407,4 +426,190 @@ export async function updateProperty(
     },
     data: safeData,
   });
+}
+
+export interface LogPropertyCallInput {
+  propertyId: string;
+  disposition: PropertyCallingDisposition | string;
+  notes?: string | null;
+  callbackScheduledAt?: Date | string | null;
+  confirmOwnerWillingness?: boolean;
+}
+
+/**
+ * Logs a call outcome for a property validation target.
+ * Enforces:
+ * - 'supply:log_call' permission check.
+ * - Strict tenant isolation.
+ * - Telecaller assignment check: telecallers can only record calls against properties assigned to them or submitted by them.
+ * - Non-destructive: creates a new CallLog record each time (never overwrites history).
+ * - Exact 6 PRD dispositions supported.
+ * - Required callback date/time on CALL_BACK.
+ * - Server-side property status and active pool eligibility transitions.
+ */
+export async function logPropertyCall(context: TenantContext, input: LogPropertyCallInput) {
+  assertPermission(context, "supply:log_call");
+
+  if (!input.propertyId?.trim()) {
+    throw new ValidationError("Property ID is required.");
+  }
+
+  // Strictly query within the authenticated tenant
+  const property = await prisma.property.findFirst({
+    where: {
+      id: input.propertyId,
+      tenantId: context.tenantId, // STRICT TENANT ISOLATION
+    },
+    include: {
+      assignments: {
+        where: {
+          status: "ACTIVE",
+        },
+      },
+    },
+  });
+
+  if (!property) {
+    throw new NotFoundError("Property not found.");
+  }
+
+  // Telecaller scoping: must be actively assigned or be submitting agent
+  if (context.role === UserRole.TELECALLER) {
+    const isAssigned = property.assignments.some(
+      (a) => a.assignedUserId === context.userId
+    );
+    const isSubmittingAgent = property.submittingAgentId === context.userId;
+
+    if (!isAssigned && !isSubmittingAgent) {
+      throw new ForbiddenError(
+        "Access denied: You are not assigned to validate this property."
+      );
+    }
+  }
+
+  // Validate disposition enum
+  const validDispositions = Object.values(PropertyCallingDisposition);
+  const normalizedDisposition = input.disposition as PropertyCallingDisposition;
+
+  if (!validDispositions.includes(normalizedDisposition)) {
+    throw new ValidationError(
+      `Invalid calling disposition: '${input.disposition}'. Supported dispositions are: ${validDispositions.join(", ")}.`
+    );
+  }
+
+  // Validate callback scheduled at
+  let callbackDate: Date | null = null;
+  if (normalizedDisposition === PropertyCallingDisposition.CALL_BACK) {
+    if (!input.callbackScheduledAt) {
+      throw new ValidationError("A callback date and time is required when disposition is Call Back.");
+    }
+    const d = new Date(input.callbackScheduledAt);
+    if (isNaN(d.getTime())) {
+      throw new ValidationError("Invalid callback date and time format.");
+    }
+    callbackDate = d;
+  } else if (input.callbackScheduledAt) {
+    const d = new Date(input.callbackScheduledAt);
+    if (!isNaN(d.getTime())) {
+      callbackDate = d;
+    }
+  }
+
+  // Determine property lifecycle transitions based on disposition
+  let nextValidationStatus: SupplyValidationStatus = property.validationStatus;
+  let nextAvailabilityStatus: PropertyAvailabilityStatus = property.availabilityStatus;
+  let nextOwnerWillingness: boolean = property.ownerWillingnessConfirmed;
+
+  switch (normalizedDisposition) {
+    case PropertyCallingDisposition.RINGING_OR_NOT_ANSWERING:
+    case PropertyCallingDisposition.CALL_BACK:
+      // Transition from NOT_VALIDATED to IN_VALIDATION
+      if (property.validationStatus === SupplyValidationStatus.NOT_VALIDATED) {
+        nextValidationStatus = SupplyValidationStatus.IN_VALIDATION;
+      }
+      break;
+
+    case PropertyCallingDisposition.TEMPORARILY_UNAVAILABLE:
+      if (property.validationStatus === SupplyValidationStatus.NOT_VALIDATED) {
+        nextValidationStatus = SupplyValidationStatus.IN_VALIDATION;
+      }
+      nextAvailabilityStatus = PropertyAvailabilityStatus.TEMPORARILY_UNAVAILABLE;
+      break;
+
+    case PropertyCallingDisposition.PROPERTY_SOLD_OR_RENTED:
+      nextAvailabilityStatus =
+        property.preference === TransactionType.RENT
+          ? PropertyAvailabilityStatus.RENTED
+          : PropertyAvailabilityStatus.SOLD;
+      break;
+
+    case PropertyCallingDisposition.OWNER_DECLINES_MANDATE:
+      nextValidationStatus = SupplyValidationStatus.MANDATE_DECLINED;
+      nextOwnerWillingness = false;
+      break;
+
+    case PropertyCallingDisposition.PROPERTY_AVAILABLE:
+      if (input.confirmOwnerWillingness) {
+        nextOwnerWillingness = true;
+        nextValidationStatus = SupplyValidationStatus.VALIDATED;
+        nextAvailabilityStatus = PropertyAvailabilityStatus.AVAILABLE;
+      } else {
+        nextOwnerWillingness = false;
+        if (property.validationStatus === SupplyValidationStatus.NOT_VALIDATED) {
+          nextValidationStatus = SupplyValidationStatus.IN_VALIDATION;
+        }
+        nextAvailabilityStatus = PropertyAvailabilityStatus.AVAILABLE;
+      }
+      break;
+  }
+
+  // Active supply eligibility: strictly requires confirmed willingness AND validated status AND available
+  const computedIsActiveSupply = isEligibleForActiveSupply({
+    ownerWillingnessConfirmed: nextOwnerWillingness,
+    validationStatus: nextValidationStatus,
+    availabilityStatus: nextAvailabilityStatus,
+  });
+
+  // Execute atomic transaction: create CallLog record and update Property
+  const [, updatedProperty] = await prisma.$transaction([
+    prisma.callLog.create({
+      data: {
+        tenantId: context.tenantId,
+        callerId: context.userId, // Server context derivation
+        callType: CallTargetType.PROPERTY_VALIDATION,
+        propertyId: property.id,
+        propertyDisposition: normalizedDisposition,
+        notes: input.notes?.trim() || null,
+        callbackScheduledAt: callbackDate,
+        calledAt: new Date(),
+      },
+      include: {
+        caller: true,
+      },
+    }),
+    prisma.property.update({
+      where: {
+        id_tenantId: {
+          id: property.id,
+          tenantId: context.tenantId, // ATOMIC TENANT SCOPED MUTATION
+        },
+      },
+      data: {
+        validationStatus: nextValidationStatus,
+        availabilityStatus: nextAvailabilityStatus,
+        ownerWillingnessConfirmed: nextOwnerWillingness,
+        isActiveSupply: computedIsActiveSupply,
+      },
+      include: {
+        keyHolders: true,
+        media: true,
+        callLogs: {
+          orderBy: { calledAt: "desc" },
+          include: { caller: true },
+        },
+      },
+    }),
+  ]);
+
+  return updatedProperty;
 }
