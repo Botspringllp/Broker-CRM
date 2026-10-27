@@ -9,6 +9,7 @@ import {
   PropertyMedia,
   UserRole,
   AssignmentStatus,
+  PropertyVerificationStatus,
 } from "@prisma/client";
 import {
   getStorageAdapter,
@@ -105,12 +106,27 @@ async function verifyPropertyAccess(
     select: {
       id: true,
       tenantId: true,
+      submittingAgentId: true,
       assignments: {
         where: {
           status: AssignmentStatus.ACTIVE,
         },
         select: {
           assignedUserId: true,
+        },
+      },
+      verifications: {
+        where: {
+          status: {
+            in: [
+              PropertyVerificationStatus.ASSIGNED,
+              PropertyVerificationStatus.IN_PROGRESS,
+            ],
+          },
+        },
+        select: {
+          verifierId: true,
+          status: true,
         },
       },
     },
@@ -132,6 +148,24 @@ async function verifyPropertyAccess(
     }
   }
 
+  // Field Verifiers may only upload media for properties actively assigned to them,
+  // where they have an active verification task, or where they are the submitter
+  if (context.role === UserRole.FIELD_VERIFIER) {
+    const isAssigned = property.assignments.some(
+      (a) => a.assignedUserId === context.userId
+    );
+    const hasActiveVerification = property.verifications.some(
+      (v) => v.verifierId === context.userId
+    );
+    const isSubmitter = property.submittingAgentId === context.userId;
+
+    if (!isAssigned && !hasActiveVerification && !isSubmitter) {
+      throw new ForbiddenError(
+        "Field Verifiers may only upload or manage media for properties actively assigned to them."
+      );
+    }
+  }
+
   return { id: property.id, tenantId: property.tenantId };
 }
 
@@ -146,10 +180,33 @@ export async function addPropertyPhoto(
     fileBuffer: Buffer;
     originalFilename?: string;
     caption?: string;
+    verificationId?: string;
   }
 ): Promise<PropertyMedia> {
   assertPermission(context, "supply:upload_media");
   const property = await verifyPropertyAccess(context, params.propertyId);
+
+  // If verificationId is supplied, validate it belongs to this property and tenant
+  if (params.verificationId) {
+    const verification = await prisma.propertyVerification.findFirst({
+      where: {
+        id: params.verificationId,
+        propertyId: property.id,
+        tenantId: context.tenantId,
+      },
+      select: { id: true, verifierId: true, status: true },
+    });
+
+    if (!verification) {
+      throw new NotFoundError("Associated verification record not found.");
+    }
+
+    if (context.role === UserRole.FIELD_VERIFIER && verification.verifierId !== context.userId) {
+      throw new ForbiddenError(
+        "Field Verifier may only attach evidence to their own verification task."
+      );
+    }
+  }
 
   // Validate photo buffer and file signature (magic bytes)
   const validation = validateImageBuffer(params.fileBuffer);
@@ -188,6 +245,7 @@ export async function addPropertyPhoto(
         tenantId: context.tenantId, // STRICT SERVER-DERIVED TENANT
         propertyId: property.id,
         uploadedById: context.userId, // STRICT SERVER-DERIVED UPLOADER
+        verificationId: params.verificationId || null,
         mediaType: MediaType.PHOTO,
         storageProvider: MediaStorageProvider.OBJECT_STORAGE,
         url: `/api/media/${mediaId}`, // Authenticated serving route

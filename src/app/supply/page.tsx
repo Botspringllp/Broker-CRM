@@ -29,6 +29,10 @@ async function SupplyValidationData() {
     redirect("/users");
   }
 
+  if (context.role === UserRole.FIELD_VERIFIER) {
+    redirect("/verifier");
+  }
+
   let properties: Property[] = [];
   let eligibleTelecallers: EligibleTelecaller[] = [];
   const canAssign = hasPermission(

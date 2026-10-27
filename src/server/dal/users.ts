@@ -651,6 +651,7 @@ export async function updateDelegatedPermissions(
 
   // Enforce granter authority for every single permission
   for (const perm of permissions) {
+    if (perm === ("none" as AppAction)) continue;
     if (!canDelegatePermission(context.role, perm, context.user.delegatedPermissions)) {
       throw new ForbiddenError(
         `Cannot delegate permission '${perm}': Granter does not possess this permission.`

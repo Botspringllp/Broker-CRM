@@ -1,4 +1,4 @@
-import { Property, Lead, SiteVisit } from "@/types/crm";
+import { Property, Lead, SiteVisit, PropertyVerificationView } from "@/types/crm";
 import {
   Property as PrismaProperty,
   KeyHolder as PrismaKeyHolder,
@@ -264,6 +264,8 @@ export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
           notes: a.notes || null,
         };
       }) || [],
+    isFieldVerified: p.isFieldVerified ?? false,
+    fieldVerifiedAt: p.fieldVerifiedAt ? p.fieldVerifiedAt.toISOString() : null,
   };
 }
 
@@ -440,6 +442,73 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
         reason: h.reason,
         recordedBy: "User",
       })) || [],
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function mapPrismaVerificationToView(v: any): PropertyVerificationView {
+  const p = v.property;
+  const keyHolderData = p?.keyHolders && p.keyHolders.length > 0 ? p.keyHolders[0] : null;
+  const priceNum = p ? Number(p.price) : 0;
+
+  return {
+    id: v.id,
+    propertyId: v.propertyId,
+    societyName: p?.societyName || "Unknown Society",
+    flatNumber: p?.flatNumber || "-",
+    locality: p?.localityName || "-",
+    city: p?.city || "-",
+    preference: p?.preference === "SALE" ? "Sale" : "Rent",
+    propertyType:
+      p?.propertyType === "INDEPENDENT_HOUSE"
+        ? "Independent House"
+        : p?.propertyType === "BUILDER_FLOOR"
+        ? "Builder Floor"
+        : p?.propertyType === "APARTMENT"
+        ? "Apartment"
+        : p?.propertyType === "VILLA"
+        ? "Villa"
+        : "Plot",
+    bedroomCount: p?.bedroomCount ?? 0,
+    bathroomCount: p?.bathroomCount ?? 0,
+    priceFormatted: formatIndianCurrency(priceNum, p?.preference === "RENT"),
+    ownerName: p?.ownerName || "-",
+    ownerMobile: p?.ownerMobile || "-",
+    keyHolderName: keyHolderData?.name,
+    keyHolderMobile: keyHolderData?.mobile,
+    keyHolderPersona: keyHolderData?.persona,
+    verifierId: v.verifierId,
+    verifierName: v.verifier?.name || "Field Verifier",
+    verifierPhone: v.verifier?.phone,
+    assignedByUserName: v.assignedByUser?.name || null,
+    status: v.status,
+    startedAt: v.startedAt ? new Date(v.startedAt).toISOString() : null,
+    submittedAt: v.submittedAt ? new Date(v.submittedAt).toISOString() : null,
+    reviewedAt: v.reviewedAt ? new Date(v.reviewedAt).toISOString() : null,
+    reviewedByUserName: v.reviewedByUser?.name || null,
+    reviewNotes: v.reviewNotes || null,
+    physicalMatch: v.physicalMatch,
+    occupancyState: v.occupancyState,
+    actualBedrooms: v.actualBedrooms,
+    actualBathrooms: v.actualBathrooms,
+    propertyCondition: v.propertyCondition,
+    amenitiesConfirmed: v.amenitiesConfirmed || [],
+    keyHolderConfirmed: v.keyHolderConfirmed,
+    discrepancies: v.discrepancies,
+    verifierRemarks: v.verifierRemarks,
+    unableToVerifyReason: v.unableToVerifyReason,
+    unableToVerifyNotes: v.unableToVerifyNotes,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    media: (v.media || []).map((m: any) => ({
+      id: m.id,
+      type: m.mediaType,
+      url: m.url,
+      caption: m.caption || "",
+      displayOrder: m.displayOrder,
+      uploadedByName: m.uploadedBy?.name,
+      createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : undefined,
+    })),
+    createdAt: v.createdAt ? new Date(v.createdAt).toISOString() : new Date().toISOString(),
   };
 }
 

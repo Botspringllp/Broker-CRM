@@ -22,6 +22,12 @@ vi.mock("@/server/db", () => {
       delete: vi.fn(),
       updateMany: vi.fn(),
     },
+    propertyVerification: {
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      count: vi.fn(),
+    },
     $transaction: vi.fn(async (arg) => {
       if (typeof arg === "function") {
         return arg(mockPrisma);

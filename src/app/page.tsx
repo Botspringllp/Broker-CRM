@@ -37,6 +37,11 @@ async function OverviewData() {
     redirect("/users");
   }
 
+  // 4. If Field Verifier, redirect directly to /verifier (Field Verifier Dashboard)
+  if (context.role === UserRole.FIELD_VERIFIER) {
+    redirect("/verifier");
+  }
+
   // 3. For authenticated tenant users, load operational data
   let properties: Property[] = [];
   let leads: Lead[] = [];

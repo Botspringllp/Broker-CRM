@@ -6,7 +6,7 @@ import {
   ValidationError,
   DuplicatePropertyError,
 } from "../tenant-context";
-import { assertPermission } from "../permissions";
+import { assertPermission, hasPermission } from "../permissions";
 import {
   Prisma,
   UserRole,
@@ -126,13 +126,22 @@ export async function listProperties(
   }
 
   // Telecaller scoping:
+  // - If telecaller has 'supply:view_all' delegated permission, allow viewing all tenant supply.
   // - If viewing Active Supply Pool (filters.isActiveSupply === true), allow browsing active pool.
-  // - If viewing validation queue (filters.isActiveSupply !== true), strictly restrict to properties
-  //   where the telecaller has an ACTIVE assignment for property validation.
+  // - Otherwise, strictly restrict to properties where the telecaller has an ACTIVE assignment for property validation.
   //   Submitting agent relationship does NOT bypass validation assignment.
   //   Active supply properties must NEVER leak into the validation calling queue.
   if (context.role === UserRole.TELECALLER) {
-    if (filters?.isActiveSupply === true) {
+    const canViewAll = hasPermission(
+      context.role,
+      "supply:view_all",
+      context.user?.delegatedPermissions || context.delegatedPermissions
+    );
+    if (canViewAll) {
+      if (typeof filters?.isActiveSupply === "boolean") {
+        where.isActiveSupply = filters.isActiveSupply;
+      }
+    } else if (filters?.isActiveSupply === true) {
       where.isActiveSupply = true;
     } else {
       where.assignments = {
@@ -237,16 +246,23 @@ export async function getPropertyById(context: TenantContext, propertyId: string
     throw new NotFoundError("Property not found.");
   }
 
-  // Telecaller can only view actively assigned properties or active supply pool
+  // Telecaller can only view actively assigned properties or active supply pool (unless supply:view_all is granted)
   if (context.role === UserRole.TELECALLER && property.assignments) {
-    const isAssigned = property.assignments.some(
-      (a) =>
-        a.assignedUserId === context.userId &&
-        a.status === AssignmentStatus.ACTIVE &&
-        (!a.targetType || a.targetType === AssignmentTargetType.PROPERTY)
+    const canViewAll = hasPermission(
+      context.role,
+      "supply:view_all",
+      context.user?.delegatedPermissions || context.delegatedPermissions
     );
-    if (!isAssigned && !property.isActiveSupply) {
-      throw new NotFoundError("Property not found.");
+    if (!canViewAll) {
+      const isAssigned = property.assignments.some(
+        (a) =>
+          a.assignedUserId === context.userId &&
+          a.status === AssignmentStatus.ACTIVE &&
+          (!a.targetType || a.targetType === AssignmentTargetType.PROPERTY)
+      );
+      if (!isAssigned && !property.isActiveSupply) {
+        throw new NotFoundError("Property not found.");
+      }
     }
   }
 

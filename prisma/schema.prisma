@@ -192,6 +192,38 @@ enum KeyHolderPersona {
   OTHER
 }
 
+enum PropertyVerificationStatus {
+  ASSIGNED
+  IN_PROGRESS
+  SUBMITTED
+  APPROVED
+  REJECTED
+  UNABLE_TO_VERIFY
+}
+
+enum UnableToVerifyReason {
+  DOOR_LOCKED
+  OWNER_KEYHOLDER_UNRESPONSIVE
+  TENANT_REFUSED_ENTRY
+  SECURITY_DENIED_ACCESS
+  WRONG_ADDRESS_OR_LOCATION
+  OTHER
+}
+
+enum PropertyCondition {
+  EXCELLENT
+  GOOD
+  AVERAGE
+  POOR
+}
+
+enum VerificationOccupancyState {
+  VACANT
+  SELF_OCCUPIED
+  TENANT_OCCUPIED
+  OTHER
+}
+
 // ---------------------------------------------------------
 // 1. TENANT & IDENTITY
 // ---------------------------------------------------------
@@ -227,6 +259,7 @@ model Tenant {
   siteVisitScheduleHistory  SiteVisitScheduleHistory[]
   siteVisitAccessLinks      SiteVisitAccessLink[]
   userAuditLogs             UserAuditLog[]
+  propertyVerifications     PropertyVerification[]
 
   @@map("tenants")
 }
@@ -263,6 +296,9 @@ model User {
   siteVisitAccessLinks    SiteVisitAccessLink[]      @relation("SalesAgentAccessLinks")
   submittedProperties     Property[]                 @relation("SubmittingAgentProperties")
   uploadedPropertyMedia   PropertyMedia[]            @relation("PropertyMediaUploader")
+  verificationsAssigned   PropertyVerification[]     @relation("VerifierVerifications")
+  verificationsCreated    PropertyVerification[]     @relation("AssignerVerifications")
+  verificationsReviewed   PropertyVerification[]     @relation("ReviewerVerifications")
 
   // Team Hierarchy & Delegated Permissions
   brokerId             String?
@@ -392,6 +428,8 @@ model Property {
   validationStatus   SupplyValidationStatus     @default(NOT_VALIDATED)
   availabilityStatus PropertyAvailabilityStatus @default(AVAILABLE)
   isActiveSupply     Boolean                    @default(false) // True only when Validated + Available
+  isFieldVerified    Boolean                    @default(false)
+  fieldVerifiedAt    DateTime?
 
   // Rental 10-Month Revalidation Rule
   rentedAt              DateTime?
@@ -415,11 +453,13 @@ model Property {
   siteVisitItems SiteVisitItem[]
   buyerInterests BuyerPropertyInterest[]
   enquiries      Enquiry[]
+  verifications  PropertyVerification[]
 
   @@unique([id, tenantId])
   @@index([tenantId, validationStatus])
   @@index([tenantId, availabilityStatus])
   @@index([tenantId, isActiveSupply])
+  @@index([tenantId, isFieldVerified])
   @@index([tenantId, ownerWillingnessConfirmed])
   @@index([tenantId, city, preference])
   @@index([tenantId, price])
@@ -451,16 +491,19 @@ model PropertyMedia {
   propertyId      String
   property        Property             @relation(fields: [propertyId], references: [id], onDelete: Cascade)
   uploadedById    String?
-  uploadedBy      User?                @relation("PropertyMediaUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedBy      User?                 @relation("PropertyMediaUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  verificationId  String?
+  verification    PropertyVerification? @relation(fields: [verificationId], references: [id], onDelete: SetNull)
   mediaType       MediaType
-  storageProvider MediaStorageProvider @default(OBJECT_STORAGE)
+  storageProvider MediaStorageProvider  @default(OBJECT_STORAGE)
   url             String // Storage key/path or YouTube link
   caption         String?
-  displayOrder    Int                  @default(0)
-  createdAt       DateTime             @default(now())
+  displayOrder    Int                   @default(0)
+  createdAt       DateTime              @default(now())
 
   @@index([tenantId, propertyId])
   @@index([tenantId, uploadedById])
+  @@index([tenantId, verificationId])
   @@map("property_media")
 }
 
@@ -810,4 +853,61 @@ model UserAuditLog {
   @@index([tenantId, targetUserId, createdAt])
   @@index([tenantId, actorUserId, createdAt])
   @@map("user_audit_logs")
+}
+
+// ---------------------------------------------------------
+// 9. FIELD VERIFICATION VISITS & INSPECTION REPORTS
+// ---------------------------------------------------------
+
+model PropertyVerification {
+  id                   String                     @id @default(uuid())
+  tenantId             String
+  tenant               Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  propertyId           String
+  property             Property                   @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  verifierId           String
+  verifier             User                       @relation("VerifierVerifications", fields: [verifierId], references: [id], onDelete: Restrict)
+  assignedByUserId     String?
+  assignedByUser       User?                      @relation("AssignerVerifications", fields: [assignedByUserId], references: [id], onDelete: SetNull)
+  status               PropertyVerificationStatus @default(ASSIGNED)
+
+  // Visit Lifecycle Timestamps
+  startedAt            DateTime?
+  submittedAt          DateTime?
+  reviewedAt           DateTime?
+  reviewedByUserId     String?
+  reviewedByUser       User?                      @relation("ReviewerVerifications", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  reviewNotes          String?
+
+  // Fixed Standardized Checklist & Observations
+  physicalMatch        Boolean?
+  occupancyState       VerificationOccupancyState?
+  actualBedrooms       Int?
+  actualBathrooms      Int?
+  propertyCondition    PropertyCondition?
+  amenitiesConfirmed   String[]                   @default([])
+  keyHolderConfirmed   Boolean?
+
+  // Flexible checklist details
+  checklistResults     Json?
+
+  // Discrepancy & Remarks
+  discrepancies        String?
+  verifierRemarks      String?
+
+  // Unable to verify
+  unableToVerifyReason UnableToVerifyReason?
+  unableToVerifyNotes  String?
+
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+
+  // Media evidence relation
+  media                PropertyMedia[]
+
+  @@unique([id, tenantId])
+  @@index([tenantId, verifierId, status])
+  @@index([tenantId, propertyId, status])
+  @@index([tenantId, status])
+  @@map("property_verifications")
 }

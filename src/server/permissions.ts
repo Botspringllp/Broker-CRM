@@ -40,6 +40,13 @@ export type AppAction =
   // Assignments & Teams
   | "assignment:assign_telecaller"
   | "assignment:assign_sales_agent"
+  // Field Verification Domain
+  | "verification:view_assigned"
+  | "verification:start_visit"
+  | "verification:submit_report"
+  | "verification:assign"
+  | "verification:view_all"
+  | "verification:review_report"
   // User & Tenant Administration
   | "admin:view_users"
   | "admin:manage_users"
@@ -83,6 +90,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<AppAction>> = {
     "visits:record_feedback",
     "assignment:assign_telecaller",
     "assignment:assign_sales_agent",
+    "verification:view_assigned",
+    "verification:view_all",
+    "verification:assign",
+    "verification:review_report",
     "admin:view_users",
     "admin:manage_users",
     "admin:manage_roles",
@@ -119,6 +130,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<AppAction>> = {
     "visits:record_feedback",
     "assignment:assign_telecaller",
     "assignment:assign_sales_agent",
+    "verification:view_assigned",
+    "verification:view_all",
+    "verification:assign",
+    "verification:review_report",
     "admin:view_users",
     "admin:assign_team_leader",
     "admin:delegate_permissions",
@@ -151,6 +166,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<AppAction>> = {
   ]),
 
   [UserRole.FIELD_VERIFIER]: new Set<AppAction>([
+    "verification:view_assigned",
+    "verification:start_visit",
+    "verification:submit_report",
     "supply:view_assigned",
     "supply:create",
     "supply:upload_media",
@@ -190,11 +208,26 @@ export function hasPermission(
   action: AppAction,
   delegatedPermissions?: string[]
 ): boolean {
+  // Platform Super Admin and Broker Owner retain full role permissions
+  if (role === UserRole.PLATFORM_SUPER_ADMIN || role === UserRole.BROKER_OWNER) {
+    const allowed = ROLE_PERMISSIONS[role];
+    return allowed ? allowed.has(action) : false;
+  }
+
+  // CRM Tenant Admin retains core administration permissions
+  if (role === UserRole.CRM_TENANT_ADMIN) {
+    const allowed = ROLE_PERMISSIONS[role];
+    if (allowed && allowed.has(action)) return true;
+  }
+
+  // If operational user has explicit delegated permissions configured, they strictly govern
+  if (delegatedPermissions && delegatedPermissions.length > 0) {
+    return delegatedPermissions.includes(action);
+  }
+
+  // Fallback to role defaults if user permissions have not been explicitly customized
   const allowed = ROLE_PERMISSIONS[role];
   if (allowed && allowed.has(action)) {
-    return true;
-  }
-  if (delegatedPermissions && delegatedPermissions.includes(action)) {
     return true;
   }
   return false;

@@ -8,6 +8,9 @@ import {
   AssignmentRole,
   AssignmentMethod,
   AssignmentStatus,
+  PropertyVerificationStatus,
+  SupplyValidationStatus,
+  PropertyAvailabilityStatus,
 } from "@prisma/client";
 
 export interface AssignPropertyInput {
@@ -28,6 +31,52 @@ export interface EligibleTelecaller {
   phone: string;
   role: UserRole;
   isActive: boolean;
+}
+
+export interface EligibleFieldVerifier {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: UserRole;
+  isActive: boolean;
+}
+
+export interface AssignFieldVerifierInput {
+  propertyId: string;
+  verifierId: string;
+  instructions?: string;
+}
+
+/**
+ * Lists eligible active field verifiers strictly scoped to the authenticated tenant.
+ * Authorized for Broker Owners and Team Leaders.
+ */
+export async function listEligibleFieldVerifiers(
+  context: TenantContext
+): Promise<EligibleFieldVerifier[]> {
+  assertPermission(context, "verification:assign");
+
+  const verifiers = await prisma.user.findMany({
+    where: {
+      tenantId: context.tenantId, // STRICT TENANT ENFORCEMENT
+      role: UserRole.FIELD_VERIFIER,
+      isActive: true,
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      phone: true,
+      role: true,
+      isActive: true,
+    },
+    orderBy: {
+      name: "asc",
+    },
+  });
+
+  return verifiers;
 }
 
 /**
@@ -357,5 +406,165 @@ export async function getPropertyAssignmentHistory(
       assignedUser: true,
       assignedByUser: true,
     },
+  });
+}
+
+/**
+ * Assigns an eligible Active Supply Pool property to a Field Verifier.
+ * - Enforces "verification:assign" permission (Broker Owner, Team Leader).
+ * - Enforces property and target user belong strictly to context.tenantId.
+ * - Validates property is in the Active Supply Pool (isActiveSupply === true).
+ * - Validates target user is an active Field Verifier.
+ * - Prevents duplicate active verification assignment to the exact same verifier.
+ * - Preserves assignment history by marking previous active assignment as REASSIGNED.
+ * - Creates a PropertyVerification task in ASSIGNED status.
+ */
+export async function assignPropertyToFieldVerifier(
+  context: TenantContext,
+  input: AssignFieldVerifierInput
+) {
+  assertPermission(context, "verification:assign");
+
+  if (!input.propertyId || typeof input.propertyId !== "string" || !input.propertyId.trim()) {
+    throw new ValidationError("Property ID is required.");
+  }
+  if (!input.verifierId || typeof input.verifierId !== "string" || !input.verifierId.trim()) {
+    throw new ValidationError("Field Verifier ID is required.");
+  }
+
+  // 1. Verify property belongs to the authenticated tenant and is in Active Supply Pool
+  const property = await prisma.property.findFirst({
+    where: {
+      id: input.propertyId.trim(),
+      tenantId: context.tenantId, // STRICT TENANT SCOPE
+    },
+    select: {
+      id: true,
+      tenantId: true,
+      isActiveSupply: true,
+      validationStatus: true,
+      availabilityStatus: true,
+    },
+  });
+
+  if (!property) {
+    throw new NotFoundError("Property not found in your brokerage.");
+  }
+
+  // Enforce Active Supply Pool eligibility
+  if (
+    !property.isActiveSupply &&
+    (property.validationStatus !== SupplyValidationStatus.VALIDATED ||
+      property.availabilityStatus !== PropertyAvailabilityStatus.AVAILABLE)
+  ) {
+    throw new ValidationError(
+      "Only properties in the Active Supply Pool can be assigned for field verification."
+    );
+  }
+
+  // 2. Verify target verifier exists, is active, is a FIELD_VERIFIER, and belongs to tenant
+  const targetUser = await prisma.user.findFirst({
+    where: {
+      id: input.verifierId.trim(),
+      tenantId: context.tenantId, // STRICT TENANT SCOPE
+      role: UserRole.FIELD_VERIFIER,
+      isActive: true,
+    },
+    select: { id: true, name: true, role: true, isActive: true },
+  });
+
+  if (!targetUser) {
+    throw new ValidationError(
+      "Target user is not an eligible active Field Verifier in this brokerage."
+    );
+  }
+
+  // 3. Atomically assign and initialize verification task in a transaction
+  return prisma.$transaction(async (tx) => {
+    // Check for existing active assignment with FIELD_VERIFIER role
+    const existingActive = await tx.assignment.findFirst({
+      where: {
+        propertyId: property.id,
+        tenantId: context.tenantId,
+        targetType: AssignmentTargetType.PROPERTY,
+        roleInAssignment: AssignmentRole.FIELD_VERIFIER,
+        status: AssignmentStatus.ACTIVE,
+      },
+    });
+
+    // Duplicate active assignment check
+    if (existingActive && existingActive.assignedUserId === targetUser.id) {
+      throw new ValidationError("Property is already actively assigned to this field verifier.");
+    }
+
+    // Reassign previous field verifier assignment if one was active
+    if (existingActive) {
+      await tx.assignment.update({
+        where: { id: existingActive.id },
+        data: {
+          status: AssignmentStatus.REASSIGNED,
+          unassignedAt: new Date(),
+        },
+      });
+    }
+
+    // Check for existing pending/in-progress verification for this property and supersede if not submitted
+    const pendingVerification = await tx.propertyVerification.findFirst({
+      where: {
+        propertyId: property.id,
+        tenantId: context.tenantId,
+        status: { in: [PropertyVerificationStatus.ASSIGNED, PropertyVerificationStatus.IN_PROGRESS] },
+      },
+    });
+
+    if (pendingVerification) {
+      await tx.propertyVerification.update({
+        where: { id: pendingVerification.id },
+        data: {
+          status: PropertyVerificationStatus.REJECTED,
+          reviewNotes: `Reassigned to ${targetUser.name} by ${context.user.name}`,
+          reviewedAt: new Date(),
+          reviewedByUserId: context.userId,
+        },
+      });
+    }
+
+    // Create new active assignment record
+    const assignment = await tx.assignment.create({
+      data: {
+        tenantId: context.tenantId,
+        targetType: AssignmentTargetType.PROPERTY,
+        propertyId: property.id,
+        assignedUserId: targetUser.id,
+        assignedByUserId: context.userId,
+        roleInAssignment: AssignmentRole.FIELD_VERIFIER,
+        assignmentMethod: AssignmentMethod.MANUAL,
+        status: AssignmentStatus.ACTIVE,
+        notes: input.instructions?.trim() || null,
+      },
+      include: {
+        assignedUser: true,
+        assignedByUser: true,
+      },
+    });
+
+    // Create new PropertyVerification record in ASSIGNED status
+    const verification = await tx.propertyVerification.create({
+      data: {
+        tenantId: context.tenantId,
+        propertyId: property.id,
+        verifierId: targetUser.id,
+        assignedByUserId: context.userId,
+        status: PropertyVerificationStatus.ASSIGNED,
+        verifierRemarks: input.instructions?.trim() || null,
+      },
+      include: {
+        verifier: true,
+        assignedByUser: true,
+        property: true,
+      },
+    });
+
+    return { assignment, verification };
   });
 }

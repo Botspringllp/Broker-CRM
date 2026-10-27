@@ -1,20 +1,30 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { Property, Lead } from "@/types/crm";
+import {
+  listEligibleFieldVerifiersAction,
+  assignPropertyToFieldVerifierAction,
+} from "@/app/verifier/actions";
 
 interface ActiveSupplyPoolClientProps {
   initialProperties: Property[];
   initialLeads: Lead[];
+  canAssignFieldVerifier?: boolean;
+  canReviewVerification?: boolean;
+  currentUserRole?: string;
 }
 
 export function ActiveSupplyPoolClient({
   initialProperties,
   initialLeads,
+  canAssignFieldVerifier = false,
+  canReviewVerification = false,
 }: ActiveSupplyPoolClientProps) {
   const [properties] = useState<Property[]>(initialProperties);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(
@@ -31,6 +41,52 @@ export function ActiveSupplyPoolClient({
   const [feedbackInterest, setFeedbackInterest] = useState("High");
   const [feedbackNotes, setFeedbackNotes] = useState("");
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Field Verifier Assignment modal state
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [verifiersList, setVerifiersList] = useState<{ id: string; name: string; phone: string }[]>([]);
+  const [selectedVerifierId, setSelectedVerifierId] = useState("");
+  const [assignmentInstructions, setAssignmentInstructions] = useState("");
+  const [isAssigningVerifier, setIsAssigningVerifier] = useState(false);
+
+  const handleOpenAssignVerifierModal = async () => {
+    setAssignModalOpen(true);
+    setAssignmentInstructions("");
+    try {
+      const res = await listEligibleFieldVerifiersAction();
+      if (res.success && res.verifiers) {
+        setVerifiersList(res.verifiers);
+        if (res.verifiers.length > 0 && !selectedVerifierId) {
+          setSelectedVerifierId(res.verifiers[0].id);
+        }
+      }
+    } catch {
+      setVerifiersList([]);
+    }
+  };
+
+  const handleAssignVerifierSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProperty || !selectedVerifierId) return;
+
+    setIsAssigningVerifier(true);
+    try {
+      const res = await assignPropertyToFieldVerifierAction({
+        propertyId: selectedProperty.id,
+        verifierId: selectedVerifierId,
+        instructions: assignmentInstructions.trim() || undefined,
+      });
+
+      if (res.success) {
+        setAssignModalOpen(false);
+        setToastMessage(`Assigned ${selectedProperty.societyName} to Field Verifier successfully.`);
+      }
+    } catch (err: unknown) {
+      setToastMessage((err as Error)?.message || "Failed to assign property to Field Verifier.");
+    } finally {
+      setIsAssigningVerifier(false);
+    }
+  };
 
   // Filtered Active Pool
   const filteredProperties = useMemo(() => {
@@ -143,6 +199,14 @@ export function ActiveSupplyPoolClient({
           </div>
 
           <div className="flex items-center gap-2">
+            {canReviewVerification && (
+              <Link
+                href="/supply/verifications"
+                className="px-3 py-1.5 text-xs font-bold rounded-md bg-teal-50 border border-teal-200 text-teal-800 hover:bg-teal-100 shadow-2xs inline-flex items-center gap-1.5"
+              >
+                <span>📋 Verification Reviews</span>
+              </Link>
+            )}
             <span className="text-xs text-crm-muted">Scope Boundary:</span>
             <span className="px-2.5 py-1 text-xs font-semibold rounded bg-stone-100 text-crm-muted border border-crm-border">
               Phase 1 Resale & Rental Only
@@ -275,7 +339,14 @@ export function ActiveSupplyPoolClient({
                           }`}
                         >
                           <td className="px-4 py-3">
-                            <div className="font-bold text-crm-text">{prop.societyName}</div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-crm-text">{prop.societyName}</span>
+                              {prop.isFieldVerified && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                  ✓ Field Verified
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[11px] text-crm-muted">
                               {prop.bedroomCount} BHK • {prop.area} sq.ft • {prop.locality}
                             </div>
@@ -363,6 +434,38 @@ export function ActiveSupplyPoolClient({
                   >
                     Share with Field Agent
                   </button>
+                </div>
+
+                {/* Field Verification & Physical Audit Status */}
+                <div className="p-3 rounded border border-crm-border bg-stone-50/60 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] uppercase font-bold text-crm-muted block">
+                      Field Verification Status
+                    </span>
+                    {selectedProperty.isFieldVerified ? (
+                      <div className="text-xs font-bold text-emerald-800 flex items-center gap-1.5 mt-0.5">
+                        <span>✓ Verified on Premises</span>
+                        {selectedProperty.fieldVerifiedAt && (
+                          <span className="text-[11px] text-crm-muted font-normal">
+                            ({new Date(selectedProperty.fieldVerifiedAt).toLocaleDateString()})
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-crm-muted mt-0.5">
+                        No verified on-site inspection recorded yet.
+                      </div>
+                    )}
+                  </div>
+
+                  {canAssignFieldVerifier && (
+                    <button
+                      onClick={handleOpenAssignVerifierModal}
+                      className="px-2.5 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs"
+                    >
+                      Assign Field Verifier
+                    </button>
+                  )}
                 </div>
 
                 {/* Matching Active Buyers across the entire Brokerage (PRD §7.2) */}
@@ -500,6 +603,71 @@ export function ActiveSupplyPoolClient({
               value={feedbackNotes}
               onChange={(e) => setFeedbackNotes(e.target.value)}
               className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+            />
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal: Assign Property to Field Verifier */}
+      <Modal
+        isOpen={assignModalOpen}
+        onClose={() => setAssignModalOpen(false)}
+        title="Assign Property to Field Verifier"
+        subtitle={`Property: ${selectedProperty?.societyName || ""} (${selectedProperty?.locality || ""})`}
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={() => setAssignModalOpen(false)}
+              className="px-3 py-1.5 text-xs rounded border border-crm-border text-crm-muted hover:text-crm-text"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={isAssigningVerifier || !selectedVerifierId || verifiersList.length === 0}
+              onClick={handleAssignVerifierSubmit}
+              className="px-4 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs disabled:opacity-50"
+            >
+              {isAssigningVerifier ? "Assigning..." : "Confirm Assignment"}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4 text-xs">
+          <div>
+            <label className="block font-semibold text-crm-text mb-1">
+              Select Active Field Verifier in Brokerage
+            </label>
+            {verifiersList.length === 0 ? (
+              <p className="text-xs text-rose-700 p-2.5 bg-rose-50 rounded border border-rose-200">
+                No active Field Verifiers found in your brokerage. Please create a Field Verifier account in Team & Permissions first.
+              </p>
+            ) : (
+              <select
+                value={selectedVerifierId}
+                onChange={(e) => setSelectedVerifierId(e.target.value)}
+                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50 focus:bg-white focus:outline-hidden"
+              >
+                {verifiersList.map((fv) => (
+                  <option key={fv.id} value={fv.id}>
+                    {fv.name} ({fv.phone || "No phone"})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div>
+            <label className="block font-semibold text-crm-text mb-1">
+              Inspection Instructions & Access Notes (Optional)
+            </label>
+            <textarea
+              rows={3}
+              placeholder="e.g. Call guard before entering wing B, key with supervisor in maintenance room..."
+              value={assignmentInstructions}
+              onChange={(e) => setAssignmentInstructions(e.target.value)}
+              className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50 focus:bg-white focus:outline-hidden"
             />
           </div>
         </div>

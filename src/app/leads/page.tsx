@@ -28,6 +28,10 @@ async function LeadValidationData() {
     redirect("/users");
   }
 
+  if (context.role === UserRole.FIELD_VERIFIER) {
+    redirect("/verifier");
+  }
+
   let leads: Lead[] = [];
 
   try {

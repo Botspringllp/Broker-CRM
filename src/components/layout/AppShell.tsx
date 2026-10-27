@@ -36,6 +36,7 @@ export function AppShell({
 
   const isPlatformSuperAdmin = rawRole === "PLATFORM_SUPER_ADMIN";
   const isTenantAdmin = rawRole === "CRM_TENANT_ADMIN";
+  const isFieldVerifier = rawRole === "FIELD_VERIFIER";
   const isBrokerOrTL = rawRole === "BROKER_OWNER" || rawRole === "TEAM_LEADER";
 
   // Build role-tailored navigation items
@@ -64,6 +65,41 @@ export function AppShell({
           icon: (
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+          ),
+        },
+      ];
+    }
+
+    if (isFieldVerifier) {
+      return [
+        {
+          name: "Overview",
+          href: "/verifier",
+          exact: true,
+          icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+            </svg>
+          ),
+        },
+        {
+          name: "My Assigned Verifications",
+          href: "/verifier/assigned",
+          exact: false,
+          icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+            </svg>
+          ),
+        },
+        {
+          name: "Completed Verifications",
+          href: "/verifier/completed",
+          exact: false,
+          icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           ),
         },
@@ -137,7 +173,7 @@ export function AppShell({
     }
 
     return items;
-  }, [isPlatformSuperAdmin, isTenantAdmin, isBrokerOrTL, isAuthenticated]);
+  }, [isPlatformSuperAdmin, isTenantAdmin, isFieldVerifier, isBrokerOrTL, isAuthenticated]);
 
   const isActive = (item: typeof navItems[0]) => {
     if (item.exact) {

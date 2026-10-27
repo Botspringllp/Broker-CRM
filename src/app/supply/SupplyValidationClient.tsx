@@ -1482,6 +1482,7 @@ export function SupplyValidationClient({
                 )}
 
                 {/* Media Section */}
+                {(canUploadMedia || selectedProperty.media.length > 0) && (
                 <div>
                   <div className="flex items-center justify-between mb-2 border-b border-crm-border pb-1">
                     <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
@@ -1597,6 +1598,7 @@ export function SupplyValidationClient({
                     </div>
                   )}
                 </div>
+                )}
               </div>
             </div>
           )}

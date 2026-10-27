@@ -9,6 +9,7 @@ import {
 import { Property, Lead } from "@/types/crm";
 import { ActiveSupplyPoolClient } from "./ActiveSupplyPoolClient";
 import { SupplyValidationStatus, LeadStatus, UserRole } from "@prisma/client";
+import { hasPermission } from "@/server/permissions";
 import { redirect } from "next/navigation";
 
 async function ActiveSupplyPoolData() {
@@ -32,6 +33,10 @@ async function ActiveSupplyPoolData() {
     redirect("/users");
   }
 
+  if (context.role === UserRole.FIELD_VERIFIER) {
+    redirect("/verifier");
+  }
+
   let properties: Property[] = [];
   let leads: Lead[] = [];
 
@@ -53,10 +58,24 @@ async function ActiveSupplyPoolData() {
     leads = [];
   }
 
+  const canAssignFieldVerifier = hasPermission(
+    context.role,
+    "verification:assign",
+    context.user.delegatedPermissions
+  );
+  const canReviewVerification = hasPermission(
+    context.role,
+    "verification:review_report",
+    context.user.delegatedPermissions
+  );
+
   return (
     <ActiveSupplyPoolClient
       initialProperties={properties}
       initialLeads={leads}
+      canAssignFieldVerifier={canAssignFieldVerifier}
+      canReviewVerification={canReviewVerification}
+      currentUserRole={context.role}
     />
   );
 }

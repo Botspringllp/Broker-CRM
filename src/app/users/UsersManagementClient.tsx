@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { UserRole } from "@prisma/client";
-import { AppAction, ROLE_PERMISSIONS, canAssignRole, canDelegatePermission } from "@/server/permissions";
+import { AppAction, ROLE_PERMISSIONS, canAssignRole } from "@/server/permissions";
 import {
   createUserAction,
   updateUserRoleAction,
@@ -114,6 +115,7 @@ export function UsersManagementClient({
   currentUserRole = UserRole.BROKER_OWNER,
   currentUserId = "",
 }: UsersManagementClientProps) {
+  const router = useRouter();
   const { data: session } = useSession();
   const [users, setUsers] = useState<UserViewItem[]>(initialUsers);
   const [selectedUser, setSelectedUser] = useState<UserViewItem | null>(initialUsers[0] || null);
@@ -367,16 +369,18 @@ export function UsersManagementClient({
   // User's effective operational permissions
   const userEffectivePermissions = useMemo(() => {
     if (!selectedUser) return [];
+    if (selectedUser.delegatedPermissions && selectedUser.delegatedPermissions.length > 0) {
+      return (selectedUser.delegatedPermissions as AppAction[]).filter((a) => a !== ("none" as AppAction));
+    }
     const roleDefaults = Array.from(ROLE_PERMISSIONS[selectedUser.role] || []).filter((a) =>
       ALL_OPERATIONAL_ACTIONS.includes(a as AppAction)
     );
-    const custom = (selectedUser.delegatedPermissions || []) as AppAction[];
-    return Array.from(new Set([...roleDefaults, ...custom]));
+    return roleDefaults as AppAction[];
   }, [selectedUser]);
 
   const handleStartEditPermissions = () => {
     if (!selectedUser) return;
-    setEditingPermissions(userEffectivePermissions as AppAction[]);
+    setEditingPermissions([...userEffectivePermissions] as AppAction[]);
     setIsEditingPermissions(true);
   };
 
@@ -390,7 +394,8 @@ export function UsersManagementClient({
     if (!selectedUser) return;
     setLoadingAction(true);
 
-    const res = await updateDelegatedPermissionsAction(selectedUser.id, editingPermissions);
+    const permsToSave = editingPermissions.length === 0 ? ["none" as AppAction] : editingPermissions;
+    const res = await updateDelegatedPermissionsAction(selectedUser.id, permsToSave);
     setLoadingAction(false);
 
     if (!res.success) {
@@ -398,11 +403,13 @@ export function UsersManagementClient({
       return;
     }
 
+    const savedPermissions = (res.user?.delegatedPermissions || permsToSave) as string[];
     setUsers((prev) =>
-      prev.map((u) => (u.id === selectedUser.id ? { ...u, delegatedPermissions: editingPermissions } : u))
+      prev.map((u) => (u.id === selectedUser.id ? { ...u, delegatedPermissions: savedPermissions } : u))
     );
-    setSelectedUser({ ...selectedUser, delegatedPermissions: editingPermissions });
+    setSelectedUser((prev) => prev ? { ...prev, delegatedPermissions: savedPermissions } : null);
     setIsEditingPermissions(false);
+    router.refresh();
     setToastMessage(`Permissions updated successfully for ${selectedUser.name}.`);
   };
 
@@ -542,7 +549,10 @@ export function UsersManagementClient({
                       return (
                         <tr
                           key={user.id}
-                          onClick={() => setSelectedUser(user)}
+                          onClick={() => {
+                            setSelectedUser(user);
+                            setIsEditingPermissions(false);
+                          }}
                           className={`cursor-pointer transition-colors ${
                             isSelected ? "bg-teal-50/60 font-medium" : "hover:bg-stone-50/70"
                           }`}
@@ -712,12 +722,12 @@ export function UsersManagementClient({
                   <div className="flex items-center justify-between border-b border-crm-border pb-2 mb-3">
                     <div>
                       <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                        Operational Permissions ({userEffectivePermissions.length})
+                        Operational Permissions ({userEffectivePermissions.length} Active)
                       </h4>
                       <p className="text-[10px] text-crm-muted">
                         {isEditingPermissions
                           ? "Check or uncheck permissions to customize access for this user."
-                          : "Permissions currently active for this user."}
+                          : "Only active, granted permissions are shown below."}
                       </p>
                     </div>
 
@@ -834,22 +844,29 @@ export function UsersManagementClient({
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {OPERATIONAL_PERMISSION_GROUPS.map((group) => {
-                        const grantedInGroup = group.permissions.filter((p) =>
-                          userEffectivePermissions.includes(p.action)
-                        );
+                      {userEffectivePermissions.length === 0 ? (
+                        <div className="p-3.5 rounded-md bg-stone-50 border border-crm-border text-center text-crm-muted text-xs">
+                          No operational permissions active for this user.
+                        </div>
+                      ) : (
+                        OPERATIONAL_PERMISSION_GROUPS.map((group) => {
+                          const grantedInGroup = group.permissions.filter((p) =>
+                            userEffectivePermissions.includes(p.action)
+                          );
 
-                        return (
-                          <div key={group.category} className="space-y-1">
-                            <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-crm-muted">
-                              <span>{group.category}</span>
-                              <span className="font-normal text-[9px]">
-                                {grantedInGroup.length}/{group.permissions.length}
-                              </span>
-                            </div>
-                            {grantedInGroup.length === 0 ? (
-                              <p className="text-[10px] text-crm-muted italic pl-1">No permissions granted</p>
-                            ) : (
+                          // Do not display category if zero permissions in it are active
+                          if (grantedInGroup.length === 0) {
+                            return null;
+                          }
+
+                          return (
+                            <div key={group.category} className="space-y-1">
+                              <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-crm-muted">
+                                <span>{group.category}</span>
+                                <span className="font-normal text-[9px] text-emerald-800 font-semibold">
+                                  {grantedInGroup.length} Active
+                                </span>
+                              </div>
                               <div className="flex flex-wrap gap-1">
                                 {grantedInGroup.map((item) => (
                                   <span
@@ -862,10 +879,10 @@ export function UsersManagementClient({
                                   </span>
                                 ))}
                               </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
                   )}
                 </div>

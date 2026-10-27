@@ -1,6 +1,6 @@
 import { prisma } from "../db";
 import { TenantContext, NotFoundError } from "../tenant-context";
-import { assertPermission } from "../permissions";
+import { assertPermission, hasPermission } from "../permissions";
 import { Prisma, UserRole } from "@prisma/client";
 
 /**
@@ -23,9 +23,16 @@ export async function listLeads(
     tenantId: context.tenantId, // STRICT TENANT ENFORCEMENT
   };
 
-  // Telecaller scoping: only assigned leads
+  // Telecaller scoping: only assigned leads (unless granted demand:view_all)
   if (context.role === UserRole.TELECALLER) {
-    where.assignedTelecallerId = context.userId;
+    const canViewAll = hasPermission(
+      context.role,
+      "demand:view_all",
+      context.user?.delegatedPermissions || context.delegatedPermissions
+    );
+    if (!canViewAll) {
+      where.assignedTelecallerId = context.userId;
+    }
   }
 
   if (filters?.status) where.status = filters.status;
@@ -71,9 +78,16 @@ export async function getLeadById(context: TenantContext, leadId: string) {
     tenantId: context.tenantId, // STRICT TENANT SCOPE
   };
 
-  // Telecallers cannot access unassigned leads through direct URLs or APIs
+  // Telecallers cannot access unassigned leads through direct URLs or APIs (unless granted demand:view_all)
   if (context.role === UserRole.TELECALLER) {
-    where.assignedTelecallerId = context.userId;
+    const canViewAll = hasPermission(
+      context.role,
+      "demand:view_all",
+      context.user?.delegatedPermissions || context.delegatedPermissions
+    );
+    if (!canViewAll) {
+      where.assignedTelecallerId = context.userId;
+    }
   }
 
   const lead = await prisma.lead.findFirst({

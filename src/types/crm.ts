@@ -73,6 +73,60 @@ export interface Property {
   visitCount: number;
   currentAssignment?: PropertyAssignment | null;
   assignmentHistory?: PropertyAssignment[];
+  isFieldVerified?: boolean;
+  fieldVerifiedAt?: string | null;
+}
+
+export interface PropertyVerificationView {
+  id: string;
+  propertyId: string;
+  societyName: string;
+  flatNumber: string;
+  locality: string;
+  city: string;
+  preference: "Sale" | "Rent";
+  propertyType: string;
+  bedroomCount: number;
+  bathroomCount: number;
+  priceFormatted: string;
+  ownerName: string;
+  ownerMobile: string;
+  keyHolderName?: string;
+  keyHolderMobile?: string;
+  keyHolderPersona?: string;
+  verifierId: string;
+  verifierName: string;
+  verifierPhone?: string;
+  assignedByUserName?: string | null;
+  status: "ASSIGNED" | "IN_PROGRESS" | "SUBMITTED" | "APPROVED" | "REJECTED" | "UNABLE_TO_VERIFY";
+  startedAt?: string | null;
+  submittedAt?: string | null;
+  reviewedAt?: string | null;
+  reviewedByUserName?: string | null;
+  reviewNotes?: string | null;
+  physicalMatch?: boolean | null;
+  occupancyState?: "VACANT" | "SELF_OCCUPIED" | "TENANT_OCCUPIED" | "OTHER" | null;
+  actualBedrooms?: number | null;
+  actualBathrooms?: number | null;
+  propertyCondition?: "EXCELLENT" | "GOOD" | "AVERAGE" | "POOR" | null;
+  amenitiesConfirmed?: string[];
+  keyHolderConfirmed?: boolean | null;
+  discrepancies?: string | null;
+  verifierRemarks?: string | null;
+  unableToVerifyReason?: string | null;
+  unableToVerifyNotes?: string | null;
+  media: PropertyMedia[];
+  createdAt: string;
+}
+
+export interface VerificationStats {
+  total: number;
+  assigned: number;
+  inProgress: number;
+  submitted: number;
+  approved: number;
+  unableToVerify: number;
+  rejected: number;
 }
 
 export interface MatchingPropertySummary {

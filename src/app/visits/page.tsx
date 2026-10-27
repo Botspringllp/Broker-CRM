@@ -28,6 +28,10 @@ async function SiteVisitsData() {
     redirect("/users");
   }
 
+  if (context.role === UserRole.FIELD_VERIFIER) {
+    redirect("/verifier");
+  }
+
   let visits: SiteVisit[] = [];
 
   try {

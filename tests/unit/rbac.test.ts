@@ -45,6 +45,8 @@ describe("RBAC Permissions Matrix (PRD §3)", () => {
       expect(hasPermission(UserRole.BROKER_OWNER, "matching:view_matches")).toBe(true);
       expect(hasPermission(UserRole.BROKER_OWNER, "visits:schedule")).toBe(true);
       expect(hasPermission(UserRole.BROKER_OWNER, "assignment:assign_telecaller")).toBe(true);
+      expect(hasPermission(UserRole.BROKER_OWNER, "verification:assign")).toBe(true);
+      expect(hasPermission(UserRole.BROKER_OWNER, "verification:review_report")).toBe(true);
     });
 
     it("does not have platform super admin privileges", () => {
@@ -63,6 +65,8 @@ describe("RBAC Permissions Matrix (PRD §3)", () => {
       expect(hasPermission(UserRole.TEAM_LEADER, "demand:view_all")).toBe(true);
       expect(hasPermission(UserRole.TEAM_LEADER, "assignment:assign_telecaller")).toBe(true);
       expect(hasPermission(UserRole.TEAM_LEADER, "admin:manage_localities")).toBe(true);
+      expect(hasPermission(UserRole.TEAM_LEADER, "verification:assign")).toBe(true);
+      expect(hasPermission(UserRole.TEAM_LEADER, "verification:review_report")).toBe(true);
 
       // User account management is restricted to Owner & CRM Tenant Admin
       expect(hasPermission(UserRole.TEAM_LEADER, "admin:manage_users")).toBe(false);
@@ -86,6 +90,8 @@ describe("RBAC Permissions Matrix (PRD §3)", () => {
       expect(hasPermission(UserRole.TELECALLER, "visits:record_outcome")).toBe(true);
       expect(hasPermission(UserRole.TELECALLER, "visits:confirm_final")).toBe(true);
       expect(hasPermission(UserRole.TELECALLER, "assignment:assign_sales_agent")).toBe(true);
+      expect(hasPermission(UserRole.TELECALLER, "verification:submit_report")).toBe(false);
+      expect(hasPermission(UserRole.TELECALLER, "verification:review_report")).toBe(false);
     });
 
     it("is denied managerial and admin permissions", () => {
@@ -108,6 +114,11 @@ describe("RBAC Permissions Matrix (PRD §3)", () => {
       expect(hasPermission(UserRole.FIELD_VERIFIER, "supply:create")).toBe(true);
       expect(hasPermission(UserRole.FIELD_VERIFIER, "supply:upload_media")).toBe(true);
       expect(hasPermission(UserRole.FIELD_VERIFIER, "supply:view_assigned")).toBe(true);
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "verification:view_assigned")).toBe(true);
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "verification:start_visit")).toBe(true);
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "verification:submit_report")).toBe(true);
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "verification:assign")).toBe(false);
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "verification:review_report")).toBe(false);
 
       // Creation is strictly separated from verification approval (PRD §3)
       expect(hasPermission(UserRole.FIELD_VERIFIER, "supply:validate")).toBe(false);
