@@ -502,6 +502,210 @@ export async function updateProperty(
   });
 }
 
+export interface EditPropertyInput {
+  propertyId: string;
+  societyName: string;
+  flatNumber: string;
+  localityName: string;
+  city: string;
+  preference: TransactionType | "SALE" | "RENT";
+  propertyType: PropertyType | "APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT" | "COMMERCIAL" | "OTHER";
+  furnishingStatus: FurnishingStatus | "UNFURNISHED" | "SEMI_FURNISHED" | "FURNISHED";
+  constructionStatus: ConstructionStatus | "READY_TO_MOVE" | "UNDER_CONSTRUCTION";
+  bedroomCount: number;
+  bathroomCount: number;
+  balconyCount?: number;
+  area: number;
+  areaType: AreaUnitType | "CARPET" | "BUILT_UP" | "SUPER_BUILT_UP";
+  price: number;
+  ownerName: string;
+  ownerMobile: string;
+  amenities?: string[];
+  keyHolder?: KeyHolderInput | null;
+  confirmDuplicate?: boolean;
+}
+
+/**
+ * Updates full property details from the dedicated Edit Property page.
+ * Enforces:
+ * - Server-side authorization (Broker Owner, Team Leader, Telecaller, or submitter Field Verifier).
+ * - Multi-tenant isolation.
+ * - Input validation & mobile normalization.
+ * - Duplicate detection if society or flat number changed.
+ * - KeyHolder persistence.
+ * - Strict preservation of owner-willingness and active-supply eligibility rules.
+ */
+export async function editProperty(context: TenantContext, data: EditPropertyInput) {
+  // 1. Permission check
+  const canEdit =
+    hasPermission(context.role, "supply:create", context.user?.delegatedPermissions || context.delegatedPermissions) ||
+    hasPermission(context.role, "supply:validate", context.user?.delegatedPermissions || context.delegatedPermissions) ||
+    hasPermission(context.role, "supply:log_call", context.user?.delegatedPermissions || context.delegatedPermissions);
+
+  if (!canEdit) {
+    throw new ForbiddenError("You do not have permission to edit property details.");
+  }
+
+  // 2. Fetch existing property with tenant scoping
+  const existing = await getPropertyById(context, data.propertyId);
+
+  // Field Verifiers may only edit properties they personally submitted
+  if (context.role === UserRole.FIELD_VERIFIER && existing.submittingAgentId !== context.userId) {
+    throw new ForbiddenError("Field Verifiers may only edit properties submitted by themselves.");
+  }
+
+  // 3. Field validation
+  if (!data.societyName?.trim()) throw new ValidationError("Society name is required.");
+  if (!data.flatNumber?.trim()) throw new ValidationError("Flat number is required.");
+  if (!data.localityName?.trim()) throw new ValidationError("Locality is required.");
+  if (!data.city?.trim()) throw new ValidationError("City is required.");
+  if (!data.ownerName?.trim()) throw new ValidationError("Owner name is required.");
+  if (!data.ownerMobile?.trim()) throw new ValidationError("Owner mobile number is required.");
+
+  const normalizedOwnerMobile = normalizeMobile(data.ownerMobile);
+  if (!/^[6-9]\d{9}$/.test(normalizedOwnerMobile)) {
+    throw new ValidationError("Owner mobile must be a valid 10-digit Indian mobile number.");
+  }
+
+  if (typeof data.bedroomCount !== "number" || data.bedroomCount < 0) {
+    throw new ValidationError("Bedroom count must be a non-negative number.");
+  }
+  if (typeof data.bathroomCount !== "number" || data.bathroomCount < 0) {
+    throw new ValidationError("Bathroom count must be a non-negative number.");
+  }
+  if (typeof data.area !== "number" || data.area <= 0) {
+    throw new ValidationError("Property area must be greater than zero.");
+  }
+  if (typeof data.price !== "number" || data.price <= 0) {
+    throw new ValidationError("Property price must be greater than zero.");
+  }
+
+  // 4. Duplicate detection if society or flat changed
+  const trimmedSociety = data.societyName.trim();
+  const trimmedFlat = data.flatNumber.trim();
+  const societyChanged = trimmedSociety.toLowerCase() !== existing.societyName.toLowerCase();
+  const flatChanged = trimmedFlat.toLowerCase() !== existing.flatNumber.toLowerCase();
+
+  if ((societyChanged || flatChanged) && !data.confirmDuplicate) {
+    const dupCheck = await prisma.property.findFirst({
+      where: {
+        tenantId: context.tenantId,
+        id: { not: data.propertyId },
+        societyName: { equals: trimmedSociety, mode: "insensitive" },
+        flatNumber: { equals: trimmedFlat, mode: "insensitive" },
+      },
+      select: {
+        id: true,
+        societyName: true,
+        flatNumber: true,
+        bedroomCount: true,
+        propertyType: true,
+        validationStatus: true,
+        availabilityStatus: true,
+        ownerName: true,
+        createdAt: true,
+      },
+    });
+
+    if (dupCheck) {
+      throw new DuplicatePropertyError(
+        `A property in '${dupCheck.societyName}' with Flat '${dupCheck.flatNumber}' already exists in your brokerage.`,
+        dupCheck
+      );
+    }
+  }
+
+  // 5. KeyHolder handling
+  if (data.keyHolder && data.keyHolder.name && data.keyHolder.name.trim().length > 0) {
+    const khName = data.keyHolder.name.trim();
+    const rawKhMobile = data.keyHolder.mobile?.trim() || "";
+    let khMobile = "";
+    if (rawKhMobile) {
+      khMobile = normalizeMobile(rawKhMobile);
+      if (!/^[6-9]\d{9}$/.test(khMobile)) {
+        throw new ValidationError("Key-holder mobile must be a valid 10-digit Indian mobile number.");
+      }
+    }
+
+    const personaVal = (data.keyHolder.persona as KeyHolderPersona) || KeyHolderPersona.OTHER;
+    const existingKh = existing.keyHolders && existing.keyHolders.length > 0 ? existing.keyHolders[0] : null;
+
+    if (existingKh) {
+      await prisma.keyHolder.update({
+        where: { id: existingKh.id },
+        data: {
+          name: khName,
+          mobile: khMobile || normalizedOwnerMobile,
+          persona: personaVal,
+          notes: data.keyHolder.notes?.trim() || null,
+        },
+      });
+    } else {
+      await prisma.keyHolder.create({
+        data: {
+          tenantId: context.tenantId,
+          propertyId: data.propertyId,
+          name: khName,
+          mobile: khMobile || normalizedOwnerMobile,
+          persona: personaVal,
+          notes: data.keyHolder.notes?.trim() || null,
+        },
+      });
+    }
+  }
+
+  // 6. Active supply safety rule: preserve lifecycle and re-verify eligibility
+  const isActiveSupply = isEligibleForActiveSupply({
+    ownerWillingnessConfirmed: existing.ownerWillingnessConfirmed,
+    validationStatus: existing.validationStatus,
+    availabilityStatus: existing.availabilityStatus,
+  });
+
+  return prisma.property.update({
+    where: {
+      id_tenantId: {
+        id: data.propertyId,
+        tenantId: context.tenantId,
+      },
+    },
+    data: {
+      societyName: trimmedSociety,
+      flatNumber: trimmedFlat,
+      localityName: data.localityName.trim(),
+      city: data.city.trim(),
+      preference: data.preference as TransactionType,
+      propertyType: data.propertyType as PropertyType,
+      furnishingStatus: data.furnishingStatus as FurnishingStatus,
+      constructionStatus: data.constructionStatus as ConstructionStatus,
+      bedroomCount: Math.floor(data.bedroomCount),
+      bathroomCount: Math.floor(data.bathroomCount),
+      balconyCount: data.balconyCount !== undefined ? Math.floor(data.balconyCount) : existing.balconyCount,
+      area: new Prisma.Decimal(data.area),
+      areaType: data.areaType as AreaUnitType,
+      price: new Prisma.Decimal(data.price),
+      ownerName: data.ownerName.trim(),
+      ownerMobile: normalizedOwnerMobile,
+      amenities: data.amenities ?? existing.amenities,
+      isActiveSupply,
+    },
+    include: {
+      keyHolders: true,
+      media: true,
+      callLogs: {
+        orderBy: { calledAt: "desc" },
+        include: { caller: true },
+      },
+      assignments: {
+        orderBy: { assignedAt: "desc" },
+        include: {
+          assignedUser: true,
+          assignedByUser: true,
+        },
+      },
+    },
+  });
+}
+
 export interface LogPropertyCallInput {
   propertyId: string;
   disposition: PropertyCallingDisposition | string;

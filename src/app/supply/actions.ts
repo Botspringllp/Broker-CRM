@@ -3,10 +3,12 @@
 import { requireTenantContext, DuplicatePropertyError } from "@/server/tenant-context";
 import {
   createProperty,
+  editProperty,
   checkDuplicateProperty,
   logPropertyCall,
   getPropertyById,
   CreatePropertyInput,
+  EditPropertyInput,
   LogPropertyCallInput,
   assignPropertyManually,
   assignPropertyRoundRobin,
@@ -382,6 +384,55 @@ export async function reorderPropertyMediaAction(input: {
     return {
       success: false as const,
       error: message,
+    };
+  }
+}
+
+export async function editPropertyAction(input: EditPropertyInput) {
+  try {
+    const context = await requireTenantContext();
+    const result = await editProperty(context, input);
+    revalidatePath("/supply");
+    revalidatePath(`/supply/${input.propertyId}`);
+    revalidatePath(`/supply/${input.propertyId}/edit`);
+    revalidatePath("/supply/active");
+    revalidatePath("/");
+    return {
+      success: true as const,
+      property: mapPrismaPropertyToView(result),
+    };
+  } catch (err: unknown) {
+    if (err instanceof DuplicatePropertyError) {
+      return {
+        success: false as const,
+        isDuplicate: true,
+        error: err.message,
+        duplicateProperty: err.existingProperty,
+      };
+    }
+    const message = err instanceof Error ? err.message : "Failed to update property.";
+    return {
+      success: false as const,
+      isDuplicate: false,
+      error: message,
+    };
+  }
+}
+
+export async function getPropertyAction(propertyId: string) {
+  try {
+    const context = await requireTenantContext();
+    const property = await getPropertyById(context, propertyId);
+    return {
+      success: true as const,
+      property: mapPrismaPropertyToView(property),
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to fetch property.";
+    return {
+      success: false as const,
+      error: message,
+      property: null,
     };
   }
 }

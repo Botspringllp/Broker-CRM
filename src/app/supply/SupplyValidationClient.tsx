@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
@@ -950,15 +951,12 @@ export function SupplyValidationClient({
                 📥 Upload CSV / Excel
               </button>
             )}
-            <button
-              onClick={() => {
-                resetCreateForm();
-                setIsCreateModalOpen(true);
-              }}
-              className="px-3 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer"
+            <Link
+              href="/supply/new"
+              className="px-3 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer inline-flex items-center gap-1"
             >
               + Post Property
-            </button>
+            </Link>
           </div>
         </div>
 
@@ -1160,10 +1158,16 @@ export function SupplyValidationClient({
                           {/* Property & Society */}
                           <td className="px-4 py-3">
                             <div className="font-bold text-crm-text">
-                              {prop.societyName}
+                              <Link
+                                href={`/supply/${prop.id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="hover:text-crm-primary hover:underline"
+                              >
+                                {prop.societyName}
+                              </Link>
                             </div>
                             <div className="text-[11px] text-crm-muted">
-                              {prop.locality}, {prop.city}
+                              Unit #{prop.flatNumber} • {prop.locality}, {prop.city}
                             </div>
                           </td>
 
@@ -1236,6 +1240,22 @@ export function SupplyValidationClient({
 
                           {/* Action */}
                           <td className="px-4 py-3 text-right space-x-1.5 whitespace-nowrap">
+                            <Link
+                              href={`/supply/${prop.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-1 text-xs font-semibold rounded bg-white text-crm-text hover:bg-stone-100 border border-crm-border shadow-2xs inline-block"
+                              title="View full property details page"
+                            >
+                              View ↗
+                            </Link>
+                            <Link
+                              href={`/supply/${prop.id}/edit`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-1 text-xs font-semibold rounded bg-stone-100 text-crm-text hover:bg-stone-200 border border-stone-300 shadow-2xs inline-block"
+                              title="Edit property details"
+                            >
+                              ✏️ Edit
+                            </Link>
                             {canAssignTelecaller && (
                               <button
                                 onClick={(e) => {
@@ -1303,13 +1323,27 @@ export function SupplyValidationClient({
                     {selectedProperty.flatNumber} • {selectedProperty.locality}, {selectedProperty.city}
                   </p>
                 </div>
-                <button
-                  onClick={() => setSelectedProperty(null)}
-                  className="text-crm-muted hover:text-crm-text p-1 text-sm"
-                  aria-label="Close Inspector"
-                >
-                  ✕
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <Link
+                    href={`/supply/${selectedProperty.id}`}
+                    className="px-2.5 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs inline-flex items-center gap-1"
+                  >
+                    Open Page ↗
+                  </Link>
+                  <Link
+                    href={`/supply/${selectedProperty.id}/edit`}
+                    className="px-2.5 py-1 text-xs font-semibold rounded bg-white text-crm-text hover:bg-stone-100 border border-crm-border shadow-2xs inline-flex items-center gap-1"
+                  >
+                    ✏️ Edit
+                  </Link>
+                  <button
+                    onClick={() => setSelectedProperty(null)}
+                    className="text-crm-muted hover:text-crm-text p-1 text-sm ml-1"
+                    aria-label="Close Inspector"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
 
               <div className="p-5 space-y-5 text-xs max-h-[75vh] overflow-y-auto">

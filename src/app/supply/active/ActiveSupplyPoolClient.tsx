@@ -340,7 +340,13 @@ export function ActiveSupplyPoolClient({
                         >
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="font-bold text-crm-text">{prop.societyName}</span>
+                              <Link
+                                href={`/supply/${prop.id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="font-bold text-crm-text hover:text-crm-primary hover:underline"
+                              >
+                                {prop.societyName}
+                              </Link>
                               {prop.isFieldVerified && (
                                 <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
                                   ✓ Field Verified
@@ -399,13 +405,27 @@ export function ActiveSupplyPoolClient({
                   </p>
                 </div>
 
-                <button
-                  onClick={() => setSelectedProperty(null)}
-                  className="text-crm-muted hover:text-crm-text p-1 text-sm"
-                  aria-label="Close Inspector"
-                >
-                  ✕
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <Link
+                    href={`/supply/${selectedProperty.id}`}
+                    className="px-2.5 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs inline-flex items-center gap-1"
+                  >
+                    Open Page ↗
+                  </Link>
+                  <Link
+                    href={`/supply/${selectedProperty.id}/edit`}
+                    className="px-2.5 py-1 text-xs font-semibold rounded bg-white text-crm-text hover:bg-stone-100 border border-crm-border shadow-2xs inline-flex items-center gap-1"
+                  >
+                    ✏️ Edit
+                  </Link>
+                  <button
+                    onClick={() => setSelectedProperty(null)}
+                    className="text-crm-muted hover:text-crm-text p-1 text-sm ml-1"
+                    aria-label="Close Inspector"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
 
               <div className="p-5 space-y-5 text-xs max-h-[75vh] overflow-y-auto">
