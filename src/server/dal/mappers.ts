@@ -276,8 +276,8 @@ type FullPrismaLead = PrismaLead & {
       })
     | null;
   enquiries?: PrismaEnquiry[];
-  callLogs?: PrismaCallLog[];
-  assignedTelecaller?: PrismaUser | null;
+  callLogs?: (PrismaCallLog & { caller?: { id: string; name: string; role: string } | null })[];
+  assignedTelecaller?: { id: string; name: string; email?: string } | null;
 };
 
 export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
@@ -328,7 +328,7 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
       l.callLogs?.map((c) => ({
         id: c.id,
         calledAt: new Date(c.calledAt).toLocaleDateString("en-IN"),
-        callerName: "Telecaller",
+        callerName: c.caller?.name || "Telecaller",
         disposition: c.leadDisposition ? c.leadDisposition.replace(/_/g, " ") : "Called",
         notes: c.notes || "",
         callbackDate: c.callbackScheduledAt
@@ -343,6 +343,7 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
 type FullPrismaSiteVisit = PrismaSiteVisit & {
   lead: { id: string; name: string; primaryPhone: string };
   assignedSalesAgent: { id: string; name: string; email: string };
+  telecallerConfirmedByUser?: { id: string; name: string; role?: string } | null;
   items: (PrismaSiteVisitItem & {
     property: {
       id: string;
@@ -354,8 +355,12 @@ type FullPrismaSiteVisit = PrismaSiteVisit & {
       ownerName: string;
       ownerMobile: string;
     };
+    reportedByUser?: { id: string; name: string; role?: string } | null;
+    enteredByUser?: { id: string; name: string; role?: string } | null;
   })[];
-  scheduleHistories?: PrismaSiteVisitScheduleHistory[];
+  scheduleHistories?: (PrismaSiteVisitScheduleHistory & {
+    recordedByUser?: { id: string; name: string } | null;
+  })[];
 };
 
 export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
@@ -388,7 +393,7 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
     telecallerConfirmedAt: v.telecallerConfirmedAt
       ? new Date(v.telecallerConfirmedAt).toLocaleDateString("en-IN")
       : undefined,
-    telecallerConfirmedBy: undefined,
+    telecallerConfirmedBy: v.telecallerConfirmedByUser?.name || undefined,
     cancellationReason: v.cancellationReason || undefined,
     items: v.items.map((item) => ({
       id: item.id,
@@ -406,8 +411,8 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
           : item.status === "VISIT_NOT_DONE"
           ? "Visit Not Done"
           : "Pending",
-      reportedBy: undefined,
-      enteredBy: "Agent",
+      reportedBy: item.reportedByUser?.name || undefined,
+      enteredBy: item.enteredByUser?.name || "Agent",
       entryChannel:
         item.entryChannel === "FIELD_AGENT_DIRECT"
           ? "Field Agent Direct"
@@ -440,7 +445,7 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
           ? new Date(h.newScheduledAt).toLocaleDateString("en-IN")
           : "-",
         reason: h.reason,
-        recordedBy: "User",
+        recordedBy: h.recordedByUser?.name || "User",
       })) || [],
   };
 }

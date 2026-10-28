@@ -2,7 +2,7 @@ import { Suspense } from "react";
 import { requireTenantContext } from "@/server/tenant-context";
 import { listSiteVisits } from "@/server/dal/visits";
 import { mapPrismaSiteVisitToView } from "@/server/dal/mappers";
-import { SiteVisit } from "@/types/crm";
+import { prisma } from "@/server/db";
 import { SiteVisitsClient } from "./SiteVisitsClient";
 import { UserRole } from "@prisma/client";
 import { redirect } from "next/navigation";
@@ -32,16 +32,55 @@ async function SiteVisitsData() {
     redirect("/verifier");
   }
 
-  let visits: SiteVisit[] = [];
+  const [dbVisits, leads, activeProps, agents] = await Promise.all([
+    listSiteVisits(context).catch(() => []),
+    prisma.lead
+      .findMany({
+        where: { tenantId: context.tenantId, status: { not: "INACTIVE" } },
+        select: { id: true, name: true, primaryPhone: true },
+        orderBy: { name: "asc" },
+      })
+      .catch(() => []),
+    prisma.property
+      .findMany({
+        where: {
+          tenantId: context.tenantId,
+          isActiveSupply: true,
+          availabilityStatus: "AVAILABLE",
+        },
+        select: {
+          id: true,
+          societyName: true,
+          flatNumber: true,
+          bedroomCount: true,
+          localityName: true,
+        },
+        orderBy: { societyName: "asc" },
+      })
+      .catch(() => []),
+    prisma.user
+      .findMany({
+        where: {
+          tenantId: context.tenantId,
+          role: UserRole.FIELD_SALES_AGENT,
+          isActive: true,
+        },
+        select: { id: true, name: true, email: true },
+        orderBy: { name: "asc" },
+      })
+      .catch(() => []),
+  ]);
 
-  try {
-    const dbVisits = await listSiteVisits(context);
-    visits = dbVisits.map(mapPrismaSiteVisitToView);
-  } catch {
-    visits = [];
-  }
+  const visits = dbVisits.map(mapPrismaSiteVisitToView);
 
-  return <SiteVisitsClient initialVisits={visits} />;
+  return (
+    <SiteVisitsClient
+      initialVisits={visits}
+      availableLeads={leads}
+      availableProperties={activeProps}
+      salesAgents={agents}
+    />
+  );
 }
 
 export default function SiteVisitsPage() {

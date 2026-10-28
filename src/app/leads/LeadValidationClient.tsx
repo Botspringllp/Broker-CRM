@@ -5,15 +5,18 @@ import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
-import { Lead, CallLogItem } from "@/types/crm";
-import { useSession } from "@/lib/auth-client";
+import { Lead } from "@/types/crm";
+import {
+  createLeadAction,
+  logLeadCallAction,
+  updateLeadStatusAction,
+} from "./actions";
 
 interface LeadValidationClientProps {
   initialLeads: Lead[];
 }
 
 export function LeadValidationClient({ initialLeads }: LeadValidationClientProps) {
-  const { data: session } = useSession();
   const [leads, setLeads] = useState<Lead[]>(initialLeads);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(initialLeads[0] || null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -23,9 +26,33 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
 
   // Call Logging state
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
+  const [isCallSubmitting, setIsCallSubmitting] = useState(false);
+  const [callModalError, setCallModalError] = useState<string | null>(null);
   const [callDisposition, setCallDisposition] = useState("Connected");
   const [callNotes, setCallNotes] = useState("");
   const [callbackTime, setCallbackTime] = useState("");
+
+  // Status updating state
+  const [isStatusUpdating, setIsStatusUpdating] = useState(false);
+
+  // Add Lead Modal state
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isCreatingLead, setIsCreatingLead] = useState(false);
+  const [createLeadError, setCreateLeadError] = useState<string | null>(null);
+  const [leadFormName, setLeadFormName] = useState("");
+  const [leadFormPhone, setLeadFormPhone] = useState("");
+  const [leadFormAltPhone, setLeadFormAltPhone] = useState("");
+  const [leadFormEmail, setLeadFormEmail] = useState("");
+  const [leadFormSource, setLeadFormSource] = useState("Direct Inquiry");
+  const [leadFormPreference, setLeadFormPreference] = useState<"SALE" | "RENT">("SALE");
+  const [leadFormCity, setLeadFormCity] = useState("Gurugram");
+  const [leadFormMinBudget, setLeadFormMinBudget] = useState("5000000"); // 50 L
+  const [leadFormMaxBudget, setLeadFormMaxBudget] = useState("15000000"); // 1.5 Cr
+  const [leadFormBhk, setLeadFormBhk] = useState<string[]>(["2 BHK", "3 BHK"]);
+  const [leadFormTypes, setLeadFormTypes] = useState<
+    ("APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT")[]
+  >(["APARTMENT"]);
+
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Filtered Leads
@@ -69,70 +96,122 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
     setCallDisposition(selectedLead.currentDisposition || "Connected");
     setCallNotes("");
     setCallbackTime("");
+    setCallModalError(null);
     setIsCallModalOpen(true);
   };
 
-  const handleSaveCallOutcome = () => {
-    if (!selectedLead) return;
+  const handleSaveCallOutcome = async () => {
+    if (!selectedLead || isCallSubmitting) return;
 
-    const callerName = session?.user?.name
-      ? `${session.user.name} (${(session.user as { role?: string }).role?.replace("_", " ") || "Telecaller"})`
-      : "Telecaller";
+    setCallModalError(null);
+    setIsCallSubmitting(true);
 
-    const newLogItem: CallLogItem = {
-      id: `call-lead-${Date.now()}`,
-      calledAt: "Just now",
-      callerName,
-      disposition: callDisposition,
-      notes: callNotes || "Demand qualification call logged.",
-      callbackDate: callbackTime || undefined,
-    };
+    try {
+      const res = await logLeadCallAction({
+        leadId: selectedLead.id,
+        disposition: callDisposition,
+        notes: callNotes.trim() || null,
+        callbackScheduledAt: callbackTime.trim() || null,
+      });
 
-    let newStatus = selectedLead.status;
-    let newUnreachable = selectedLead.unreachableCount;
-
-    if (callDisposition === "Buyer / Tenant Says Not Looking") {
-      newStatus = "Inactive";
-    } else if (callDisposition === "Ringing / Not Answering") {
-      newUnreachable += 1;
-      if (newUnreachable >= 3) {
-        newStatus = "Inactive";
+      if (!res.success) {
+        setCallModalError(res.error);
+        return;
       }
-    } else if (callDisposition === "Connected") {
-      newUnreachable = 0;
+
+      setLeads((prev) => prev.map((l) => (l.id === res.lead.id ? res.lead : l)));
+      setSelectedLead(res.lead);
+      setIsCallModalOpen(false);
+      setToastMessage(`Call outcome logged for ${res.lead.name}: ${res.lead.currentDisposition}`);
+    } catch (err: unknown) {
+      setCallModalError(err instanceof Error ? err.message : "Failed to save call outcome.");
+    } finally {
+      setIsCallSubmitting(false);
     }
-
-    const updatedLead: Lead = {
-      ...selectedLead,
-      status: newStatus,
-      unreachableCount: newUnreachable,
-      currentDisposition: callDisposition,
-      callHistory: [newLogItem, ...selectedLead.callHistory],
-    };
-
-    setLeads((prev) => prev.map((l) => (l.id === updatedLead.id ? updatedLead : l)));
-    setSelectedLead(updatedLead);
-    setIsCallModalOpen(false);
-
-    setToastMessage(`Call outcome logged for ${selectedLead.name}: ${callDisposition}`);
   };
 
-  const handleMarkLeadActive = () => {
-    if (!selectedLead) return;
+  const handleMarkLeadActive = async () => {
+    if (!selectedLead || isStatusUpdating) return;
+    setIsStatusUpdating(true);
 
-    const updatedLead: Lead = {
-      ...selectedLead,
-      status: "Active",
-      requirements: {
-        ...selectedLead.requirements,
-        isConfirmed: true,
-      },
-      advertisedPropertyVerified: true,
-    };
+    try {
+      const res = await updateLeadStatusAction({
+        leadId: selectedLead.id,
+        status: "ACTIVE",
+      });
 
-    setLeads((prev) => prev.map((l) => (l.id === updatedLead.id ? updatedLead : l)));
-    setSelectedLead(updatedLead);
-    setToastMessage(`${selectedLead.name} marked ACTIVE. Top matching properties available.`);
+      if (!res.success) {
+        setToastMessage(`Failed to activate lead: ${res.error}`);
+        return;
+      }
+
+      setLeads((prev) => prev.map((l) => (l.id === res.lead.id ? res.lead : l)));
+      setSelectedLead(res.lead);
+      setToastMessage(`${res.lead.name} marked ACTIVE (Requirements Confirmed).`);
+    } catch (err: unknown) {
+      setToastMessage(err instanceof Error ? err.message : "Failed to activate lead.");
+    } finally {
+      setIsStatusUpdating(false);
+    }
+  };
+
+  const handleCreateLead = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setCreateLeadError(null);
+
+    const minB = parseFloat(leadFormMinBudget);
+    const maxB = parseFloat(leadFormMaxBudget);
+    if (isNaN(minB) || isNaN(maxB) || minB < 0 || maxB < minB) {
+      setCreateLeadError("Please enter valid minimum and maximum budget amounts.");
+      return;
+    }
+
+    if (!leadFormName.trim()) {
+      setCreateLeadError("Prospect name is required.");
+      return;
+    }
+
+    if (!leadFormPhone.trim()) {
+      setCreateLeadError("Valid primary phone number is required.");
+      return;
+    }
+
+    setIsCreatingLead(true);
+    try {
+      const res = await createLeadAction({
+        name: leadFormName.trim(),
+        primaryPhone: leadFormPhone.trim(),
+        alternatePhone: leadFormAltPhone.trim() || undefined,
+        email: leadFormEmail.trim() || undefined,
+        originalSource: leadFormSource.trim() || "Direct Inquiry",
+        preference: leadFormPreference,
+        city: leadFormCity.trim() || "Gurugram",
+        minBudget: minB,
+        maxBudget: maxB,
+        bedroomConfigurations: leadFormBhk,
+        propertyTypes: leadFormTypes,
+      });
+
+      if (!res.success) {
+        setCreateLeadError(res.error);
+        return;
+      }
+
+      setLeads((prev) => [res.lead, ...prev]);
+      setSelectedLead(res.lead);
+      setIsCreateModalOpen(false);
+
+      // Reset form
+      setLeadFormName("");
+      setLeadFormPhone("");
+      setLeadFormAltPhone("");
+      setLeadFormEmail("");
+      setToastMessage(`Prospect ${res.lead.name} registered and saved.`);
+    } catch (err: unknown) {
+      setCreateLeadError(err instanceof Error ? err.message : "Failed to register prospect.");
+    } finally {
+      setIsCreatingLead(false);
+    }
   };
 
   const handleShareProperty = (propName: string) => {
@@ -160,14 +239,22 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setToastMessage("Lead import via CSV template is ready.")}
-              className="px-3 py-1.5 text-xs font-medium rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs"
+              onClick={() =>
+                setToastMessage(
+                  "Portal Leads Ingestion (MagicBricks/99acres Webhook API) is scheduled for Phase 2."
+                )
+              }
+              className="px-3 py-1.5 text-xs font-medium rounded border border-crm-border bg-crm-surface text-crm-muted hover:bg-stone-50 shadow-2xs"
+              title="Webhook API integration scheduled for Phase 2"
             >
               📥 Ingest Portal Leads
             </button>
             <button
-              onClick={() => setToastMessage("Manual lead intake form is ready.")}
-              className="px-3 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs"
+              onClick={() => {
+                setCreateLeadError(null);
+                setIsCreateModalOpen(true);
+              }}
+              className="px-3 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer"
             >
               + Add Lead
             </button>
@@ -372,9 +459,10 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                   {selectedLead.status === "Not Yet Validated" && (
                     <button
                       onClick={handleMarkLeadActive}
-                      className="px-3 py-1.5 text-xs font-bold rounded bg-crm-success text-white hover:bg-emerald-700 shadow-2xs"
+                      disabled={isStatusUpdating}
+                      className="px-3 py-1.5 text-xs font-bold rounded bg-crm-success text-white hover:bg-emerald-700 shadow-2xs disabled:opacity-50 cursor-pointer"
                     >
-                      ✓ Activate Lead (Confirm Search)
+                      {isStatusUpdating ? "Activating..." : "✓ Activate Lead (Confirm Search)"}
                     </button>
                   )}
                   <button
@@ -628,14 +716,21 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
             </button>
             <button
               onClick={handleSaveCallOutcome}
-              className="px-4 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs"
+              disabled={isCallSubmitting}
+              className="px-4 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs disabled:opacity-50"
             >
-              Save Call Record
+              {isCallSubmitting ? "Saving..." : "Save Call Record"}
             </button>
           </>
         }
       >
         <div className="space-y-4 text-xs">
+          {callModalError && (
+            <div className="p-2.5 rounded bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
+              {callModalError}
+            </div>
+          )}
+
           <div>
             <label className="block font-semibold text-crm-text mb-1">
               Calling Disposition (PRD §5.5)
@@ -682,6 +777,241 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
 
           <div className="p-3 rounded bg-amber-50/60 border border-amber-200 text-amber-900 text-[11px]">
             <strong>PRD Status Rule:</strong> &quot;Connected&quot; is an attempt outcome, not an automatic activation. Mark lead Active using the button on the workspace header once all mandatory requirements are captured.
+          </div>
+        </div>
+      </Modal>
+
+      {/* Modal: Add Lead */}
+      <Modal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        title="Register Prospect / Buyer Inquiry"
+        subtitle="Capture new demand lead with initial requirement criteria (PRD §5.2)"
+        footer={
+          <>
+            <button
+              onClick={() => setIsCreateModalOpen(false)}
+              className="px-3 py-1.5 text-xs rounded border border-crm-border text-crm-muted hover:text-crm-text"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => handleCreateLead()}
+              disabled={isCreatingLead}
+              className="px-4 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs disabled:opacity-50"
+            >
+              {isCreatingLead ? "Registering..." : "Save Prospect"}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-4 text-xs max-h-[70vh] overflow-y-auto pr-1">
+          {createLeadError && (
+            <div className="p-2.5 rounded bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
+              {createLeadError}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-semibold text-crm-text mb-1">
+                Prospect Name <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Vikram Malhotra"
+                value={leadFormName}
+                onChange={(e) => setLeadFormName(e.target.value)}
+                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              />
+            </div>
+            <div>
+              <label className="block font-semibold text-crm-text mb-1">
+                Primary Phone <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="tel"
+                placeholder="e.g. 9811122334"
+                value={leadFormPhone}
+                onChange={(e) => setLeadFormPhone(e.target.value)}
+                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-semibold text-crm-text mb-1">
+                Alternate Phone
+              </label>
+              <input
+                type="tel"
+                placeholder="Optional secondary contact"
+                value={leadFormAltPhone}
+                onChange={(e) => setLeadFormAltPhone(e.target.value)}
+                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              />
+            </div>
+            <div>
+              <label className="block font-semibold text-crm-text mb-1">
+                Email Address
+              </label>
+              <input
+                type="email"
+                placeholder="Optional email"
+                value={leadFormEmail}
+                onChange={(e) => setLeadFormEmail(e.target.value)}
+                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-semibold text-crm-text mb-1">
+                Original Inquiry Source
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Direct Inquiry, MagicBricks, Referral"
+                value={leadFormSource}
+                onChange={(e) => setLeadFormSource(e.target.value)}
+                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              />
+            </div>
+            <div>
+              <label className="block font-semibold text-crm-text mb-1">
+                City / Primary Market
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Gurugram"
+                value={leadFormCity}
+                onChange={(e) => setLeadFormCity(e.target.value)}
+                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-semibold text-crm-text mb-1">Preference</label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-1.5 text-xs text-crm-text cursor-pointer">
+                <input
+                  type="radio"
+                  name="preference"
+                  checked={leadFormPreference === "SALE"}
+                  onChange={() => setLeadFormPreference("SALE")}
+                  className="accent-crm-primary"
+                />
+                Buy (Sale)
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-crm-text cursor-pointer">
+                <input
+                  type="radio"
+                  name="preference"
+                  checked={leadFormPreference === "RENT"}
+                  onChange={() => setLeadFormPreference("RENT")}
+                  className="accent-crm-primary"
+                />
+                Rent
+              </label>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-semibold text-crm-text mb-1">
+                Minimum Budget (₹)
+              </label>
+              <input
+                type="number"
+                value={leadFormMinBudget}
+                onChange={(e) => setLeadFormMinBudget(e.target.value)}
+                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              />
+            </div>
+            <div>
+              <label className="block font-semibold text-crm-text mb-1">
+                Maximum Budget (₹)
+              </label>
+              <input
+                type="number"
+                value={leadFormMaxBudget}
+                onChange={(e) => setLeadFormMaxBudget(e.target.value)}
+                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-semibold text-crm-text mb-1.5">
+              Bedroom Configurations
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {["1 BHK", "2 BHK", "3 BHK", "4 BHK", "5+ BHK"].map((bhk) => {
+                const checked = leadFormBhk.includes(bhk);
+                return (
+                  <button
+                    key={bhk}
+                    type="button"
+                    onClick={() => {
+                      if (checked) {
+                        setLeadFormBhk(leadFormBhk.filter((b) => b !== bhk));
+                      } else {
+                        setLeadFormBhk([...leadFormBhk, bhk]);
+                      }
+                    }}
+                    className={`px-2.5 py-1 rounded text-xs border ${
+                      checked
+                        ? "bg-teal-50 border-teal-600 text-teal-800 font-medium"
+                        : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50"
+                    }`}
+                  >
+                    {bhk}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="block font-semibold text-crm-text mb-1.5">
+              Property Types
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["APARTMENT", "Apartment"],
+                  ["BUILDER_FLOOR", "Builder Floor"],
+                  ["INDEPENDENT_HOUSE", "Independent House"],
+                  ["VILLA", "Villa"],
+                  ["PLOT", "Plot"],
+                ] as const
+              ).map(([val, label]) => {
+                const checked = leadFormTypes.includes(val);
+                return (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => {
+                      if (checked) {
+                        setLeadFormTypes(leadFormTypes.filter((t) => t !== val));
+                      } else {
+                        setLeadFormTypes([...leadFormTypes, val]);
+                      }
+                    }}
+                    className={`px-2.5 py-1 rounded text-xs border ${
+                      checked
+                        ? "bg-teal-50 border-teal-600 text-teal-800 font-medium"
+                        : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       </Modal>

@@ -137,6 +137,25 @@ describe("Supply Validation - Property Media Upload & Management", () => {
     },
   };
 
+  const fieldVerifierContext: TenantContext = {
+    tenantId: "tenant-brokerage-1",
+    userId: "user-verifier-1",
+    role: UserRole.FIELD_VERIFIER,
+    user: {
+      id: "user-verifier-1",
+      name: "Verifier Amit",
+      email: "amit@apexrealty.in",
+      role: UserRole.FIELD_VERIFIER,
+      tenantId: "tenant-brokerage-1",
+      isActive: true,
+    },
+    session: {
+      id: "sess-5",
+      token: "tok-5",
+      expiresAt: new Date(Date.now() + 86400000),
+    },
+  };
+
   // Mock Storage Adapter
   let mockStorageSave: ReturnType<typeof vi.fn>;
   let mockStorageRead: ReturnType<typeof vi.fn>;
@@ -537,5 +556,147 @@ describe("Supply Validation - Property Media Upload & Management", () => {
     expect(list[0].uploadedBy).toBeNull(); // Gracefully handles legacy records without uploader
     expect(list[1].id).toBe("media-2");
     expect(list[1].uploadedBy?.name).toBe("Broker Vikram");
+  });
+
+  it("17. Photo serving endpoint: telecaller denied access to unassigned property in validation queue", async () => {
+    vi.mocked(prisma.propertyMedia.findFirst).mockResolvedValueOnce({
+      id: "media-photo-1",
+      tenantId: "tenant-brokerage-1",
+      propertyId: "prop-unassigned",
+      mediaType: MediaType.PHOTO,
+      storageProvider: MediaStorageProvider.OBJECT_STORAGE,
+      url: "/api/media/media-photo-1",
+    } as unknown as MockPropertyMedia);
+
+    vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
+      id: "prop-unassigned",
+      tenantId: "tenant-brokerage-1",
+      isActiveSupply: false,
+      availabilityStatus: "PENDING_VERIFICATION",
+      assignments: [],
+      verifications: [],
+    } as unknown as MockProperty);
+
+    await expect(
+      getPropertyPhotoForServing(telecallerContext, "media-photo-1")
+    ).rejects.toThrow(NotFoundError);
+  });
+
+  it("18. Photo serving endpoint: telecaller allowed access to actively assigned property and active supply pool", async () => {
+    // Case A: Actively assigned property
+    vi.mocked(prisma.propertyMedia.findFirst).mockResolvedValueOnce({
+      id: "media-photo-1",
+      tenantId: "tenant-brokerage-1",
+      propertyId: "prop-assigned",
+      mediaType: MediaType.PHOTO,
+      storageProvider: MediaStorageProvider.OBJECT_STORAGE,
+      url: "/api/media/media-photo-1",
+    } as unknown as MockPropertyMedia);
+
+    vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
+      id: "prop-assigned",
+      tenantId: "tenant-brokerage-1",
+      isActiveSupply: false,
+      availabilityStatus: "PENDING_VERIFICATION",
+      assignments: [{ assignedUserId: "user-telecaller-1" }],
+      verifications: [],
+    } as unknown as MockProperty);
+
+    const servedAssigned = await getPropertyPhotoForServing(telecallerContext, "media-photo-1");
+    expect(servedAssigned.mimeType).toBe("image/jpeg");
+
+    // Case B: Unassigned property in Active Supply Pool
+    vi.mocked(prisma.propertyMedia.findFirst).mockResolvedValueOnce({
+      id: "media-photo-2",
+      tenantId: "tenant-brokerage-1",
+      propertyId: "prop-pool",
+      mediaType: MediaType.PHOTO,
+      storageProvider: MediaStorageProvider.OBJECT_STORAGE,
+      url: "/api/media/media-photo-2",
+    } as unknown as MockPropertyMedia);
+
+    vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
+      id: "prop-pool",
+      tenantId: "tenant-brokerage-1",
+      isActiveSupply: true,
+      availabilityStatus: "AVAILABLE",
+      assignments: [],
+      verifications: [],
+    } as unknown as MockProperty);
+
+    const servedPool = await getPropertyPhotoForServing(telecallerContext, "media-photo-2");
+    expect(servedPool.mimeType).toBe("image/jpeg");
+  });
+
+  it("19. Photo serving endpoint: Field Verifier denied access to unassigned property without verification record", async () => {
+    vi.mocked(prisma.propertyMedia.findFirst).mockResolvedValueOnce({
+      id: "media-photo-1",
+      tenantId: "tenant-brokerage-1",
+      propertyId: "prop-other",
+      mediaType: MediaType.PHOTO,
+      storageProvider: MediaStorageProvider.OBJECT_STORAGE,
+      url: "/api/media/media-photo-1",
+    } as unknown as MockPropertyMedia);
+
+    vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
+      id: "prop-other",
+      tenantId: "tenant-brokerage-1",
+      submittingAgentId: "other-user",
+      isActiveSupply: false,
+      availabilityStatus: "PENDING_VERIFICATION",
+      assignments: [],
+      verifications: [],
+    } as unknown as MockProperty);
+
+    await expect(
+      getPropertyPhotoForServing(fieldVerifierContext, "media-photo-1")
+    ).rejects.toThrow(NotFoundError);
+  });
+
+  it("20. Photo serving endpoint: Field Sales Agent can view Active Supply Pool photos but not unverified draft properties", async () => {
+    // Unverified property
+    vi.mocked(prisma.propertyMedia.findFirst).mockResolvedValueOnce({
+      id: "media-photo-1",
+      tenantId: "tenant-brokerage-1",
+      propertyId: "prop-draft",
+      mediaType: MediaType.PHOTO,
+      storageProvider: MediaStorageProvider.OBJECT_STORAGE,
+      url: "/api/media/media-photo-1",
+    } as unknown as MockPropertyMedia);
+
+    vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
+      id: "prop-draft",
+      tenantId: "tenant-brokerage-1",
+      isActiveSupply: false,
+      availabilityStatus: "PENDING_VERIFICATION",
+      assignments: [],
+      verifications: [],
+    } as unknown as MockProperty);
+
+    await expect(
+      getPropertyPhotoForServing(salesAgentContext, "media-photo-1")
+    ).rejects.toThrow(NotFoundError);
+
+    // Active Supply Pool property
+    vi.mocked(prisma.propertyMedia.findFirst).mockResolvedValueOnce({
+      id: "media-photo-2",
+      tenantId: "tenant-brokerage-1",
+      propertyId: "prop-active",
+      mediaType: MediaType.PHOTO,
+      storageProvider: MediaStorageProvider.OBJECT_STORAGE,
+      url: "/api/media/media-photo-2",
+    } as unknown as MockPropertyMedia);
+
+    vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
+      id: "prop-active",
+      tenantId: "tenant-brokerage-1",
+      isActiveSupply: true,
+      availabilityStatus: "AVAILABLE",
+      assignments: [],
+      verifications: [],
+    } as unknown as MockProperty);
+
+    const served = await getPropertyPhotoForServing(salesAgentContext, "media-photo-2");
+    expect(served.mimeType).toBe("image/jpeg");
   });
 });

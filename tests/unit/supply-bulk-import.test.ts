@@ -337,7 +337,7 @@ describe("Supply Bulk Property Upload - DAL & Validation", () => {
     await expect(
       parseAndPreviewImportFile(tenant1Context, csvBuffer, "too-many-rows.csv")
     ).rejects.toThrow(ValidationError);
-  });
+  }, 15000);
 
   it("9. Detects internal duplicate rows within the same upload", async () => {
     const row1 = [

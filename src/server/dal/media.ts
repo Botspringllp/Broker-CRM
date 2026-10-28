@@ -92,12 +92,22 @@ export function validateAndParseYouTubeUrl(rawUrl: string): ParsedYouTubeVideo {
 
 /**
  * Checks that the property belongs to the tenant, and that if the caller is
- * a TELECALLER, the property is actively assigned to them.
+ * an operational role (TELECALLER, FIELD_VERIFIER, FIELD_SALES_AGENT), they
+ * have authorized record-level access based on active assignments or active pool status.
  */
 async function verifyPropertyAccess(
   context: TenantContext,
-  propertyId: string
+  propertyId: string,
+  mode: "read" | "write" = "write"
 ): Promise<{ id: string; tenantId: string }> {
+  // 1. Root platform super admin and CRM tenant admin have zero operational access to property photos
+  if (
+    context.role === UserRole.PLATFORM_SUPER_ADMIN ||
+    context.role === UserRole.CRM_TENANT_ADMIN
+  ) {
+    throw new NotFoundError("Target property not found in your brokerage.");
+  }
+
   const property = await prisma.property.findFirst({
     where: {
       id: propertyId,
@@ -107,6 +117,8 @@ async function verifyPropertyAccess(
       id: true,
       tenantId: true,
       submittingAgentId: true,
+      isActiveSupply: true,
+      availabilityStatus: true,
       assignments: {
         where: {
           status: AssignmentStatus.ACTIVE,
@@ -121,6 +133,8 @@ async function verifyPropertyAccess(
             in: [
               PropertyVerificationStatus.ASSIGNED,
               PropertyVerificationStatus.IN_PROGRESS,
+              PropertyVerificationStatus.SUBMITTED,
+              PropertyVerificationStatus.APPROVED,
             ],
           },
         },
@@ -136,33 +150,79 @@ async function verifyPropertyAccess(
     throw new NotFoundError("Target property not found in your brokerage.");
   }
 
-  // Telecallers may only upload media to actively assigned properties
-  if (context.role === UserRole.TELECALLER) {
-    const isAssigned = property.assignments.some(
-      (a) => a.assignedUserId === context.userId
-    );
-    if (!isAssigned) {
-      throw new ForbiddenError(
-        "Telecallers may only upload or manage media for properties actively assigned to them."
+  if (mode === "write") {
+    // Telecallers may only upload media to actively assigned properties
+    if (context.role === UserRole.TELECALLER) {
+      const isAssigned = property.assignments.some(
+        (a) => a.assignedUserId === context.userId
       );
+      if (!isAssigned) {
+        throw new ForbiddenError(
+          "Telecallers may only upload or manage media for properties actively assigned to them."
+        );
+      }
     }
-  }
 
-  // Field Verifiers may only upload media for properties actively assigned to them,
-  // where they have an active verification task, or where they are the submitter
-  if (context.role === UserRole.FIELD_VERIFIER) {
-    const isAssigned = property.assignments.some(
-      (a) => a.assignedUserId === context.userId
-    );
-    const hasActiveVerification = property.verifications.some(
-      (v) => v.verifierId === context.userId
-    );
-    const isSubmitter = property.submittingAgentId === context.userId;
-
-    if (!isAssigned && !hasActiveVerification && !isSubmitter) {
-      throw new ForbiddenError(
-        "Field Verifiers may only upload or manage media for properties actively assigned to them."
+    // Field Verifiers may only upload media for properties actively assigned to them,
+    // where they have an active verification task, or where they are the submitter
+    if (context.role === UserRole.FIELD_VERIFIER) {
+      const isAssigned = property.assignments.some(
+        (a) => a.assignedUserId === context.userId
       );
+      const hasActiveVerification = property.verifications.some(
+        (v) => v.verifierId === context.userId
+      );
+      const isSubmitter = property.submittingAgentId === context.userId;
+
+      if (!isAssigned && !hasActiveVerification && !isSubmitter) {
+        throw new ForbiddenError(
+          "Field Verifiers may only upload or manage media for properties actively assigned to them."
+        );
+      }
+    }
+  } else {
+    // mode === "read"
+    // Broker Owner and Team Leader have full read access to all tenant properties
+    if (context.role === UserRole.BROKER_OWNER || context.role === UserRole.TEAM_LEADER) {
+      return { id: property.id, tenantId: property.tenantId };
+    }
+
+    // Telecallers may only view media for actively assigned properties,
+    // OR properties in Active Supply Pool (for buyer matching / client presentation)
+    if (context.role === UserRole.TELECALLER) {
+      const isAssigned = property.assignments.some(
+        (a) => a.assignedUserId === context.userId
+      );
+      const isAvailableInPool =
+        property.isActiveSupply && property.availabilityStatus === "AVAILABLE";
+      if (!isAssigned && !isAvailableInPool) {
+        throw new NotFoundError("Target property not found in your brokerage.");
+      }
+    }
+
+    // Field Verifiers may only view media for properties actively assigned to them,
+    // where they have a verification task, or where they are the submitter
+    if (context.role === UserRole.FIELD_VERIFIER) {
+      const isAssigned = property.assignments.some(
+        (a) => a.assignedUserId === context.userId
+      );
+      const hasVerification = property.verifications.some(
+        (v) => v.verifierId === context.userId
+      );
+      const isSubmitter = property.submittingAgentId === context.userId;
+
+      if (!isAssigned && !hasVerification && !isSubmitter) {
+        throw new NotFoundError("Target property not found in your brokerage.");
+      }
+    }
+
+    // Field Sales Agents may only view media for properties in Active Supply Pool
+    if (context.role === UserRole.FIELD_SALES_AGENT) {
+      const isAvailableInPool =
+        property.isActiveSupply && property.availabilityStatus === "AVAILABLE";
+      if (!isAvailableInPool) {
+        throw new NotFoundError("Target property not found in your brokerage.");
+      }
     }
   }
 
@@ -436,6 +496,9 @@ export async function getPropertyPhotoForServing(
   if (media.mediaType !== MediaType.PHOTO) {
     throw new ValidationError("Requested media is not a photo.");
   }
+
+  // Enforce record-level property authorization
+  await verifyPropertyAccess(context, media.propertyId, "read");
 
   const storageAdapter = getStorageAdapter();
   const tenantClean = media.tenantId.replace(/[^a-zA-Z0-9_-]/g, "");

@@ -258,11 +258,21 @@ describe("Tenant Data Access Layer (DAL) Isolation & Security", () => {
       vi.mocked(prisma.siteVisitItem.findFirst).mockResolvedValueOnce({
         id: "item-1",
         tenantId: "tenant-apex",
+        siteVisitId: "visit-1",
+        siteVisit: {
+          id: "visit-1",
+          assignedSalesAgentId: "agent-vikram",
+        },
       } as unknown as Awaited<ReturnType<typeof prisma.siteVisitItem.findFirst>>);
 
       vi.mocked(prisma.siteVisitItem.update).mockResolvedValueOnce({
         id: "item-1",
       } as unknown as Awaited<ReturnType<typeof prisma.siteVisitItem.update>>);
+
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-apex",
+      } as unknown as Awaited<ReturnType<typeof prisma.siteVisit.findFirst>>);
 
       await recordVisitItemOutcome(apexContext, "item-1", {
         status: SiteVisitItemOutcome.VISIT_DONE,
