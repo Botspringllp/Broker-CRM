@@ -10,7 +10,6 @@ import { Toast } from "@/components/ui/Toast";
 import { Property, PropertyMedia } from "@/types/crm";
 import {
   createPropertyAction,
-  logPropertyCallAction,
   assignPropertyAction,
   assignPropertyRoundRobinAction,
   downloadImportTemplateAction,
@@ -174,15 +173,6 @@ export function SupplyValidationClient({
   const [activeViewerMedia, setActiveViewerMedia] = useState<PropertyMedia | null>(null);
   const [mediaToDelete, setMediaToDelete] = useState<PropertyMedia | null>(null);
   const [isDeletingMedia, setIsDeletingMedia] = useState(false);
-
-  // Call Logging Modal state
-  const [isCallModalOpen, setIsCallModalOpen] = useState(false);
-  const [callDisposition, setCallDisposition] = useState("PROPERTY_AVAILABLE");
-  const [callNotes, setCallNotes] = useState("");
-  const [callbackTime, setCallbackTime] = useState("");
-  const [confirmOwnerWillingness, setConfirmOwnerWillingness] = useState(false);
-  const [isCallSubmitting, setIsCallSubmitting] = useState(false);
-  const [callModalError, setCallModalError] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Manual Property Entry Modal State
@@ -861,59 +851,6 @@ export function SupplyValidationClient({
     }
   };
 
-  const handleOpenCallModal = (prop: Property) => {
-    setSelectedProperty(prop);
-    setCallDisposition("PROPERTY_AVAILABLE");
-    setCallNotes("");
-    setCallbackTime("");
-    setConfirmOwnerWillingness(false);
-    setCallModalError(null);
-    setIsCallModalOpen(true);
-  };
-
-  const handleSaveCallOutcome = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!selectedProperty) return;
-
-    setCallModalError(null);
-
-    if (callDisposition === "CALL_BACK" && !callbackTime.trim()) {
-      setCallModalError("A callback date and time is required when disposition is Call Back.");
-      return;
-    }
-
-    setIsCallSubmitting(true);
-    try {
-      const res = await logPropertyCallAction({
-        propertyId: selectedProperty.id,
-        disposition: callDisposition,
-        notes: callNotes.trim() || null,
-        callbackScheduledAt: callbackTime.trim() || null,
-        confirmOwnerWillingness: confirmOwnerWillingness,
-      });
-
-      if (!res.success) {
-        setCallModalError(res.error);
-        return;
-      }
-
-      // Update local state with fresh property from DB
-      setProperties((prev) =>
-        prev.map((p) => (p.id === res.property.id ? res.property : p))
-      );
-      setSelectedProperty(res.property);
-      setIsCallModalOpen(false);
-
-      setToastMessage(
-        `Call outcome recorded for ${res.property.societyName}: ${res.property.currentDisposition}`
-      );
-    } catch (err: unknown) {
-      setCallModalError(err instanceof Error ? err.message : "Failed to record call outcome.");
-    } finally {
-      setIsCallSubmitting(false);
-    }
-  };
-
   return (
     <AppShell>
       <div className="space-y-6">
@@ -1267,15 +1204,13 @@ export function SupplyValidationClient({
                                 {prop.currentAssignment ? "Reassign" : "Assign"}
                               </button>
                             )}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenCallModal(prop);
-                              }}
-                              className="px-2.5 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs"
+                            <Link
+                              href={`/supply/${prop.id}/call`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2.5 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs inline-block"
                             >
                               Log Call
-                            </button>
+                            </Link>
                             {canAssignFieldVerifier && (
                               <button
                                 type="button"
@@ -1524,12 +1459,12 @@ export function SupplyValidationClient({
 
                 {/* Action Buttons */}
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => handleOpenCallModal(selectedProperty)}
-                    className="flex-1 py-2 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs text-center"
+                  <Link
+                    href={`/supply/${selectedProperty.id}/call`}
+                    className="flex-1 py-2 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs text-center inline-block"
                   >
-                    📞 Log Owner Call Outcome
-                  </button>
+                    📞 Open Call Workspace
+                  </Link>
                 </div>
 
                 {/* Call History Timeline */}
@@ -1748,132 +1683,6 @@ export function SupplyValidationClient({
           )}
         </div>
       </div>
-
-      {/* Modal: Log Call Outcome */}
-      <Modal
-        isOpen={isCallModalOpen}
-        onClose={() => {
-          if (!isCallSubmitting) {
-            setIsCallModalOpen(false);
-            setCallModalError(null);
-          }
-        }}
-        title={`Log Call Outcome: ${selectedProperty?.societyName || ""}`}
-        subtitle={`Flat: ${selectedProperty?.flatNumber || ""} • Owner: ${selectedProperty?.ownerName || ""} (${selectedProperty?.ownerMobile || ""})`}
-        footer={
-          <>
-            <button
-              type="button"
-              onClick={() => {
-                setIsCallModalOpen(false);
-                setCallModalError(null);
-              }}
-              disabled={isCallSubmitting}
-              className="px-3.5 py-1.5 text-xs rounded border border-crm-border text-crm-muted hover:text-crm-text disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveCallOutcome}
-              disabled={isCallSubmitting}
-              className="px-4 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs disabled:opacity-50 flex items-center gap-1.5"
-            >
-              {isCallSubmitting ? (
-                <>
-                  <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full" />
-                  <span>Saving...</span>
-                </>
-              ) : (
-                <span>Save Call Outcome</span>
-              )}
-            </button>
-          </>
-        }
-      >
-        <div className="space-y-4 text-xs">
-          {callModalError && (
-            <div className="p-3 rounded-md bg-red-50 border border-red-200 text-red-700 font-medium">
-              ⚠️ {callModalError}
-            </div>
-          )}
-
-          <div>
-            <label className="block font-semibold text-crm-text mb-1">
-              Calling Disposition (Required) *
-            </label>
-            <select
-              value={callDisposition}
-              onChange={(e) => {
-                setCallDisposition(e.target.value);
-                setCallModalError(null);
-              }}
-              className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-            >
-              <option value="PROPERTY_AVAILABLE">Property Available</option>
-              <option value="CALL_BACK">Call Back (Requires scheduled datetime)</option>
-              <option value="RINGING_OR_NOT_ANSWERING">Ringing / Not Answering</option>
-              <option value="TEMPORARILY_UNAVAILABLE">Temporarily Unavailable (Paused)</option>
-              <option value="OWNER_DECLINES_MANDATE">Owner Declines Mandate (Reject Mandate)</option>
-              <option value="PROPERTY_SOLD_OR_RENTED">Property Sold or Rented (Move Inactive)</option>
-            </select>
-          </div>
-
-          {callDisposition === "PROPERTY_AVAILABLE" && (
-            <div className="p-3 rounded-md bg-stone-50/80 border border-crm-border space-y-1.5">
-              <label className="flex items-start gap-2 cursor-pointer font-semibold text-crm-text">
-                <input
-                  type="checkbox"
-                  checked={confirmOwnerWillingness}
-                  onChange={(e) => setConfirmOwnerWillingness(e.target.checked)}
-                  className="mt-0.5 rounded border-crm-border text-crm-primary focus:ring-crm-primary"
-                />
-                <div>
-                  <span className="text-xs">Confirm Owner Willingness & Mandate</span>
-                  <p className="text-[11px] font-normal text-crm-muted mt-0.5">
-                    Check if the owner explicitly confirmed willingness to work with our brokerage and authorized marketing. If unchecked, the property remains In Validation and outside the Active Supply Pool.
-                  </p>
-                </div>
-              </label>
-            </div>
-          )}
-
-          {callDisposition === "CALL_BACK" && (
-            <div>
-              <label className="block font-semibold text-crm-text mb-1">
-                Callback Date & Time (Required) *
-              </label>
-              <input
-                type="datetime-local"
-                required
-                value={callbackTime}
-                onChange={(e) => {
-                  setCallbackTime(e.target.value);
-                  if (callModalError) setCallModalError(null);
-                }}
-                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="block font-semibold text-crm-text mb-1">
-              Caller Notes & Conversation Log
-            </label>
-            <textarea
-              rows={3}
-              placeholder="Record owner conversation details, negotiation terms, inspection availability, key location..."
-              value={callNotes}
-              onChange={(e) => setCallNotes(e.target.value)}
-              className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
-            />
-          </div>
-
-          <div className="p-2.5 rounded bg-stone-50 border border-crm-border text-crm-muted text-[11px] leading-relaxed">
-            ℹ️ <strong>PRD Validation Invariant:</strong> Recording this call creates an append-only audit entry. Active Supply Pool eligibility strictly requires both confirmed owner willingness and validated availability.
-          </div>
-        </div>
-      </Modal>
 
       {/* Manual Property Entry Modal */}
       <Modal

@@ -9,7 +9,6 @@ import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { Property, PropertyMedia } from "@/types/crm";
 import {
-  logPropertyCallAction,
   assignPropertyAction,
   assignPropertyRoundRobinAction,
   uploadPropertyPhotosAction,
@@ -55,14 +54,6 @@ export function PropertyDetailsClient({
   const [property, setProperty] = useState<Property>(initialProperty);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Call Logging Modal State
-  const [isCallModalOpen, setIsCallModalOpen] = useState(false);
-  const [callDisposition, setCallDisposition] = useState("PROPERTY_AVAILABLE");
-  const [callbackDate, setCallbackDate] = useState("");
-  const [callNotes, setCallNotes] = useState("");
-  const [isLoggingCall, setIsLoggingCall] = useState(false);
-  const [callModalError, setCallModalError] = useState<string | null>(null);
-
   // Telecaller Assignment Modal State
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [selectedTelecallerId, setSelectedTelecallerId] = useState(
@@ -92,39 +83,6 @@ export function PropertyDetailsClient({
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [lightboxMedia, setLightboxMedia] = useState<PropertyMedia | null>(null);
-
-  // Handlers for Call Logging
-  const handleOpenCallModal = () => {
-    setCallDisposition("PROPERTY_AVAILABLE");
-    setCallbackDate("");
-    setCallNotes("");
-    setCallModalError(null);
-    setIsCallModalOpen(true);
-  };
-
-  const handleCallSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoggingCall(true);
-    setCallModalError(null);
-
-    const res = await logPropertyCallAction({
-      propertyId: property.id,
-      disposition: callDisposition,
-      notes: callNotes.trim() || undefined,
-      callbackScheduledAt: callbackDate ? new Date(callbackDate).toISOString() : undefined,
-    });
-
-    setIsLoggingCall(false);
-
-    if (res.success && res.property) {
-      setProperty(res.property);
-      setIsCallModalOpen(false);
-      setToastMessage("Call outcome recorded successfully.");
-      router.refresh();
-    } else {
-      setCallModalError(res.error || "Failed to log call outcome.");
-    }
-  };
 
   // Handlers for Telecaller Assignment
   const handleOpenAssignModal = () => {
@@ -383,14 +341,13 @@ export function PropertyDetailsClient({
               )}
 
               {canLogCall && (
-                <button
-                  type="button"
-                  onClick={handleOpenCallModal}
+                <Link
+                  href={`/supply/${property.id}/call`}
                   className="px-3.5 py-1.5 text-xs font-semibold rounded-md bg-crm-primary text-white hover:bg-crm-primary-hover transition-colors shadow-2xs inline-flex items-center gap-1.5"
                 >
                   <span>📞</span>
                   <span>Log Call Outcome</span>
-                </button>
+                </Link>
               )}
 
               {canAssignTelecaller && (
@@ -855,13 +812,12 @@ export function PropertyDetailsClient({
                 Call History Timeline ({property.callHistory.length})
               </h2>
               {canLogCall && (
-                <button
-                  type="button"
-                  onClick={handleOpenCallModal}
+                <Link
+                  href={`/supply/${property.id}/call`}
                   className="text-xs font-semibold text-crm-primary hover:underline"
                 >
-                  + Log Call
-                </button>
+                  + Log Call (Workspace)
+                </Link>
               )}
             </div>
 
@@ -983,82 +939,6 @@ export function PropertyDetailsClient({
             </div>
           </Modal>
         )}
-
-        {/* Modal: Log Call Outcome */}
-        <Modal
-          isOpen={isCallModalOpen}
-          onClose={() => !isLoggingCall && setIsCallModalOpen(false)}
-          title="Log Owner Call Outcome"
-        >
-          <form onSubmit={handleCallSubmit} className="space-y-4 text-xs">
-            {callModalError && (
-              <div className="p-3 bg-red-50 text-red-700 rounded border border-red-200">
-                {callModalError}
-              </div>
-            )}
-
-            <div>
-              <label className="block font-semibold text-crm-text mb-1">Calling Disposition *</label>
-              <select
-                value={callDisposition}
-                onChange={(e) => setCallDisposition(e.target.value)}
-                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-              >
-                <option value="PROPERTY_AVAILABLE">Property Available (Owner Willing)</option>
-                <option value="CALL_BACK_REQUESTED">Call Back Requested</option>
-                <option value="PRICE_REVISED">Price / Rent Revised</option>
-                <option value="DETAILS_UPDATED">Details / Specs Updated</option>
-                <option value="MANDATE_DECLINED">Mandate Declined / Not Interested</option>
-                <option value="PROPERTY_SOLD_EXTERNALLY">Property Sold Externally</option>
-                <option value="PROPERTY_RENTED_EXTERNALLY">Property Rented Externally</option>
-                <option value="NUMBER_UNREACHABLE">Number Unreachable / Switched Off</option>
-                <option value="CALL_NOT_ANSWERED">Call Not Answered / Busy</option>
-              </select>
-            </div>
-
-            {callDisposition === "CALL_BACK_REQUESTED" && (
-              <div>
-                <label className="block font-semibold text-crm-text mb-1">Callback Date & Time *</label>
-                <input
-                  type="datetime-local"
-                  required
-                  value={callbackDate}
-                  onChange={(e) => setCallbackDate(e.target.value)}
-                  className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-                />
-              </div>
-            )}
-
-            <div>
-              <label className="block font-semibold text-crm-text mb-1">Call Notes & Key Takeaways</label>
-              <textarea
-                rows={3}
-                placeholder="Mention owner mood, expected negotiations, or tenant preferences..."
-                value={callNotes}
-                onChange={(e) => setCallNotes(e.target.value)}
-                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-crm-border">
-              <button
-                type="button"
-                onClick={() => setIsCallModalOpen(false)}
-                disabled={isLoggingCall}
-                className="px-3.5 py-1.5 rounded border border-crm-border bg-stone-100 hover:bg-stone-200 text-crm-text"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={isLoggingCall}
-                className="px-4 py-1.5 rounded bg-crm-primary text-white hover:bg-crm-primary-hover font-semibold shadow-2xs"
-              >
-                {isLoggingCall ? "Recording..." : "Save Outcome"}
-              </button>
-            </div>
-          </form>
-        </Modal>
 
         {/* Modal: Assign Telecaller */}
         <Modal
