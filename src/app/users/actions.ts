@@ -8,6 +8,9 @@ import {
   assignUserTeamLeader,
   assignUserBroker,
   updateDelegatedPermissions,
+  resendTenantUserInvitation,
+  verifyInvitationToken,
+  activateUserAccount,
 } from "@/server/dal/users";
 import { UserRole } from "@prisma/client";
 import { AppAction } from "@/server/permissions";
@@ -99,6 +102,50 @@ export async function updateDelegatedPermissionsAction(
     return { success: true, user: updated };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to update delegated permissions.";
+    return { success: false, error: message };
+  }
+}
+
+export async function resendInvitationAction(targetUserId: string) {
+  try {
+    const context = await requireTenantContext();
+    const res = await resendTenantUserInvitation(context, targetUserId);
+    revalidatePath("/users");
+    return { success: true, email: res.email };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to resend invitation email.";
+    return { success: false, error: message };
+  }
+}
+
+export async function verifyInvitationTokenAction(token: string) {
+  try {
+    const data = await verifyInvitationToken(token);
+    return {
+      success: true,
+      user: {
+        id: data.user.id,
+        name: data.user.name,
+        email: data.user.email,
+        role: data.user.role,
+        tenantName: data.user.tenant.name,
+      },
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Invalid or expired invitation link.";
+    return { success: false, error: message };
+  }
+}
+
+export async function activateUserAccountAction(input: {
+  token: string;
+  password: string;
+}) {
+  try {
+    const res = await activateUserAccount(input.token, input.password);
+    return { success: true, email: res.email };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to activate account.";
     return { success: false, error: message };
   }
 }

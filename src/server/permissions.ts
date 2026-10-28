@@ -163,6 +163,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<AppAction>> = {
     "visits:confirm_final",   // telecaller final review (PRD §8.3)
     "visits:record_feedback",
     "assignment:assign_sales_agent",
+    "verification:assign",
   ]),
 
   [UserRole.FIELD_VERIFIER]: new Set<AppAction>([
@@ -222,6 +223,17 @@ export function hasPermission(
 
   // If operational user has explicit delegated permissions configured, they strictly govern
   if (delegatedPermissions && delegatedPermissions.length > 0) {
+    // If a FIELD_VERIFIER has legacy delegated permissions configured before verification actions were introduced,
+    // ensure core verification capabilities remain functional unless any verification action was explicitly configured
+    if (
+      role === UserRole.FIELD_VERIFIER &&
+      action.startsWith("verification:") &&
+      !delegatedPermissions.some((p) => p.startsWith("verification:"))
+    ) {
+      const allowed = ROLE_PERMISSIONS[role];
+      return allowed ? allowed.has(action) : false;
+    }
+
     return delegatedPermissions.includes(action);
   }
 

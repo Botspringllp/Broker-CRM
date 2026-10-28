@@ -19,6 +19,10 @@ import {
   attachPropertyVideoAction,
   deletePropertyMediaAction,
 } from "./actions";
+import {
+  listEligibleFieldVerifiersAction,
+  assignPropertyToFieldVerifierAction,
+} from "@/app/verifier/actions";
 import type { BulkImportPreview, BulkImportResult } from "@/server/dal/bulk-import";
 
 function downloadBase64File(base64: string, filename: string, mimeType: string) {
@@ -52,6 +56,7 @@ interface SupplyValidationClientProps {
   initialProperties: Property[];
   currentUserRole?: string;
   canAssignTelecaller?: boolean;
+  canAssignFieldVerifier?: boolean;
   canUploadMedia?: boolean;
   initialTelecallers?: EligibleTelecallerItem[];
 }
@@ -60,6 +65,7 @@ export function SupplyValidationClient({
   initialProperties,
   currentUserRole,
   canAssignTelecaller = false,
+  canAssignFieldVerifier = false,
   canUploadMedia = false,
   initialTelecallers = [],
 }: SupplyValidationClientProps) {
@@ -83,6 +89,58 @@ export function SupplyValidationClient({
   const [isAssigning, setIsAssigning] = useState(false);
   const [assignModalError, setAssignModalError] = useState<string | null>(null);
   const [isRoundRobinRunning, setIsRoundRobinRunning] = useState(false);
+
+  // Field Verifier Assignment Modal State
+  const [isFieldVerifierModalOpen, setIsFieldVerifierModalOpen] = useState(false);
+  const [propertyForFieldVerifier, setPropertyForFieldVerifier] = useState<Property | null>(null);
+  const [fieldVerifiersList, setFieldVerifiersList] = useState<{ id: string; name: string; phone: string }[]>([]);
+  const [selectedFieldVerifierId, setSelectedFieldVerifierId] = useState("");
+  const [fieldVerifierInstructions, setFieldVerifierInstructions] = useState("");
+  const [isAssigningFieldVerifier, setIsAssigningFieldVerifier] = useState(false);
+  const [fieldVerifierModalError, setFieldVerifierModalError] = useState<string | null>(null);
+
+  const handleOpenFieldVerifierModal = async (prop: Property) => {
+    setPropertyForFieldVerifier(prop);
+    setFieldVerifierInstructions("");
+    setFieldVerifierModalError(null);
+    setIsFieldVerifierModalOpen(true);
+    try {
+      const res = await listEligibleFieldVerifiersAction();
+      if (res.success && res.verifiers) {
+        setFieldVerifiersList(res.verifiers);
+        if (res.verifiers.length > 0) {
+          setSelectedFieldVerifierId(res.verifiers[0].id);
+        }
+      }
+    } catch {
+      setFieldVerifiersList([]);
+    }
+  };
+
+  const handleAssignFieldVerifierSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!propertyForFieldVerifier || !selectedFieldVerifierId) return;
+
+    setIsAssigningFieldVerifier(true);
+    setFieldVerifierModalError(null);
+    try {
+      const res = await assignPropertyToFieldVerifierAction({
+        propertyId: propertyForFieldVerifier.id,
+        verifierId: selectedFieldVerifierId,
+        instructions: fieldVerifierInstructions.trim() || undefined,
+      });
+
+      if (res.success) {
+        setIsFieldVerifierModalOpen(false);
+        setToastMessage(`Assigned ${propertyForFieldVerifier.societyName} to Field Verifier successfully.`);
+        router.refresh();
+      }
+    } catch (err: unknown) {
+      setFieldVerifierModalError((err as Error)?.message || "Failed to assign property to Field Verifier.");
+    } finally {
+      setIsAssigningFieldVerifier(false);
+    }
+  };
 
   // Bulk Upload Modal & State
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
@@ -1198,6 +1256,27 @@ export function SupplyValidationClient({
                             >
                               Log Call
                             </button>
+                            {canAssignFieldVerifier && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenFieldVerifierModal(prop);
+                                }}
+                                className={`px-2 py-1 text-xs font-semibold rounded border shadow-2xs ${
+                                  prop.isFieldVerified
+                                    ? "bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100"
+                                    : "bg-white text-crm-text hover:bg-stone-100 border-crm-border"
+                                }`}
+                                title={
+                                  prop.isFieldVerified
+                                    ? "Field Verified — click to reassign"
+                                    : "Assign to Field Verifier for on-site inspection"
+                                }
+                              >
+                                {prop.isFieldVerified ? "✓ Verified" : "🚶‍♂️ Field"}
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -1346,6 +1425,37 @@ export function SupplyValidationClient({
                         title="Distribute via Fair Round Robin"
                       >
                         {isRoundRobinRunning ? "Assigning..." : "⚡ Auto-Assign"}
+                      </button>
+                    </div>
+                  )}
+
+                  {canAssignFieldVerifier && (
+                    <div className="pt-2 border-t border-crm-border/40 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-bold text-crm-muted">
+                          Field Physical Verification
+                        </span>
+                        {selectedProperty.isFieldVerified && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                            ✓ Verified
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenFieldVerifierModal(selectedProperty)}
+                        className={`w-full py-1.5 px-2.5 text-xs font-semibold rounded border shadow-2xs flex items-center justify-center gap-1.5 ${
+                          selectedProperty.isFieldVerified
+                            ? "bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100"
+                            : "bg-white text-crm-text hover:bg-stone-50 border-crm-border"
+                        }`}
+                      >
+                        <span>🚶‍♂️</span>
+                        <span>
+                          {selectedProperty.isFieldVerified
+                            ? "🔄 Reassign Field Verifier"
+                            : "📋 Assign Field Verifier"}
+                        </span>
                       </button>
                     </div>
                   )}
@@ -2295,6 +2405,116 @@ export function SupplyValidationClient({
                 {isAssigning ? "Assigning..." : "Assign Property"}
               </button>
             </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Field Verifier Assignment Modal */}
+      <Modal
+        isOpen={isFieldVerifierModalOpen}
+        onClose={() => {
+          setIsFieldVerifierModalOpen(false);
+          setPropertyForFieldVerifier(null);
+          setFieldVerifierModalError(null);
+        }}
+        title="Assign Property to Field Verifier"
+        subtitle="Assign this property to an eligible field verifier for on-site physical inspection and photo capture."
+      >
+        <form onSubmit={handleAssignFieldVerifierSubmit} className="space-y-4">
+          {propertyForFieldVerifier && (
+            <div className="p-3 rounded-lg bg-stone-50 border border-crm-border text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-crm-text">
+                  {propertyForFieldVerifier.flatNumber}, {propertyForFieldVerifier.societyName}
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-stone-200 text-stone-800">
+                  {propertyForFieldVerifier.preference}
+                </span>
+              </div>
+              <div className="text-crm-muted">
+                {propertyForFieldVerifier.bedroomCount} BHK • {propertyForFieldVerifier.locality}, {propertyForFieldVerifier.city}
+              </div>
+              <div className="pt-1 text-[11px] flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-crm-muted">Validation Status:</span>
+                  <span className={`font-semibold ${
+                    propertyForFieldVerifier.validationStatus === "Validated"
+                      ? "text-emerald-700"
+                      : "text-amber-700"
+                  }`}>
+                    {propertyForFieldVerifier.validationStatus}
+                  </span>
+                </div>
+                {propertyForFieldVerifier.isFieldVerified && (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    ✓ Already Verified
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {fieldVerifierModalError && (
+            <div className="p-2.5 text-xs rounded bg-red-50 border border-red-200 text-red-700 font-medium">
+              {fieldVerifierModalError}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-crm-text mb-1">
+              Select Field Verifier *
+            </label>
+            {fieldVerifiersList.length === 0 ? (
+              <div className="p-3 text-xs rounded bg-amber-50 border border-amber-200 text-amber-800">
+                No active Field Verifiers found in your brokerage. Add or activate a Field Verifier in Team Management.
+              </div>
+            ) : (
+              <select
+                value={selectedFieldVerifierId}
+                onChange={(e) => setSelectedFieldVerifierId(e.target.value)}
+                className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+              >
+                {fieldVerifiersList.map((fv) => (
+                  <option key={fv.id} value={fv.id}>
+                    {fv.name} ({fv.phone || "No phone"})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-crm-text mb-1">
+              Special Inspection Instructions (Optional)
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Verify balcony seepage, count covered parking slots, check key with guard"
+              value={fieldVerifierInstructions}
+              onChange={(e) => setFieldVerifierInstructions(e.target.value)}
+              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+            />
+          </div>
+
+          <div className="pt-2 flex items-center justify-end gap-2 border-t border-crm-border">
+            <button
+              type="button"
+              onClick={() => {
+                setIsFieldVerifierModalOpen(false);
+                setPropertyForFieldVerifier(null);
+                setFieldVerifierModalError(null);
+              }}
+              className="px-3 py-1.5 text-xs font-medium rounded border border-crm-border text-crm-muted hover:text-crm-text hover:bg-stone-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isAssigningFieldVerifier || fieldVerifiersList.length === 0}
+              className="px-3.5 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs transition-colors disabled:opacity-50"
+            >
+              {isAssigningFieldVerifier ? "Assigning..." : "Assign Field Verifier"}
+            </button>
           </div>
         </form>
       </Modal>

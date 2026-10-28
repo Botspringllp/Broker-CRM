@@ -10,6 +10,12 @@ import {
 import { ForbiddenError, NotFoundError } from "../errors";
 import { UserRole, Prisma } from "@prisma/client";
 import { hashPassword } from "better-auth/crypto";
+import { randomBytes } from "crypto";
+import {
+  sendUserInvitation,
+  sendRoleChangeNotification,
+  sendAccountStatusNotification,
+} from "../email";
 
 export interface CreateUserData {
   name: string;
@@ -198,7 +204,7 @@ export async function createTenantUser(context: TenantContext, data: CreateUserD
   // 2. Enforce tenant seat limits
   const tenant = await prisma.tenant.findUnique({
     where: { id: context.tenantId },
-    select: { maxSeats: true },
+    select: { name: true, maxSeats: true },
   });
 
   if (tenant?.maxSeats) {
@@ -308,7 +314,7 @@ export async function createTenantUser(context: TenantContext, data: CreateUserD
     hashedPassword = await hashPassword(data.password);
   }
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const newUser = await tx.user.create({
       data: {
         tenantId: context.tenantId,
@@ -347,6 +353,18 @@ export async function createTenantUser(context: TenantContext, data: CreateUserD
       });
     }
 
+    // Generate secure single-use invitation token (48h expiry)
+    const invitationToken = randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+    await tx.verification.create({
+      data: {
+        identifier: `invitation:${invitationToken}`,
+        value: newUser.id,
+        expiresAt,
+      },
+    });
+
     // Record immutable audit log
     await tx.userAuditLog.create({
       data: {
@@ -363,8 +381,22 @@ export async function createTenantUser(context: TenantContext, data: CreateUserD
       },
     });
 
-    return newUser;
+    return { newUser, invitationToken };
   });
+
+  // Asynchronously dispatch user invitation email
+  sendUserInvitation({
+    name: result.newUser.name,
+    email: result.newUser.email,
+    role: result.newUser.role.replace(/_/g, " "),
+    tenantName: tenant?.name || "Your Brokerage",
+    token: result.invitationToken,
+    expiresInHours: 48,
+  }).catch((err) => {
+    console.error("[Email Service Error] Failed to send invitation email:", err);
+  });
+
+  return result.newUser;
 }
 
 /**
@@ -420,6 +452,25 @@ export async function updateUserRole(
       },
     },
   });
+
+  // Asynchronously dispatch role update notification
+  prisma.tenant
+    .findUnique({
+      where: { id: context.tenantId },
+      select: { name: true },
+    })
+    .then((tenant) => {
+      sendRoleChangeNotification({
+        email: updated.email,
+        name: updated.name,
+        tenantName: tenant?.name || "Your Brokerage",
+        oldRole: targetUser.role.replace(/_/g, " "),
+        newRole: newRole.replace(/_/g, " "),
+      }).catch((err) => {
+        console.error("[Email Notification Error] Failed to send role change email:", err);
+      });
+    })
+    .catch(() => {});
 
   return updated;
 }
@@ -480,6 +531,24 @@ export async function updateUserStatus(
       },
     },
   });
+
+  // Asynchronously dispatch account status notification
+  prisma.tenant
+    .findUnique({
+      where: { id: context.tenantId },
+      select: { name: true },
+    })
+    .then((tenant) => {
+      sendAccountStatusNotification({
+        email: updated.email,
+        name: updated.name,
+        tenantName: tenant?.name || "Your Brokerage",
+        isActive,
+      }).catch((err) => {
+        console.error("[Email Notification Error] Failed to send account status email:", err);
+      });
+    })
+    .catch(() => {});
 
   return updated;
 }
@@ -726,5 +795,181 @@ export async function listUserAuditLogs(context: TenantContext, targetUserId?: s
       },
     },
     take: 50,
+  });
+}
+
+/**
+ * Resends an invitation email with a freshly generated secure token.
+ */
+export async function resendTenantUserInvitation(
+  context: TenantContext,
+  targetUserId: string
+) {
+  assertPermission(context, "admin:manage_users");
+
+  const targetUser = await getTenantUserById(context, targetUserId);
+  if (!targetUser.isActive) {
+    throw new ForbiddenError("Cannot send invitation to a deactivated user account.");
+  }
+
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: context.tenantId },
+    select: { name: true },
+  });
+
+  // Invalidate any existing invitation tokens for this user
+  await prisma.verification.deleteMany({
+    where: {
+      value: targetUser.id,
+      identifier: { startsWith: "invitation:" },
+    },
+  });
+
+  const invitationToken = randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+  await prisma.verification.create({
+    data: {
+      identifier: `invitation:${invitationToken}`,
+      value: targetUser.id,
+      expiresAt,
+    },
+  });
+
+  await prisma.userAuditLog.create({
+    data: {
+      tenantId: context.tenantId,
+      targetUserId: targetUser.id,
+      actorUserId: context.userId,
+      action: "INVITATION_RESENT",
+      details: {
+        email: targetUser.email,
+      },
+    },
+  });
+
+  const emailResult = await sendUserInvitation({
+    name: targetUser.name,
+    email: targetUser.email,
+    role: targetUser.role.replace(/_/g, " "),
+    tenantName: tenant?.name || "Your Brokerage",
+    token: invitationToken,
+    expiresInHours: 48,
+  });
+
+  return { success: emailResult.success, email: targetUser.email, error: emailResult.error };
+}
+
+/**
+ * Verifies an invitation token and retrieves user & tenant details for activation.
+ */
+export async function verifyInvitationToken(token: string) {
+  if (!token || typeof token !== "string" || !token.trim()) {
+    throw new NotFoundError("Invalid invitation token.");
+  }
+
+  const verification = await prisma.verification.findFirst({
+    where: {
+      identifier: `invitation:${token.trim()}`,
+    },
+  });
+
+  if (!verification) {
+    throw new NotFoundError("Invitation link is invalid or does not exist.");
+  }
+
+  if (verification.expiresAt < new Date()) {
+    throw new ForbiddenError("Invitation link has expired. Please contact your administrator for a new invite.");
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: verification.value },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      isActive: true,
+      tenantId: true,
+      tenant: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+    },
+  });
+
+  if (!user || !user.isActive) {
+    throw new ForbiddenError("User account is inactive or not found.");
+  }
+
+  return {
+    user,
+    verification,
+  };
+}
+
+/**
+ * Activates a user account by setting their password using the valid invitation token.
+ * Consumes the token atomically.
+ */
+export async function activateUserAccount(token: string, password: string) {
+  if (!password || password.length < 8) {
+    throw new ForbiddenError("Password must be at least 8 characters long.");
+  }
+
+  const { user, verification } = await verifyInvitationToken(token);
+  const hashedPassword = await hashPassword(password);
+
+  return prisma.$transaction(async (tx) => {
+    // 1. Upsert credential account with new password
+    await tx.account.upsert({
+      where: {
+        providerId_accountId: {
+          providerId: "credential",
+          accountId: user.id,
+        },
+      },
+      update: {
+        password: hashedPassword,
+        updatedAt: new Date(),
+      },
+      create: {
+        userId: user.id,
+        providerId: "credential",
+        accountId: user.id,
+        password: hashedPassword,
+      },
+    });
+
+    // 2. Mark user email as verified
+    await tx.user.update({
+      where: { id: user.id },
+      data: {
+        emailVerified: true,
+        updatedAt: new Date(),
+      },
+    });
+
+    // 3. Delete the invitation verification token so it cannot be reused
+    await tx.verification.delete({
+      where: { id: verification.id },
+    });
+
+    // 4. Record audit log
+    await tx.userAuditLog.create({
+      data: {
+        tenantId: user.tenantId,
+        targetUserId: user.id,
+        actorUserId: user.id,
+        action: "ACCOUNT_ACTIVATED",
+        details: {
+          email: user.email,
+        },
+      },
+    });
+
+    return { success: true, email: user.email };
   });
 }

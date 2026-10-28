@@ -93,6 +93,7 @@ export async function listEligibleFieldVerifiersAction() {
 export async function assignPropertyToFieldVerifierAction(input: AssignFieldVerifierInput) {
   const context = await requireTenantContext();
   const result = await assignPropertyToFieldVerifier(context, input);
+  revalidatePath("/supply");
   revalidatePath("/supply/active");
   revalidatePath("/verifier");
   revalidatePath("/verifier/assigned");

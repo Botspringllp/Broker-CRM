@@ -17,5 +17,16 @@ services:
       timeout: 5s
       retries: 10
 
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: broker-crm-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025" # Mailpit Web UI
+      - "1025:1025" # SMTP server
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_DATABASE: ""
+
 volumes:
   broker_crm_postgres_data:

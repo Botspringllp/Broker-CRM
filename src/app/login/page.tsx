@@ -33,6 +33,8 @@ export default function LoginPage() {
           router.push("/platform");
         } else if (role === "CRM_TENANT_ADMIN") {
           router.push("/users");
+        } else if (role === "FIELD_VERIFIER") {
+          router.push("/verifier");
         } else {
           router.push("/");
         }
@@ -95,6 +97,12 @@ export default function LoginPage() {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="font-semibold text-crm-text">Password</label>
+                <Link
+                  href="/forgot-password"
+                  className="text-[11px] text-crm-link hover:underline font-medium"
+                >
+                  Forgot password?
+                </Link>
               </div>
               <input
                 type="password"

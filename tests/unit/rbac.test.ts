@@ -90,6 +90,7 @@ describe("RBAC Permissions Matrix (PRD §3)", () => {
       expect(hasPermission(UserRole.TELECALLER, "visits:record_outcome")).toBe(true);
       expect(hasPermission(UserRole.TELECALLER, "visits:confirm_final")).toBe(true);
       expect(hasPermission(UserRole.TELECALLER, "assignment:assign_sales_agent")).toBe(true);
+      expect(hasPermission(UserRole.TELECALLER, "verification:assign")).toBe(true);
       expect(hasPermission(UserRole.TELECALLER, "verification:submit_report")).toBe(false);
       expect(hasPermission(UserRole.TELECALLER, "verification:review_report")).toBe(false);
     });
@@ -128,6 +129,13 @@ describe("RBAC Permissions Matrix (PRD §3)", () => {
       expect(hasPermission(UserRole.FIELD_VERIFIER, "demand:create")).toBe(false);
       expect(hasPermission(UserRole.FIELD_VERIFIER, "visits:view_assigned")).toBe(false);
       expect(() => assertPermission(verifierContext, "demand:create")).toThrow(ForbiddenError);
+    });
+
+    it("preserves core verification capabilities even if legacy delegatedPermissions lacked verification actions", () => {
+      const legacyDelegated = ["supply:view_assigned", "supply:create", "supply:upload_media"];
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "verification:view_assigned", legacyDelegated)).toBe(true);
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "verification:start_visit", legacyDelegated)).toBe(true);
+      expect(hasPermission(UserRole.FIELD_VERIFIER, "verification:submit_report", legacyDelegated)).toBe(true);
     });
   });
 

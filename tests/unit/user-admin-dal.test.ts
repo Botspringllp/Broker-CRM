@@ -18,6 +18,13 @@ vi.mock("@/server/db", () => {
     },
     account: {
       create: vi.fn(),
+      upsert: vi.fn(),
+    },
+    verification: {
+      create: vi.fn(),
+      findFirst: vi.fn(),
+      delete: vi.fn(),
+      deleteMany: vi.fn(),
     },
     userAuditLog: {
       create: vi.fn(),
@@ -27,6 +34,13 @@ vi.mock("@/server/db", () => {
   };
   return { prisma: mockPrisma };
 });
+
+vi.mock("@/server/email", () => ({
+  sendUserInvitation: vi.fn().mockResolvedValue({ success: true, messageId: "mock-id" }),
+  sendPasswordReset: vi.fn().mockResolvedValue({ success: true, messageId: "mock-id" }),
+  sendRoleChangeNotification: vi.fn().mockResolvedValue({ success: true, messageId: "mock-id" }),
+  sendAccountStatusNotification: vi.fn().mockResolvedValue({ success: true, messageId: "mock-id" }),
+}));
 
 import { prisma } from "@/server/db";
 import {

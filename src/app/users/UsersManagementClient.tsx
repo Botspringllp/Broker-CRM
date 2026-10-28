@@ -14,6 +14,7 @@ import {
   assignTeamLeaderAction,
   assignBrokerAction,
   updateDelegatedPermissionsAction,
+  resendInvitationAction,
 } from "./actions";
 import { useSession } from "@/lib/auth-client";
 
@@ -96,6 +97,17 @@ export const OPERATIONAL_PERMISSION_GROUPS: OperationalPermissionGroup[] = [
     ],
   },
   {
+    category: "Field Verification",
+    permissions: [
+      { action: "verification:view_assigned", label: "View Assigned Verifications", description: "Access physical verification tasks assigned to user" },
+      { action: "verification:start_visit", label: "Start Inspection Visits", description: "Initiate on-site property physical inspection" },
+      { action: "verification:submit_report", label: "Submit Verification Reports", description: "Record 6-point checklist, discrepancies, and upload photos" },
+      { action: "verification:assign", label: "Assign Field Verifiers", description: "Assign active supply properties to field verifiers" },
+      { action: "verification:review_report", label: "Review & Approve Verifications", description: "Review, approve, or reject completed verification reports" },
+      { action: "verification:view_all", label: "View All Verifications", description: "Access all brokerage verification tasks" },
+    ],
+  },
+  {
     category: "Assignments",
     permissions: [
       { action: "assignment:assign_telecaller", label: "Assign Telecallers", description: "Assign properties & leads to telecallers" },
@@ -147,6 +159,23 @@ export function UsersManagementClient({
   // Interactive permission editing for selected user
   const [isEditingPermissions, setIsEditingPermissions] = useState(false);
   const [editingPermissions, setEditingPermissions] = useState<AppAction[]>([]);
+  const [resendingInvite, setResendingInvite] = useState(false);
+
+  const handleResendInvite = async (user: UserViewItem) => {
+    setResendingInvite(true);
+    try {
+      const res = await resendInvitationAction(user.id);
+      if (res.success) {
+        setToastMessage(`Invitation email dispatched to ${user.email}.`);
+      } else {
+        setToastMessage(`Failed to send invite: ${res.error}`);
+      }
+    } catch {
+      setToastMessage("An unexpected error occurred while resending invitation.");
+    } finally {
+      setResendingInvite(false);
+    }
+  };
 
   const actorRole = (session?.user as { role?: UserRole })?.role || currentUserRole;
   const actorId = session?.user?.id || currentUserId;
@@ -256,7 +285,7 @@ export function UsersManagementClient({
     setSelectedUser(created);
     setIsEditingPermissions(false);
     setIsCreateModalOpen(false);
-    setToastMessage(`User ${created.name} successfully created with role ${created.role}.`);
+    setToastMessage(`User ${created.name} successfully created. Invitation email dispatched to ${created.email}.`);
   };
 
   const handleOpenRoleModal = (user: UserViewItem) => {
@@ -680,7 +709,16 @@ export function UsersManagementClient({
                     </div>
 
                     {selectedUser.id !== actorId && (
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          onClick={() => handleResendInvite(selectedUser)}
+                          disabled={resendingInvite || !selectedUser.isActive}
+                          title="Resend account activation email"
+                          className="px-2.5 py-1 text-xs font-semibold rounded border border-crm-border bg-white text-crm-text hover:bg-stone-50 disabled:opacity-50 flex items-center gap-1"
+                        >
+                          <span>✉️</span>
+                          <span>{resendingInvite ? "Sending..." : "Resend Invite"}</span>
+                        </button>
                         <button
                           onClick={() => handleOpenRoleModal(selectedUser)}
                           className="px-2.5 py-1 text-xs font-semibold rounded border border-crm-border bg-white hover:bg-stone-50"

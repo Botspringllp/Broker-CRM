@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { prisma } from "./db";
+import { sendPasswordReset } from "./email";
 
 export const auth = betterAuth({
   database: prismaAdapter(prisma, {
@@ -10,6 +11,14 @@ export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET || "dev-broker-crm-secret-key-32-chars-min!!",
   emailAndPassword: {
     enabled: true,
+    sendResetPassword: async ({ user, token }) => {
+      await sendPasswordReset({
+        email: user.email,
+        name: user.name || "User",
+        token,
+        expiresInMinutes: 60,
+      });
+    },
   },
   user: {
     additionalFields: {
