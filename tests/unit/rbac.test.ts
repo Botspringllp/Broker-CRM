@@ -90,7 +90,7 @@ describe("RBAC Permissions Matrix (PRD §3)", () => {
       expect(hasPermission(UserRole.TELECALLER, "visits:record_outcome")).toBe(true);
       expect(hasPermission(UserRole.TELECALLER, "visits:confirm_final")).toBe(true);
       expect(hasPermission(UserRole.TELECALLER, "assignment:assign_sales_agent")).toBe(true);
-      expect(hasPermission(UserRole.TELECALLER, "verification:assign")).toBe(true);
+      expect(hasPermission(UserRole.TELECALLER, "verification:assign")).toBe(false);
       expect(hasPermission(UserRole.TELECALLER, "verification:submit_report")).toBe(false);
       expect(hasPermission(UserRole.TELECALLER, "verification:review_report")).toBe(false);
     });

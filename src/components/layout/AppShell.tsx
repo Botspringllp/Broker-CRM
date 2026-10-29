@@ -284,18 +284,6 @@ export function AppShell({
             );
           })}
         </nav>
-
-        {/* Sign Out Footer for Desktop Sidebar */}
-        {isAuthenticated && (
-          <div className="p-3 border-t border-crm-border mt-auto">
-            <button
-              onClick={handleSignOut}
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded border border-crm-border bg-stone-50 text-crm-muted hover:text-crm-text hover:bg-stone-100 transition-colors cursor-pointer"
-            >
-              <span>🚪</span> Sign Out
-            </button>
-          </div>
-        )}
       </aside>
 
       {/* Mobile Header Bar */}

@@ -262,49 +262,17 @@ describe("Phase 1 Field Verification - DAL & Security Test Suite", () => {
       expect(result.verification.id).toBe("verif-1");
     });
 
-    it("allows authorized Telecallers to assign properties to field verifiers", async () => {
-      vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
-        id: "prop-1",
-        tenantId: tenantA,
-        isActiveSupply: true,
-        validationStatus: SupplyValidationStatus.VALIDATED,
-        availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
-      } as any);
+    it("strictly prevents Telecallers from assigning properties to field verifiers", async () => {
+      await expect(
+        assignPropertyToFieldVerifier(telecallerContext, {
+          propertyId: "prop-1",
+          verifierId: "user-verifier-1",
+          instructions: "Telecaller scheduled on-site inspection",
+        })
+      ).rejects.toThrow(ForbiddenError);
 
-      vi.mocked(prisma.user.findFirst).mockResolvedValueOnce({
-        id: "user-verifier-1",
-        name: "Amit Verifier",
-        role: UserRole.FIELD_VERIFIER,
-        isActive: true,
-      } as any);
-
-      vi.mocked(prisma.assignment.findFirst).mockResolvedValueOnce(null);
-      vi.mocked(prisma.propertyVerification.findFirst).mockResolvedValueOnce(null);
-
-      vi.mocked(prisma.assignment.create).mockResolvedValueOnce({
-        id: "assign-telecaller-1",
-        tenantId: tenantA,
-        propertyId: "prop-1",
-        assignedUserId: "user-verifier-1",
-        status: AssignmentStatus.ACTIVE,
-      } as any);
-
-      vi.mocked(prisma.propertyVerification.create).mockResolvedValueOnce({
-        id: "verif-telecaller-1",
-        tenantId: tenantA,
-        propertyId: "prop-1",
-        verifierId: "user-verifier-1",
-        status: PropertyVerificationStatus.ASSIGNED,
-      } as any);
-
-      const result = await assignPropertyToFieldVerifier(telecallerContext, {
-        propertyId: "prop-1",
-        verifierId: "user-verifier-1",
-        instructions: "Telecaller scheduled on-site inspection",
-      });
-
-      expect(result.assignment.id).toBe("assign-telecaller-1");
-      expect(result.verification.id).toBe("verif-telecaller-1");
+      expect(prisma.assignment.create).not.toHaveBeenCalled();
+      expect(prisma.propertyVerification.create).not.toHaveBeenCalled();
     });
 
     it("rejects assigning properties that are NOT in the Active Supply Pool", async () => {

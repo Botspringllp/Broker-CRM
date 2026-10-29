@@ -163,7 +163,6 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<AppAction>> = {
     "visits:confirm_final",   // telecaller final review (PRD §8.3)
     "visits:record_feedback",
     "assignment:assign_sales_agent",
-    "verification:assign",
   ]),
 
   [UserRole.FIELD_VERIFIER]: new Set<AppAction>([
