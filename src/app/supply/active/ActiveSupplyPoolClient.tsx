@@ -11,12 +11,18 @@ import {
   listEligibleFieldVerifiersAction,
   assignPropertyToFieldVerifierAction,
 } from "@/app/verifier/actions";
+import {
+  evaluatePropertyMatch,
+  RawRequirementData,
+  RawPropertyData,
+} from "@/lib/matching-engine";
 
 interface ActiveSupplyPoolClientProps {
   initialProperties: Property[];
   initialLeads: Lead[];
   canAssignFieldVerifier?: boolean;
   canReviewVerification?: boolean;
+  canViewMatches?: boolean;
   currentUserRole?: string;
 }
 
@@ -34,6 +40,7 @@ export function ActiveSupplyPoolClient({
   const [preferenceFilter, setPreferenceFilter] = useState("All");
   const [bhkFilter, setBhkFilter] = useState("All");
   const [availabilityFilter, setAvailabilityFilter] = useState("All");
+  const [priceRangeFilter, setPriceRangeFilter] = useState("All");
 
   // Feedback modal state
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
@@ -117,48 +124,72 @@ export function ActiveSupplyPoolClient({
         if (bhkFilter !== "4+" && prop.bedroomCount.toString() !== bhkFilter) return false;
       }
 
+      // Price Range Filter
+      if (priceRangeFilter !== "All") {
+        const p = prop.price;
+        if (priceRangeFilter === "<50L" && p >= 5000000) return false;
+        if (priceRangeFilter === "50L-1.5Cr" && (p < 5000000 || p > 15000000)) return false;
+        if (priceRangeFilter === "1.5Cr-3Cr" && (p < 15000000 || p > 30000000)) return false;
+        if (priceRangeFilter === ">3Cr" && p <= 30000000) return false;
+      }
+
       return true;
     });
-  }, [properties, searchTerm, preferenceFilter, bhkFilter, availabilityFilter]);
+  }, [properties, searchTerm, preferenceFilter, bhkFilter, availabilityFilter, priceRangeFilter]);
 
   // Derived Matching Active Buyers across the entire brokerage tenant for the selected property (PRD §7.2)
+  // Evaluates using authoritative PRD Section 6 Matching Engine
   const matchingBuyers = useMemo(() => {
     if (!selectedProperty) return [];
 
-    return initialLeads.filter((lead) => {
-      // Active leads only
-      if (lead.status !== "Active") return false;
-      // Preference hard check (Sale vs Rent)
-      if (lead.requirements.preference !== selectedProperty.preference) return false;
+    const rawProp: RawPropertyData = {
+      id: selectedProperty.id,
+      preference: selectedProperty.preference.toUpperCase() === "RENT" ? "RENT" : "SALE",
+      price: selectedProperty.price,
+      city: selectedProperty.city,
+      localityName: selectedProperty.locality,
+      propertyType: selectedProperty.propertyType,
+      bedroomCount: selectedProperty.bedroomCount,
+      area: selectedProperty.area,
+      validationStatus: "VALIDATED",
+      availabilityStatus: selectedProperty.availabilityStatus || "AVAILABLE",
+      ownerWillingnessConfirmed: true,
+      isActiveSupply: true,
+    };
 
-      // City match
-      const cityMatches = lead.requirements.city.toLowerCase() === selectedProperty.city.toLowerCase();
-      return cityMatches;
-    }).map((lead) => {
-      // Check if price falls in stated range or midpoint tolerance
-      const minB = lead.requirements.minBudget;
-      const maxB = lead.requirements.maxBudget;
-      const midpoint = (minB + maxB) / 2;
-      const price = selectedProperty.price;
+    const results = [];
+    for (const lead of initialLeads) {
+      if (lead.status !== "Active") continue;
 
-      const inStated = price >= minB && price <= maxB;
-      const inMidpoint = price >= midpoint * 0.75 && price <= midpoint * 1.25;
-      const budgetMatched = inStated || inMidpoint;
-
-      // Score calculation
-      const score = budgetMatched ? 95 : 65;
-
-      return {
-        id: lead.id,
-        name: lead.name,
-        phone: lead.primaryPhone,
-        budgetFormatted: lead.requirements.budgetFormatted,
-        bhkNeeded: lead.requirements.bedroomConfigurations.join(", "),
-        score,
-        visitStatus: lead.siteVisitHistory.length > 0 ? "Visit Scheduled" : "No Visits Yet",
-        interest: "High" as const,
+      const reqData: RawRequirementData = {
+        preference: lead.requirements.preference.toUpperCase() === "RENT" ? "RENT" : "SALE",
+        minBudget: lead.requirements.minBudget,
+        maxBudget: lead.requirements.maxBudget,
+        city: lead.requirements.city,
+        localities: lead.requirements.localities,
+        propertyTypes: lead.requirements.propertyTypes,
+        bedroomConfigurations: lead.requirements.bedroomConfigurations,
+        targetArea: lead.requirements.targetArea,
       };
-    });
+
+      const evaluation = evaluatePropertyMatch(reqData, rawProp);
+      if (evaluation.isEligible) {
+        results.push({
+          id: lead.id,
+          name: lead.name,
+          phone: lead.primaryPhone,
+          budgetFormatted: lead.requirements.budgetFormatted,
+          bhkNeeded: lead.requirements.bedroomConfigurations.join(", "),
+          score: evaluation.score,
+          breakdown: evaluation.breakdown,
+          visitStatus: lead.siteVisitHistory.length > 0 ? "Visit Scheduled" : "No Visits Yet",
+          interest: "High" as const,
+        });
+      }
+    }
+
+    results.sort((a, b) => b.score - a.score);
+    return results;
   }, [selectedProperty, initialLeads]);
 
   const handleOpenFeedback = (buyerName: string) => {
@@ -216,7 +247,7 @@ export function ActiveSupplyPoolClient({
 
         {/* Filter Bar */}
         <div className="p-4 rounded-lg bg-crm-surface border border-crm-border shadow-2xs space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
             {/* Search */}
             <div className="sm:col-span-2">
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
@@ -229,6 +260,24 @@ export function ActiveSupplyPoolClient({
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full px-3 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
               />
+            </div>
+
+            {/* Price Range */}
+            <div>
+              <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                Price Range
+              </label>
+              <select
+                value={priceRangeFilter}
+                onChange={(e) => setPriceRangeFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              >
+                <option value="All">All Prices</option>
+                <option value="<50L">&lt; ₹50 Lakh</option>
+                <option value="50L-1.5Cr">₹50 L – ₹1.5 Cr</option>
+                <option value="1.5Cr-3Cr">₹1.5 Cr – ₹3 Cr</option>
+                <option value=">3Cr">&gt; ₹3 Crore</option>
+              </select>
             </div>
 
             {/* Availability */}
@@ -517,7 +566,13 @@ export function ActiveSupplyPoolClient({
                         >
                           <div className="flex items-center justify-between">
                             <div>
-                              <span className="font-bold text-crm-text text-xs">{buyer.name}</span>
+                              <Link
+                                href={`/matching/${buyer.id}`}
+                                className="font-bold text-crm-text text-xs hover:text-crm-primary hover:underline inline-flex items-center gap-1"
+                              >
+                                <span>{buyer.name}</span>
+                                <span className="text-[10px] text-crm-primary font-normal">🎯 View Match</span>
+                              </Link>
                               <span className="text-crm-muted text-[11px] ml-2">({buyer.phone})</span>
                             </div>
                             <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
@@ -528,6 +583,25 @@ export function ActiveSupplyPoolClient({
                           <div className="text-[11px] text-crm-muted grid grid-cols-2 gap-2">
                             <div>Budget: <strong className="text-crm-text">{buyer.budgetFormatted}</strong></div>
                             <div>Needs: <strong className="text-crm-text">{buyer.bhkNeeded}</strong></div>
+                          </div>
+
+                          {/* Criteria Match Chips */}
+                          <div className="flex flex-wrap gap-1 text-[10px]">
+                            {buyer.breakdown.budget.status === "MATCHED" && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Budget</span>
+                            )}
+                            {buyer.breakdown.locality.status === "MATCHED" && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Locality</span>
+                            )}
+                            {buyer.breakdown.bedroom.status === "MATCHED" && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ BHK</span>
+                            )}
+                            {buyer.breakdown.propertyType.status === "MATCHED" && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Type</span>
+                            )}
+                            {buyer.breakdown.area.status === "MATCHED" && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Area</span>
+                            )}
                           </div>
 
                           {/* Site Visit Status against this Property */}

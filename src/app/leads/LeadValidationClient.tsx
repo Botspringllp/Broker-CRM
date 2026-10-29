@@ -504,6 +504,14 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
 
                           <td className="px-4 py-2.5 text-right space-x-1.5 whitespace-nowrap">
                             <Link
+                              href={`/matching/${lead.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-1 text-xs font-semibold rounded border border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100"
+                              title="Match Against Active Supply Pool"
+                            >
+                              Matches 🎯
+                            </Link>
+                            <Link
                               href={`/leads/${lead.id}`}
                               onClick={(e) => e.stopPropagation()}
                               className="px-2 py-1 text-xs font-medium rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50"
@@ -570,6 +578,12 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                       {isStatusUpdating ? "Activating..." : "✓ Activate Lead"}
                     </button>
                   )}
+                  <Link
+                    href={`/matching/${selectedLead.id}`}
+                    className="px-3 py-1.5 text-xs font-bold rounded border border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100 shadow-2xs flex items-center gap-1"
+                  >
+                    <span>🎯</span> Matches
+                  </Link>
                   <Link
                     href={`/leads/${selectedLead.id}`}
                     className="px-3 py-1.5 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs flex items-center gap-1"
@@ -744,7 +758,13 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                       <span className="font-bold text-crm-text text-[11px]">
                         Top Matching Active Inventory
                       </span>
-                      <span className="text-[10px] text-crm-muted">Ranked by score %</span>
+                      <Link
+                        href={`/matching/${selectedLead.id}`}
+                        className="text-[10px] text-crm-primary font-bold hover:underline inline-flex items-center gap-0.5"
+                      >
+                        <span>Full Matching</span>
+                        <span>↗</span>
+                      </Link>
                     </div>
 
                     {selectedLead.topMatches.length === 0 ? (

@@ -110,6 +110,13 @@ export function LeadDetailsClient({
 
           {/* Action Toolbar */}
           <div className="flex items-center gap-2 flex-wrap">
+            <Link
+              href={`/matching/${lead.id}`}
+              className="px-3.5 py-1.5 text-xs font-bold rounded border border-crm-primary bg-crm-primary/10 text-crm-primary hover:bg-crm-primary hover:text-white transition-all flex items-center gap-1.5 shadow-2xs"
+            >
+              <span>🎯</span> Match Properties
+            </Link>
+
             {canEdit && (
               <Link
                 href={`/leads/${lead.id}/edit`}
@@ -438,6 +445,31 @@ export function LeadDetailsClient({
                     <span>📞</span> Open Qualification Workspace
                   </Link>
                 </div>
+              </div>
+            </div>
+
+            {/* Card: Active Supply Matching (PRD §6) */}
+            <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
+              <div className="px-5 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
+                <h2 className="text-xs font-bold text-crm-text uppercase tracking-wider">
+                  Property Matching (PRD §6)
+                </h2>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 font-bold">
+                  Active Supply
+                </span>
+              </div>
+
+              <div className="p-5 space-y-3 text-xs">
+                <p className="text-crm-muted text-[11px] leading-relaxed">
+                  Evaluate this buyer against validated Active Supply Pool properties using PRD Section 6 hard gates and 6-criteria scoring.
+                </p>
+
+                <Link
+                  href={`/matching/${lead.id}`}
+                  className="w-full py-2.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs text-center flex items-center justify-center gap-1.5 transition-all"
+                >
+                  <span>🎯</span> Open Matching Workspace ↗
+                </Link>
               </div>
             </div>
 

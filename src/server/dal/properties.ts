@@ -157,7 +157,20 @@ export async function listProperties(
   if (filters?.validationStatus) where.validationStatus = filters.validationStatus;
   if (filters?.availabilityStatus) where.availabilityStatus = filters.availabilityStatus;
   if (filters?.preference) where.preference = filters.preference;
-  if (typeof filters?.isActiveSupply === "boolean") where.isActiveSupply = filters.isActiveSupply;
+  if (typeof filters?.isActiveSupply === "boolean") {
+    where.isActiveSupply = filters.isActiveSupply;
+    if (filters.isActiveSupply === true) {
+      // Authoritative Active Supply Eligibility (PRD §4.8 & §7.1):
+      // Must be Validated, Available, and Owner Willingness Confirmed
+      if (!filters.validationStatus) {
+        where.validationStatus = SupplyValidationStatus.VALIDATED;
+      }
+      if (!filters.availabilityStatus) {
+        where.availabilityStatus = PropertyAvailabilityStatus.AVAILABLE;
+      }
+      where.ownerWillingnessConfirmed = true;
+    }
+  }
 
   if (filters?.searchTerm) {
     const searchFilter = [

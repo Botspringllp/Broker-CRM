@@ -68,6 +68,11 @@ async function ActiveSupplyPoolData() {
     "verification:review_report",
     context.user.delegatedPermissions
   );
+  const canViewMatches = hasPermission(
+    context.role,
+    "matching:view_matches",
+    context.user.delegatedPermissions
+  );
 
   return (
     <ActiveSupplyPoolClient
@@ -75,6 +80,7 @@ async function ActiveSupplyPoolData() {
       initialLeads={leads}
       canAssignFieldVerifier={canAssignFieldVerifier}
       canReviewVerification={canReviewVerification}
+      canViewMatches={canViewMatches}
       currentUserRole={context.role}
     />
   );
