@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
@@ -23,6 +24,9 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
   const [statusFilter, setStatusFilter] = useState("All");
   const [preferenceFilter, setPreferenceFilter] = useState("All");
   const [bhkFilter, setBhkFilter] = useState("All");
+  const [budgetFilter, setBudgetFilter] = useState("All");
+  const [telecallerFilter, setTelecallerFilter] = useState("All");
+  const [callbackFilter, setCallbackFilter] = useState("All");
 
   // Call Logging state
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
@@ -54,6 +58,17 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
   >(["APARTMENT"]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Extract distinct telecallers for the filter
+  const distinctTelecallers = useMemo(() => {
+    const set = new Set<string>();
+    leads.forEach((l) => {
+      if (l.assignedTelecaller && l.assignedTelecaller !== "Unassigned") {
+        set.add(l.assignedTelecaller);
+      }
+    });
+    return Array.from(set).sort();
+  }, [leads]);
 
   // Filtered Leads
   const filteredLeads = useMemo(() => {
@@ -87,9 +102,29 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
         if (!matchesBhk) return false;
       }
 
+      // Budget Filter
+      if (budgetFilter !== "All") {
+        const maxB = lead.requirements.maxBudget;
+        if (budgetFilter === "<50L" && maxB > 5000000) return false;
+        if (budgetFilter === "50L-1.5Cr" && (maxB < 5000000 || maxB > 15000000)) return false;
+        if (budgetFilter === "1.5Cr-3Cr" && (maxB < 15000000 || maxB > 30000000)) return false;
+        if (budgetFilter === ">3Cr" && maxB <= 30000000) return false;
+      }
+
+      // Telecaller Filter
+      if (telecallerFilter !== "All" && lead.assignedTelecaller !== telecallerFilter) {
+        return false;
+      }
+
+      // Callback Filter
+      if (callbackFilter === "HasCallback") {
+        const hasCb = lead.callHistory.some((c) => Boolean(c.callbackDate));
+        if (!hasCb) return false;
+      }
+
       return true;
     });
-  }, [leads, searchTerm, statusFilter, preferenceFilter, bhkFilter]);
+  }, [leads, searchTerm, statusFilter, preferenceFilter, bhkFilter, budgetFilter, telecallerFilter, callbackFilter]);
 
   const handleOpenCallModal = () => {
     if (!selectedLead) return;
@@ -249,21 +284,18 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
             >
               📥 Ingest Portal Leads
             </button>
-            <button
-              onClick={() => {
-                setCreateLeadError(null);
-                setIsCreateModalOpen(true);
-              }}
-              className="px-3 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer"
+            <Link
+              href="/leads/new"
+              className="px-3.5 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer flex items-center gap-1"
             >
               + Add Lead
-            </button>
+            </Link>
           </div>
         </div>
 
         {/* Filter Controls Bar */}
         <div className="p-4 rounded-lg bg-crm-surface border border-crm-border shadow-2xs space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
             {/* Search Input */}
             <div className="sm:col-span-2">
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
@@ -281,14 +313,14 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
             {/* Status Filter */}
             <div>
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
-                Lead Status (PRD §5.6)
+                Lead Status
               </label>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
               >
-                <option value="All">All Lead Statuses</option>
+                <option value="All">All Statuses</option>
                 <option value="Not Yet Validated">Not Yet Validated</option>
                 <option value="Active">Active (Qualified)</option>
                 <option value="Inactive">Inactive (Dead / 3 Attempts)</option>
@@ -298,7 +330,7 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
             {/* Preference */}
             <div>
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
-                Preference (Sale / Rent)
+                Preference
               </label>
               <select
                 value={preferenceFilter}
@@ -322,9 +354,62 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                 className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
               >
                 <option value="All">Any BHK</option>
+                <option value="1 BHK">1 BHK</option>
                 <option value="2 BHK">2 BHK</option>
                 <option value="3 BHK">3 BHK</option>
                 <option value="4 BHK">4 BHK</option>
+              </select>
+            </div>
+
+            {/* Budget Range Filter */}
+            <div>
+              <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                Max Budget Scope
+              </label>
+              <select
+                value={budgetFilter}
+                onChange={(e) => setBudgetFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              >
+                <option value="All">All Budgets</option>
+                <option value="<50L">&lt; ₹50 Lakh</option>
+                <option value="50L-1.5Cr">₹50 L – ₹1.5 Cr</option>
+                <option value="1.5Cr-3Cr">₹1.5 Cr – ₹3 Cr</option>
+                <option value=">3Cr">&gt; ₹3 Crore</option>
+              </select>
+            </div>
+
+            {/* Telecaller Filter */}
+            <div>
+              <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                Assigned Telecaller
+              </label>
+              <select
+                value={telecallerFilter}
+                onChange={(e) => setTelecallerFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              >
+                <option value="All">All Callers</option>
+                {distinctTelecallers.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Callback Filter */}
+            <div>
+              <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                Follow-up / Callback
+              </label>
+              <select
+                value={callbackFilter}
+                onChange={(e) => setCallbackFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              >
+                <option value="All">All Leads</option>
+                <option value="HasCallback">⏰ Callback Scheduled</option>
               </select>
             </div>
           </div>
@@ -382,7 +467,13 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                           }`}
                         >
                           <td className="px-4 py-2.5">
-                            <div className="font-bold text-crm-text">{lead.name}</div>
+                            <Link
+                              href={`/leads/${lead.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="font-bold text-crm-text hover:text-crm-primary hover:underline block"
+                            >
+                              {lead.name}
+                            </Link>
                             <div className="text-[11px] text-crm-muted">{lead.primaryPhone}</div>
                           </td>
 
@@ -411,17 +502,31 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                             <StatusBadge status={lead.currentDisposition} />
                           </td>
 
-                          <td className="px-4 py-2.5 text-right">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedLead(lead);
-                                handleOpenCallModal();
-                              }}
-                              className="px-2.5 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs"
+                          <td className="px-4 py-2.5 text-right space-x-1.5 whitespace-nowrap">
+                            <Link
+                              href={`/leads/${lead.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-1 text-xs font-medium rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50"
+                              title="View Full Profile"
+                            >
+                              View
+                            </Link>
+                            <Link
+                              href={`/leads/${lead.id}/edit`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2 py-1 text-xs font-medium rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50"
+                              title="Edit Lead"
+                            >
+                              Edit
+                            </Link>
+                            <Link
+                              href={`/leads/${lead.id}/qualify`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2.5 py-1 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs inline-block"
+                              title="Open Qualification Call Workspace"
                             >
                               Call
-                            </button>
+                            </Link>
                           </td>
                         </tr>
                       );
@@ -455,22 +560,41 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   {selectedLead.status === "Not Yet Validated" && (
                     <button
                       onClick={handleMarkLeadActive}
                       disabled={isStatusUpdating}
                       className="px-3 py-1.5 text-xs font-bold rounded bg-crm-success text-white hover:bg-emerald-700 shadow-2xs disabled:opacity-50 cursor-pointer"
                     >
-                      {isStatusUpdating ? "Activating..." : "✓ Activate Lead (Confirm Search)"}
+                      {isStatusUpdating ? "Activating..." : "✓ Activate Lead"}
                     </button>
                   )}
+                  <Link
+                    href={`/leads/${selectedLead.id}`}
+                    className="px-3 py-1.5 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs flex items-center gap-1"
+                  >
+                    <span>↗</span> Details
+                  </Link>
+                  <Link
+                    href={`/leads/${selectedLead.id}/edit`}
+                    className="px-3 py-1.5 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs flex items-center gap-1"
+                  >
+                    <span>✏️</span> Edit
+                  </Link>
                   <button
                     onClick={handleOpenCallModal}
+                    className="px-2.5 py-1.5 text-xs font-semibold rounded border border-crm-border bg-stone-50 text-crm-text hover:bg-stone-100 shadow-2xs flex items-center gap-1 cursor-pointer"
+                    title="Quick log call directly without opening new page"
+                  >
+                    <span>⚡</span> Quick Call
+                  </button>
+                  <Link
+                    href={`/leads/${selectedLead.id}/qualify`}
                     className="px-3.5 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs flex items-center gap-1.5"
                   >
-                    <span>📞</span> Initiate / Record Call
-                  </button>
+                    <span>📞</span> Open Call Workspace
+                  </Link>
                 </div>
               </div>
 
@@ -570,13 +694,13 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                     </div>
                   </div>
 
-                  {/* Quick Action Button */}
-                  <button
-                    onClick={handleOpenCallModal}
+                  {/* Quick Action Link to Dedicated Workspace */}
+                  <Link
+                    href={`/leads/${selectedLead.id}/qualify`}
                     className="w-full py-2 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs text-center flex items-center justify-center gap-2"
                   >
-                    <span>📞</span> Log Qualification Call
-                  </button>
+                    <span>📞</span> Open Qualification Call Workspace
+                  </Link>
 
                   {/* Call Attempt History Timeline */}
                   <div className="space-y-2.5">

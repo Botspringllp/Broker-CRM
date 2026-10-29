@@ -25,6 +25,25 @@ export interface CreateLeadData {
   assignedTelecallerId?: string;
 }
 
+export interface EditLeadData {
+  id: string;
+  name: string;
+  primaryPhone: string;
+  alternatePhone?: string | null;
+  email?: string | null;
+  originalSource: string;
+  minBudget: number;
+  maxBudget: number;
+  city: string;
+  preference: "SALE" | "RENT";
+  bedroomConfigurations?: string[];
+  propertyTypes?: ("APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT")[];
+  targetArea?: number | null;
+  areaType?: ("CARPET" | "BUILT_UP" | "SUPER_BUILT_UP") | null;
+  societies?: string[];
+  assignedTelecallerId?: string | null;
+}
+
 export interface LogLeadCallInput {
   leadId: string;
   disposition: LeadCallingDisposition | string;
@@ -387,5 +406,117 @@ export async function updateLead(
     },
     data,
     include: FULL_LEAD_INCLUDE,
+  });
+}
+
+/**
+ * Edits a lead and its requirements atomically.
+ * Strictly checks tenant scope and telecaller scoping via getLeadById.
+ * Reassignment of telecaller is permitted only for users with "assignment:assign_telecaller".
+ */
+export async function editLead(context: TenantContext, data: EditLeadData) {
+  if (!data.id?.trim()) {
+    throw new ValidationError("Lead ID is required.");
+  }
+
+  // Enforces tenant scope, permissions, and telecaller assignment via getLeadById
+  const lead = await getLeadById(context, data.id);
+
+  if (!data.name?.trim()) {
+    throw new ValidationError("Prospect name is required.");
+  }
+
+  const cleanedPhone = data.primaryPhone.replace(/\D/g, "");
+  if (cleanedPhone.length < 10) {
+    throw new ValidationError("Valid 10-digit primary phone number is required.");
+  }
+
+  if (data.minBudget < 0 || data.maxBudget < 0) {
+    throw new ValidationError("Budget values cannot be negative.");
+  }
+
+  if (data.maxBudget < data.minBudget) {
+    throw new ValidationError("Maximum budget cannot be less than minimum budget.");
+  }
+
+  if (!data.city?.trim()) {
+    throw new ValidationError("Target city is required.");
+  }
+
+  if (!data.originalSource?.trim()) {
+    throw new ValidationError("Inquiry source is required.");
+  }
+
+  let assignedTelecallerId = lead.assignedTelecallerId;
+  const canAssignTelecaller = hasPermission(
+    context.role,
+    "assignment:assign_telecaller",
+    context.user?.delegatedPermissions || context.delegatedPermissions
+  );
+
+  if (canAssignTelecaller && data.assignedTelecallerId !== undefined) {
+    assignedTelecallerId = data.assignedTelecallerId || null;
+  }
+
+  const normalizedPhone =
+    cleanedPhone.length > 10 && cleanedPhone.startsWith("91")
+      ? cleanedPhone.slice(-10)
+      : cleanedPhone;
+
+  return prisma.$transaction(async (tx) => {
+    await tx.lead.update({
+      where: {
+        id_tenantId: {
+          id: lead.id,
+          tenantId: context.tenantId,
+        },
+      },
+      data: {
+        name: data.name.trim(),
+        primaryPhone: normalizedPhone,
+        alternatePhone: data.alternatePhone?.trim() || null,
+        email: data.email?.trim().toLowerCase() || null,
+        originalSource: data.originalSource.trim(),
+        assignedTelecallerId,
+      },
+    });
+
+    await tx.leadRequirement.upsert({
+      where: { leadId: lead.id },
+      create: {
+        tenantId: context.tenantId,
+        leadId: lead.id,
+        minBudget: new Prisma.Decimal(data.minBudget),
+        maxBudget: new Prisma.Decimal(data.maxBudget),
+        city: data.city.trim(),
+        preference: data.preference,
+        bedroomConfigurations: data.bedroomConfigurations ?? [],
+        propertyTypes: data.propertyTypes ?? [],
+        societies: data.societies ?? [],
+        targetArea: data.targetArea ? new Prisma.Decimal(data.targetArea) : null,
+        areaType: data.areaType ?? null,
+      },
+      update: {
+        minBudget: new Prisma.Decimal(data.minBudget),
+        maxBudget: new Prisma.Decimal(data.maxBudget),
+        city: data.city.trim(),
+        preference: data.preference,
+        bedroomConfigurations: data.bedroomConfigurations ?? [],
+        propertyTypes: data.propertyTypes ?? [],
+        societies: data.societies ?? [],
+        targetArea: data.targetArea ? new Prisma.Decimal(data.targetArea) : null,
+        areaType: data.areaType ?? null,
+      },
+    });
+
+    return tx.lead.findUniqueOrThrow({
+      where: {
+        id_tenantId: {
+          id: lead.id,
+          tenantId: context.tenantId,
+        },
+      },
+      include: FULL_LEAD_INCLUDE,
+    });
   });
 }
