@@ -358,7 +358,7 @@ export async function getMatchingLeadsForProperty(
       );
 
       matches.push({
-        lead: mapPrismaLeadToView(dbLead as any),
+        lead: mapPrismaLeadToView(dbLead as unknown as Parameters<typeof mapPrismaLeadToView>[0]),
         score: evaluation.score,
         isEligible: true,
         criteriaMatchedCount: evaluation.criteriaMatchedCount,
@@ -374,7 +374,7 @@ export async function getMatchingLeadsForProperty(
   matches.sort((a, b) => b.score - a.score);
 
   return {
-    property: mapPrismaPropertyToView(property as any),
+    property: mapPrismaPropertyToView(property as unknown as Parameters<typeof mapPrismaPropertyToView>[0]),
     matches,
     totalActiveLeadsCount,
   };

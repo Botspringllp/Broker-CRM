@@ -587,19 +587,19 @@ export function ActiveSupplyPoolClient({
 
                           {/* Criteria Match Chips */}
                           <div className="flex flex-wrap gap-1 text-[10px]">
-                            {buyer.breakdown.budget.status === "MATCHED" && (
+                            {buyer.breakdown.budget.matched && (
                               <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Budget</span>
                             )}
-                            {buyer.breakdown.locality.status === "MATCHED" && (
+                            {buyer.breakdown.locality.matched && (
                               <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Locality</span>
                             )}
-                            {buyer.breakdown.bedroom.status === "MATCHED" && (
+                            {buyer.breakdown.bedroomCount.matched && (
                               <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ BHK</span>
                             )}
-                            {buyer.breakdown.propertyType.status === "MATCHED" && (
+                            {buyer.breakdown.propertyType.matched && (
                               <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Type</span>
                             )}
-                            {buyer.breakdown.area.status === "MATCHED" && (
+                            {buyer.breakdown.area.matched && (
                               <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">✓ Area</span>
                             )}
                           </div>
