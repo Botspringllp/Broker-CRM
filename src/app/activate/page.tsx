@@ -4,6 +4,7 @@ import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { verifyInvitationTokenAction, activateUserAccountAction } from "../users/actions";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 
 interface InvitedUserInfo {
   id: string;
@@ -179,14 +180,13 @@ function ActivateAccountForm() {
             <label className="block font-semibold text-crm-text mb-1">
               Create Password *
             </label>
-            <input
-              type="password"
+            <PasswordInput
               required
               minLength={8}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+              className="px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
             />
             <span className="text-[10px] text-crm-muted mt-0.5 block">Minimum 8 characters</span>
           </div>
@@ -195,14 +195,13 @@ function ActivateAccountForm() {
             <label className="block font-semibold text-crm-text mb-1">
               Confirm Password *
             </label>
-            <input
-              type="password"
+            <PasswordInput
               required
               minLength={8}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+              className="px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
             />
           </div>
 

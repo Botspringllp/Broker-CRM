@@ -4,6 +4,7 @@ import React, { useState, useMemo } from "react";
 import { AppShell } from "@/components/layout/AppShell";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { provisionTenantAction, toggleTenantStatusAction } from "./actions";
 
 export interface TenantViewItem {
@@ -461,14 +462,13 @@ export function PlatformAdminClient({ initialTenants }: PlatformAdminClientProps
                       <label className="block text-xs font-semibold text-[#1E2A32] mb-1">
                         Initial Login Password *
                       </label>
-                      <input
-                        type="password"
+                      <PasswordInput
                         required
                         minLength={8}
                         placeholder="Min 8 characters"
                         value={formData.adminPassword}
                         onChange={(e) => setFormData({ ...formData, adminPassword: e.target.value })}
-                        className="w-full px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
+                        className="px-3 py-1.5 border border-[#E4DFD5] rounded-md text-sm text-[#1E2A32] focus:outline-none focus:border-[#1F6F6B]"
                       />
                     </div>
                   </div>

@@ -37,6 +37,8 @@ export function AppShell({
   const isPlatformSuperAdmin = rawRole === "PLATFORM_SUPER_ADMIN";
   const isTenantAdmin = rawRole === "CRM_TENANT_ADMIN";
   const isFieldVerifier = rawRole === "FIELD_VERIFIER";
+  const isFieldSalesAgent = rawRole === "FIELD_SALES_AGENT";
+  const isTelecaller = rawRole === "TELECALLER";
   const isBrokerOrTL = rawRole === "BROKER_OWNER" || rawRole === "TEAM_LEADER";
 
   // Build role-tailored navigation items
@@ -106,6 +108,21 @@ export function AppShell({
       ];
     }
 
+    if (isFieldSalesAgent) {
+      return [
+        {
+          name: "My Assigned Site Visits",
+          href: "/visits",
+          exact: false,
+          icon: (
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          ),
+        },
+      ];
+    }
+
     const items = [
       {
         name: "Overview",
@@ -137,6 +154,22 @@ export function AppShell({
           </svg>
         ),
       },
+    ];
+
+    if (isBrokerOrTL) {
+      items.push({
+        name: "Verification Reviews",
+        href: "/supply/verifications",
+        exact: false,
+        icon: (
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        ),
+      });
+    }
+
+    items.push(
       {
         name: "Lead Validation",
         href: "/leads",
@@ -156,10 +189,10 @@ export function AppShell({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
           </svg>
         ),
-      },
-    ];
+      }
+    );
 
-    if (isBrokerOrTL || !isAuthenticated) {
+    if (isBrokerOrTL || (!isAuthenticated && !isTelecaller && !isFieldSalesAgent)) {
       items.push({
         name: "Team & Permissions",
         href: "/users",
@@ -173,7 +206,15 @@ export function AppShell({
     }
 
     return items;
-  }, [isPlatformSuperAdmin, isTenantAdmin, isFieldVerifier, isBrokerOrTL, isAuthenticated]);
+  }, [
+    isPlatformSuperAdmin,
+    isTenantAdmin,
+    isFieldVerifier,
+    isFieldSalesAgent,
+    isTelecaller,
+    isBrokerOrTL,
+    isAuthenticated,
+  ]);
 
   const isActive = (item: typeof navItems[0]) => {
     if (item.exact) {
@@ -243,6 +284,18 @@ export function AppShell({
             );
           })}
         </nav>
+
+        {/* Sign Out Footer for Desktop Sidebar */}
+        {isAuthenticated && (
+          <div className="p-3 border-t border-crm-border mt-auto">
+            <button
+              onClick={handleSignOut}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold rounded border border-crm-border bg-stone-50 text-crm-muted hover:text-crm-text hover:bg-stone-100 transition-colors cursor-pointer"
+            >
+              <span>🚪</span> Sign Out
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Mobile Header Bar */}
@@ -286,6 +339,16 @@ export function AppShell({
               </Link>
             );
           })}
+          {isAuthenticated && (
+            <div className="pt-2 border-t border-crm-border mt-2">
+              <button
+                onClick={handleSignOut}
+                className="w-full text-left px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 rounded cursor-pointer"
+              >
+                🚪 Sign Out
+              </button>
+            </div>
+          )}
         </div>
       )}
 

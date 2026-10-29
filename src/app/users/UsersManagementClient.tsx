@@ -1,10 +1,12 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { UserRole } from "@prisma/client";
 import { AppAction, ROLE_PERMISSIONS, canAssignRole } from "@/server/permissions";
 import {
@@ -218,6 +220,7 @@ export function UsersManagementClient({
     return teamLeaders;
   }, [teamLeaders, actorRole, actorId]);
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleOpenCreateModal = () => {
     setNewName("");
     setNewEmail("");
@@ -463,12 +466,12 @@ export function UsersManagementClient({
 
           <div className="flex items-center gap-2">
             {assignableRoles.length > 0 && (
-              <button
-                onClick={handleOpenCreateModal}
+              <Link
+                href="/users/new"
                 className="px-3 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs flex items-center gap-1.5"
               >
                 <span>+</span> Add / Invite User
-              </button>
+              </Link>
             )}
           </div>
         </div>
@@ -649,19 +652,26 @@ export function UsersManagementClient({
 
                           {/* Actions */}
                           <td className="px-4 py-3 text-right">
-                            <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <Link
+                                href={`/users/${user.id}/edit`}
+                                title="Edit User Profile & Role"
+                                className="px-2 py-1 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs inline-flex items-center gap-1"
+                              >
+                                <span>✏️</span> Edit
+                              </Link>
                               {!isSelf && (
                                 <>
                                   <button
                                     onClick={() => handleOpenRoleModal(user)}
-                                    title="Change User Role"
+                                    title="Quick Change Role"
                                     className="p-1 rounded text-crm-muted hover:text-crm-text hover:bg-stone-200/50"
                                   >
                                     ⚙️
                                   </button>
                                   <button
                                     onClick={() => handleOpenTeamModal(user)}
-                                    title="Assign Team Hierarchy"
+                                    title="Quick Team Assignment"
                                     className="p-1 rounded text-crm-muted hover:text-crm-text hover:bg-stone-200/50"
                                   >
                                     👥
@@ -710,6 +720,12 @@ export function UsersManagementClient({
 
                     {selectedUser.id !== actorId && (
                       <div className="flex items-center gap-1.5 flex-wrap">
+                        <Link
+                          href={`/users/${selectedUser.id}/edit`}
+                          className="px-2.5 py-1 text-xs font-semibold rounded border border-crm-primary bg-crm-primary/10 text-crm-primary hover:bg-crm-primary hover:text-white transition-colors"
+                        >
+                          Edit Profile ↗
+                        </Link>
                         <button
                           onClick={() => handleResendInvite(selectedUser)}
                           disabled={resendingInvite || !selectedUser.isActive}
@@ -992,14 +1008,13 @@ export function UsersManagementClient({
 
             <div>
               <label className="block font-semibold text-crm-text mb-1">Initial Password</label>
-              <input
-                type="password"
+              <PasswordInput
                 required
                 minLength={8}
                 placeholder="Minimum 8 characters"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                className="px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
               />
             </div>
 

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
@@ -322,12 +323,13 @@ export function SiteVisitsClient({
                     <th className="px-4 py-3">Buyer & Contact</th>
                     <th className="px-3 py-3">Schedule Date & Slot</th>
                     <th className="px-3 py-3">Status</th>
+                    <th className="px-3 py-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-crm-border">
                   {visits.length === 0 ? (
                     <tr>
-                      <td colSpan={3} className="px-4 py-12 text-center text-crm-muted">
+                      <td colSpan={4} className="px-4 py-12 text-center text-crm-muted">
                         <div className="max-w-sm mx-auto space-y-1">
                           <p className="font-semibold text-crm-text text-sm">No site visits scheduled</p>
                           <p className="text-xs text-crm-muted">
@@ -338,7 +340,7 @@ export function SiteVisitsClient({
                     </tr>
                   ) : filteredVisits.length === 0 ? (
                     <tr>
-                      <td colSpan={3} className="px-4 py-8 text-center text-crm-muted">
+                      <td colSpan={4} className="px-4 py-8 text-center text-crm-muted">
                         No site visits found matching current filter criteria.
                       </td>
                     </tr>
@@ -371,6 +373,16 @@ export function SiteVisitsClient({
                           <td className="px-3 py-3">
                             <StatusBadge status={v.status} />
                           </td>
+
+                          <td className="px-3 py-3 text-right whitespace-nowrap">
+                            <Link
+                              href={`/visits/${v.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="px-2.5 py-1 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs inline-block"
+                            >
+                              Details ↗
+                            </Link>
+                          </td>
                         </tr>
                       );
                     })
@@ -399,9 +411,15 @@ export function SiteVisitsClient({
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <Link
+                    href={`/visits/${selectedVisit.id}`}
+                    className="px-3 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs flex items-center gap-1"
+                  >
+                    <span>↗</span> Open Details Page
+                  </Link>
                   <button
                     onClick={() => setSelectedVisit(null)}
-                    className="text-crm-muted hover:text-crm-text p-1 text-sm"
+                    className="text-crm-muted hover:text-crm-text p-1 text-sm cursor-pointer"
                     aria-label="Close Inspector"
                   >
                     ✕

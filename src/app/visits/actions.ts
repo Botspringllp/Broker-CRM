@@ -6,8 +6,14 @@ import {
   recordVisitItemOutcome,
   confirmSiteVisit,
   getSiteVisitById,
+  rescheduleSiteVisit,
+  reassignSiteVisitAgent,
+  cancelSiteVisit,
   CreateSiteVisitInput,
   RecordVisitItemOutcomeInput,
+  RescheduleSiteVisitInput,
+  ReassignSiteVisitAgentInput,
+  CancelSiteVisitInput,
 } from "@/server/dal/visits";
 import { mapPrismaSiteVisitToView } from "@/server/dal/mappers";
 import { revalidatePath } from "next/cache";
@@ -85,6 +91,66 @@ export async function getSiteVisitAction(visitId: string) {
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to retrieve site visit.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
+export async function rescheduleSiteVisitAction(input: RescheduleSiteVisitInput) {
+  try {
+    const context = await requireTenantContext();
+    const updated = await rescheduleSiteVisit(context, input);
+    revalidatePath("/visits");
+    revalidatePath(`/visits/${input.visitId}`);
+    revalidatePath("/");
+    return {
+      success: true as const,
+      visit: mapPrismaSiteVisitToView(updated),
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to reschedule site visit.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
+export async function reassignSiteVisitAgentAction(input: ReassignSiteVisitAgentInput) {
+  try {
+    const context = await requireTenantContext();
+    const updated = await reassignSiteVisitAgent(context, input);
+    revalidatePath("/visits");
+    revalidatePath(`/visits/${input.visitId}`);
+    revalidatePath("/");
+    return {
+      success: true as const,
+      visit: mapPrismaSiteVisitToView(updated),
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to reassign sales agent.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
+export async function cancelSiteVisitAction(input: CancelSiteVisitInput) {
+  try {
+    const context = await requireTenantContext();
+    const updated = await cancelSiteVisit(context, input);
+    revalidatePath("/visits");
+    revalidatePath(`/visits/${input.visitId}`);
+    revalidatePath("/");
+    return {
+      success: true as const,
+      visit: mapPrismaSiteVisitToView(updated),
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to cancel site visit.";
     return {
       success: false as const,
       error: message,

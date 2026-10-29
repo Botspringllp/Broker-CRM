@@ -4,6 +4,7 @@ import React, { useState, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { resetPasswordAction } from "../login/actions";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 
 function ResetPasswordForm() {
   const searchParams = useSearchParams();
@@ -98,14 +99,13 @@ function ResetPasswordForm() {
             <label className="block font-semibold text-crm-text mb-1">
               New Password
             </label>
-            <input
-              type="password"
+            <PasswordInput
               required
               minLength={8}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+              className="px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
             />
           </div>
 
@@ -113,14 +113,13 @@ function ResetPasswordForm() {
             <label className="block font-semibold text-crm-text mb-1">
               Confirm New Password
             </label>
-            <input
-              type="password"
+            <PasswordInput
               required
               minLength={8}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               placeholder="••••••••••••"
-              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+              className="px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
             />
           </div>
 

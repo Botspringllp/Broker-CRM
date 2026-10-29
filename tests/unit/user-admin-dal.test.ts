@@ -30,6 +30,9 @@ vi.mock("@/server/db", () => {
       create: vi.fn(),
       findMany: vi.fn(),
     },
+    session: {
+      deleteMany: vi.fn(),
+    },
     $transaction: vi.fn(async (cb: any) => cb(mockPrisma)),
   };
   return { prisma: mockPrisma };
@@ -53,6 +56,7 @@ import {
   assignUserBroker,
   updateDelegatedPermissions,
   listUserAuditLogs,
+  updateTenantUserProfile,
 } from "@/server/dal/users";
 
 describe("User Administration & Delegation DAL (PRD §3)", () => {
@@ -694,6 +698,168 @@ describe("User Administration & Delegation DAL (PRD §3)", () => {
 
       await expect(listUserAuditLogs(telecallerContext)).rejects.toThrow(ForbiddenError);
       expect(prisma.userAuditLog.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("updateTenantUserProfile", () => {
+    it("successfully updates name and phone for a subordinate user", async () => {
+      vi.mocked(prisma.user.findFirst).mockResolvedValueOnce({
+        id: "subordinate-1",
+        tenantId: "tenant-apex",
+        name: "Old Name",
+        phone: "+919999999990",
+        role: UserRole.TELECALLER,
+        isActive: true,
+        brokerId: "user-owner-1",
+      } as any);
+
+      vi.mocked(prisma.user.update).mockResolvedValueOnce({
+        id: "subordinate-1",
+        tenantId: "tenant-apex",
+        name: "New Name",
+        email: "sub@apex.in",
+        phone: "+919999999999",
+        role: UserRole.TELECALLER,
+        isActive: true,
+      } as any);
+
+      const result = await updateTenantUserProfile(ownerContext, "subordinate-1", {
+        name: "New Name",
+        phone: "+919999999999",
+      });
+
+      expect(result.name).toBe("New Name");
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "subordinate-1" },
+          data: expect.objectContaining({
+            name: "New Name",
+            phone: "+919999999999",
+          }),
+        })
+      );
+      expect(prisma.userAuditLog.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            action: "PROFILE_UPDATED",
+            targetUserId: "subordinate-1",
+            actorUserId: "user-owner-1",
+          }),
+        })
+      );
+    });
+
+    it("rejects unauthorized user role assignments (e.g. Broker Owner assigning PLATFORM_SUPER_ADMIN)", async () => {
+      vi.mocked(prisma.user.findFirst).mockResolvedValueOnce({
+        id: "subordinate-1",
+        tenantId: "tenant-apex",
+        role: UserRole.TELECALLER,
+        isActive: true,
+        brokerId: "user-owner-1",
+      } as any);
+
+      await expect(
+        updateTenantUserProfile(ownerContext, "subordinate-1", {
+          role: UserRole.PLATFORM_SUPER_ADMIN,
+        })
+      ).rejects.toThrow(ForbiddenError);
+
+      expect(prisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects administering a user outside authority", async () => {
+      // Telecaller has no admin:manage_users permission
+      const telecallerContext: TenantContext = {
+        userId: "tc-1",
+        tenantId: "tenant-apex",
+        role: UserRole.TELECALLER,
+        user: {
+          id: "tc-1",
+          email: "tc@apex.in",
+          name: "Telecaller",
+          role: UserRole.TELECALLER,
+          tenantId: "tenant-apex",
+          isActive: true,
+        },
+        session: { id: "sess", token: "tok", expiresAt: new Date() },
+      };
+
+      await expect(
+        updateTenantUserProfile(telecallerContext, "subordinate-1", {
+          name: "Hacked",
+        })
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it("invalidates user sessions when deactivating user", async () => {
+      vi.mocked(prisma.user.findFirst).mockResolvedValueOnce({
+        id: "subordinate-1",
+        tenantId: "tenant-apex",
+        name: "Target User",
+        email: "target@apex.in",
+        role: UserRole.TELECALLER,
+        isActive: true,
+        brokerId: "user-owner-1",
+      } as any);
+
+      vi.mocked(prisma.user.update).mockResolvedValueOnce({
+        id: "subordinate-1",
+        tenantId: "tenant-apex",
+        name: "Target User",
+        email: "target@apex.in",
+        role: UserRole.TELECALLER,
+        isActive: false,
+      } as any);
+
+      await updateTenantUserProfile(ownerContext, "subordinate-1", {
+        isActive: false,
+      });
+
+      expect(prisma.session.deleteMany).toHaveBeenCalledWith({
+        where: { userId: "subordinate-1" },
+      });
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            isActive: false,
+          }),
+        })
+      );
+    });
+
+    it("successfully connects team leader when assigning hierarchy", async () => {
+      vi.mocked(prisma.user.findFirst)
+        .mockResolvedValueOnce({
+          id: "subordinate-1",
+          tenantId: "tenant-apex",
+          role: UserRole.TELECALLER,
+          isActive: true,
+          brokerId: "user-owner-1",
+        } as any) // target user lookup
+        .mockResolvedValueOnce({
+          id: "tl-new",
+          tenantId: "tenant-apex",
+          role: UserRole.TEAM_LEADER,
+          isActive: true,
+        } as any); // team leader lookup in tx
+
+      vi.mocked(prisma.user.update).mockResolvedValueOnce({
+        id: "subordinate-1",
+        tenantId: "tenant-apex",
+        teamLeaderId: "tl-new",
+      } as any);
+
+      await updateTenantUserProfile(ownerContext, "subordinate-1", {
+        teamLeaderId: "tl-new",
+      });
+
+      expect(prisma.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            teamLeader: { connect: { id: "tl-new" } },
+          }),
+        })
+      );
     });
   });
 });

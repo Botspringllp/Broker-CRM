@@ -207,6 +207,7 @@ export interface SiteVisit {
   buyerName: string;
   buyerPhone: string;
   assignedSalesAgent: string;
+  assignedSalesAgentId?: string;
   telecallerName: string;
   scheduledDate: string;
   timeSlot: string;
@@ -214,9 +215,11 @@ export interface SiteVisit {
   telecallerConfirmedAt?: string;
   telecallerConfirmedBy?: string;
   cancellationReason?: string;
+  notes?: string;
   items: SiteVisitItem[];
   scheduleHistory: {
     changedAt: string;
+    changeType?: string;
     previousTime: string;
     newTime: string;
     reason: string;

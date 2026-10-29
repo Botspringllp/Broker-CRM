@@ -973,3 +973,139 @@ export async function activateUserAccount(token: string, password: string) {
     return { success: true, email: user.email };
   });
 }
+
+export interface UpdateTenantUserProfileData {
+  name?: string;
+  phone?: string;
+  role?: UserRole;
+  teamLeaderId?: string | null;
+  brokerId?: string | null;
+  isActive?: boolean;
+  delegatedPermissions?: AppAction[];
+}
+
+/**
+ * Updates a tenant user's profile, role, hierarchy, or active status transactionally.
+ * Strictly verifies admin authority, role assignment privileges, and logs audit record.
+ */
+export async function updateTenantUserProfile(
+  context: TenantContext,
+  targetUserId: string,
+  data: UpdateTenantUserProfileData
+) {
+  assertPermission(context, "admin:manage_users");
+
+  const targetUser = await getTenantUserById(context, targetUserId);
+
+  if (!canAdministerUser(context, targetUser)) {
+    throw new ForbiddenError("Not authorized to administer this user account.");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const updatePayload: Prisma.UserUpdateInput = {};
+
+    if (data.name !== undefined && data.name.trim()) {
+      updatePayload.name = data.name.trim();
+    }
+
+    if (data.phone !== undefined) {
+      updatePayload.phone = data.phone.trim();
+    }
+
+    if (data.role && data.role !== targetUser.role) {
+      if (!canAssignRole(context.role, data.role)) {
+        throw new ForbiddenError(
+          `Role '${context.role}' is not authorized to assign role '${data.role}'.`
+        );
+      }
+      updatePayload.role = data.role;
+    }
+
+    if (data.teamLeaderId !== undefined) {
+      if (data.teamLeaderId) {
+        const tl = await tx.user.findFirst({
+          where: {
+            id: data.teamLeaderId,
+            tenantId: context.tenantId,
+            role: UserRole.TEAM_LEADER,
+            isActive: true,
+          },
+        });
+        if (!tl) throw new NotFoundError("Assigned team leader not found or inactive.");
+        updatePayload.teamLeader = { connect: { id: data.teamLeaderId } };
+      } else {
+        updatePayload.teamLeader = { disconnect: true };
+      }
+    }
+
+    if (data.brokerId !== undefined) {
+      if (data.brokerId) {
+        const br = await tx.user.findFirst({
+          where: {
+            id: data.brokerId,
+            tenantId: context.tenantId,
+            role: UserRole.BROKER_OWNER,
+            isActive: true,
+          },
+        });
+        if (!br) throw new NotFoundError("Assigned broker not found or inactive.");
+        updatePayload.broker = { connect: { id: data.brokerId } };
+      } else {
+        updatePayload.broker = { disconnect: true };
+      }
+    }
+
+    if (typeof data.isActive === "boolean" && data.isActive !== targetUser.isActive) {
+      updatePayload.isActive = data.isActive;
+      if (!data.isActive) {
+        await tx.session.deleteMany({
+          where: { userId: targetUser.id },
+        });
+      }
+    }
+
+    if (data.delegatedPermissions !== undefined) {
+      for (const perm of data.delegatedPermissions) {
+        if (!canDelegatePermission(context.role, perm)) {
+          throw new ForbiddenError(
+            `Role '${context.role}' is not authorized to delegate permission '${perm}'.`
+          );
+        }
+      }
+      updatePayload.delegatedPermissions = data.delegatedPermissions;
+    }
+
+    const updated = await tx.user.update({
+      where: { id: targetUser.id },
+      data: updatePayload,
+      select: {
+        id: true,
+        tenantId: true,
+        name: true,
+        email: true,
+        phone: true,
+        role: true,
+        isActive: true,
+        brokerId: true,
+        teamLeaderId: true,
+        delegatedPermissions: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    await tx.userAuditLog.create({
+      data: {
+        tenantId: context.tenantId,
+        targetUserId: targetUser.id,
+        actorUserId: context.userId,
+        action: "PROFILE_UPDATED",
+        details: {
+          changes: JSON.parse(JSON.stringify(data)),
+        },
+      },
+    });
+
+    return updated;
+  });
+}

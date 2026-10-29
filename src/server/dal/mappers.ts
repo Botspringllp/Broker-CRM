@@ -370,6 +370,8 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
     buyerName: v.lead.name,
     buyerPhone: v.lead.primaryPhone,
     assignedSalesAgent: v.assignedSalesAgent?.name || "Unassigned",
+    assignedSalesAgentId: v.assignedSalesAgentId,
+    notes: v.notes || undefined,
     telecallerName: "Telecaller",
     scheduledDate: new Date(v.scheduledDate).toLocaleDateString("en-IN", {
       month: "short",
@@ -440,6 +442,7 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
     scheduleHistory:
       v.scheduleHistories?.map((h) => ({
         changedAt: new Date(h.createdAt).toLocaleDateString("en-IN"),
+        changeType: h.changeType,
         previousTime: new Date(h.previousScheduledAt).toLocaleDateString("en-IN"),
         newTime: h.newScheduledAt
           ? new Date(h.newScheduledAt).toLocaleDateString("en-IN")

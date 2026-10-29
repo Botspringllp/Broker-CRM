@@ -11,6 +11,8 @@ import {
   resendTenantUserInvitation,
   verifyInvitationToken,
   activateUserAccount,
+  updateTenantUserProfile,
+  UpdateTenantUserProfileData,
 } from "@/server/dal/users";
 import { UserRole } from "@prisma/client";
 import { AppAction } from "@/server/permissions";
@@ -146,6 +148,22 @@ export async function activateUserAccountAction(input: {
     return { success: true, email: res.email };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to activate account.";
+    return { success: false, error: message };
+  }
+}
+
+export async function updateTenantUserAction(
+  targetUserId: string,
+  data: UpdateTenantUserProfileData
+) {
+  try {
+    const context = await requireTenantContext();
+    const updated = await updateTenantUserProfile(context, targetUserId, data);
+    revalidatePath("/users");
+    revalidatePath(`/users/${targetUserId}/edit`);
+    return { success: true, user: updated };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to update user profile.";
     return { success: false, error: message };
   }
 }

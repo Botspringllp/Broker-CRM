@@ -21,6 +21,9 @@ vi.mock("@/server/db", () => {
       findFirst: vi.fn(),
       update: vi.fn(),
     },
+    siteVisitScheduleHistory: {
+      create: vi.fn(),
+    },
     lead: {
       findFirst: vi.fn(),
     },
@@ -31,6 +34,10 @@ vi.mock("@/server/db", () => {
     user: {
       findFirst: vi.fn(),
     },
+    $transaction: vi.fn(async (cb: any) => {
+      if (typeof cb === "function") return cb(mockPrisma);
+      return cb;
+    }),
   };
   return { prisma: mockPrisma };
 });
@@ -42,6 +49,9 @@ import {
   confirmSiteVisit,
   getSiteVisitById,
   listSiteVisits,
+  rescheduleSiteVisit,
+  reassignSiteVisitAgent,
+  cancelSiteVisit,
 } from "@/server/dal/visits";
 
 describe("Site Visits DAL & Workflow Management", () => {
@@ -381,6 +391,157 @@ describe("Site Visits DAL & Workflow Management", () => {
       await expect(
         confirmSiteVisit(salesAgentContext, "visit-1")
       ).rejects.toThrow(ForbiddenError);
+    });
+  });
+
+  describe("rescheduleSiteVisit", () => {
+    it("reschedules visit and creates immutable schedule history audit record", async () => {
+      const prevDate = new Date("2026-11-01T10:00:00Z");
+      const newDate = new Date("2026-11-03T14:00:00Z");
+
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        scheduledDate: prevDate,
+        status: SiteVisitStatus.CONFIRMED,
+      } as any);
+
+      vi.mocked(prisma.siteVisit.update).mockResolvedValueOnce({
+        id: "visit-1",
+        scheduledDate: newDate,
+        status: SiteVisitStatus.CONFIRMED,
+      } as any);
+
+      await rescheduleSiteVisit(telecallerContext, {
+        visitId: "visit-1",
+        newScheduledDate: newDate,
+        reason: "Buyer requested weekend afternoon slot instead.",
+      });
+
+      expect(prisma.siteVisitScheduleHistory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            siteVisitId: "visit-1",
+            previousScheduledAt: prevDate,
+            newScheduledAt: newDate,
+            changeType: "RESCHEDULED",
+            reason: "Buyer requested weekend afternoon slot instead.",
+            recordedByUserId: "user-telecaller-1",
+          }),
+        })
+      );
+
+      expect(prisma.siteVisit.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "visit-1" },
+          data: expect.objectContaining({
+            scheduledDate: newDate,
+          }),
+        })
+      );
+    });
+
+    it("throws ValidationError when reason is missing", async () => {
+      await expect(
+        rescheduleSiteVisit(telecallerContext, {
+          visitId: "visit-1",
+          newScheduledDate: new Date(),
+          reason: "   ",
+        })
+      ).rejects.toThrow(ValidationError);
+    });
+  });
+
+  describe("reassignSiteVisitAgent", () => {
+    it("reassigns agent to an active sales agent in the tenant", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        assignedSalesAgentId: "user-sales-1",
+      } as any);
+
+      vi.mocked(prisma.user.findFirst).mockResolvedValueOnce({
+        id: "user-sales-2",
+        name: "Amit Agent",
+        role: UserRole.FIELD_SALES_AGENT,
+      } as any);
+
+      vi.mocked(prisma.siteVisit.update).mockResolvedValueOnce({
+        id: "visit-1",
+        assignedSalesAgentId: "user-sales-2",
+      } as any);
+
+      await reassignSiteVisitAgent(brokerContext, {
+        visitId: "visit-1",
+        newSalesAgentId: "user-sales-2",
+        reason: "Original agent on leave.",
+      });
+
+      expect(prisma.siteVisit.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "visit-1" },
+          data: expect.objectContaining({
+            assignedSalesAgentId: "user-sales-2",
+          }),
+        })
+      );
+    });
+
+    it("throws NotFoundError if target sales agent is inactive or not found", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+      } as any);
+
+      vi.mocked(prisma.user.findFirst).mockResolvedValueOnce(null);
+
+      await expect(
+        reassignSiteVisitAgent(brokerContext, {
+          visitId: "visit-1",
+          newSalesAgentId: "user-nonexistent",
+        })
+      ).rejects.toThrow(NotFoundError);
+    });
+  });
+
+  describe("cancelSiteVisit", () => {
+    it("cancels site visit and logs schedule history entry", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        scheduledDate: new Date("2026-11-01T10:00:00Z"),
+        status: SiteVisitStatus.CONFIRMED,
+      } as any);
+
+      vi.mocked(prisma.siteVisit.update).mockResolvedValueOnce({
+        id: "visit-1",
+        status: SiteVisitStatus.CANCELLED,
+      } as any);
+
+      await cancelSiteVisit(telecallerContext, {
+        visitId: "visit-1",
+        reason: "Owner out of town unexpectedly.",
+      });
+
+      expect(prisma.siteVisitScheduleHistory.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            siteVisitId: "visit-1",
+            changeType: "CANCELLED",
+            reason: "Owner out of town unexpectedly.",
+          }),
+        })
+      );
+
+      expect(prisma.siteVisit.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "visit-1" },
+          data: expect.objectContaining({
+            status: SiteVisitStatus.CANCELLED,
+            cancellationReason: "Owner out of town unexpectedly.",
+          }),
+        })
+      );
     });
   });
 });

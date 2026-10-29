@@ -8,6 +8,8 @@ import {
   SiteVisitStatus,
   SiteVisitItemOutcome,
   VisitOutcomeEntryChannel,
+  ScheduleChangeType,
+  VisitPartyPersona,
 } from "@prisma/client";
 
 export interface CreateSiteVisitInput {
@@ -16,6 +18,24 @@ export interface CreateSiteVisitInput {
   scheduledDate: string | Date;
   propertyIds: string[];
   notes?: string;
+}
+
+export interface RescheduleSiteVisitInput {
+  visitId: string;
+  newScheduledDate: string | Date;
+  reason: string;
+}
+
+export interface ReassignSiteVisitAgentInput {
+  visitId: string;
+  newSalesAgentId: string;
+  reason?: string;
+}
+
+export interface CancelSiteVisitInput {
+  visitId: string;
+  reason: string;
+  cancelledByPersona?: VisitPartyPersona;
 }
 
 export interface RecordVisitItemOutcomeInput {
@@ -324,5 +344,143 @@ export async function confirmSiteVisit(
       ...(notes?.trim() ? { notes: notes.trim() } : {}),
     },
     include: FULL_SITE_VISIT_INCLUDE,
+  });
+}
+
+/**
+ * Reschedules a site visit and appends to the immutable schedule audit history.
+ */
+export async function rescheduleSiteVisit(
+  context: TenantContext,
+  input: RescheduleSiteVisitInput
+) {
+  assertPermission(context, "visits:schedule");
+
+  if (!input.visitId?.trim()) {
+    throw new ValidationError("Visit ID is required.");
+  }
+  if (!input.reason?.trim()) {
+    throw new ValidationError("Reschedule reason is required.");
+  }
+
+  const newDate = new Date(input.newScheduledDate);
+  if (isNaN(newDate.getTime())) {
+    throw new ValidationError("Valid new scheduled date is required.");
+  }
+
+  const visit = await getSiteVisitById(context, input.visitId);
+
+  return prisma.$transaction(async (tx) => {
+    // Record in schedule history
+    await tx.siteVisitScheduleHistory.create({
+      data: {
+        tenantId: context.tenantId,
+        siteVisitId: visit.id,
+        previousScheduledAt: visit.scheduledDate,
+        newScheduledAt: newDate,
+        changeType: ScheduleChangeType.RESCHEDULED,
+        reason: input.reason.trim(),
+        recordedByUserId: context.userId,
+      },
+    });
+
+    return tx.siteVisit.update({
+      where: { id: visit.id },
+      data: {
+        scheduledDate: newDate,
+        status:
+          visit.status === SiteVisitStatus.CANCELLED
+            ? SiteVisitStatus.CONFIRMED
+            : visit.status,
+      },
+      include: FULL_SITE_VISIT_INCLUDE,
+    });
+  });
+}
+
+/**
+ * Reassigns the Field Sales Agent for a site visit tour.
+ */
+export async function reassignSiteVisitAgent(
+  context: TenantContext,
+  input: ReassignSiteVisitAgentInput
+) {
+  assertPermission(context, "visits:schedule");
+
+  if (!input.visitId?.trim()) {
+    throw new ValidationError("Visit ID is required.");
+  }
+  if (!input.newSalesAgentId?.trim()) {
+    throw new ValidationError("New Sales Agent ID is required.");
+  }
+
+  const visit = await getSiteVisitById(context, input.visitId);
+
+  const agent = await prisma.user.findFirst({
+    where: {
+      id: input.newSalesAgentId,
+      tenantId: context.tenantId,
+      isActive: true,
+    },
+    select: { id: true, name: true, role: true },
+  });
+
+  if (!agent) {
+    throw new NotFoundError("Selected sales agent not found or inactive.");
+  }
+
+  return prisma.siteVisit.update({
+    where: { id: visit.id },
+    data: {
+      assignedSalesAgentId: input.newSalesAgentId,
+      ...(input.reason?.trim()
+        ? { notes: `${visit.notes ? visit.notes + "\n" : ""}Agent Reassigned: ${input.reason.trim()}` }
+        : {}),
+    },
+    include: FULL_SITE_VISIT_INCLUDE,
+  });
+}
+
+/**
+ * Cancels a site visit and records cancellation reasons and actor persona.
+ */
+export async function cancelSiteVisit(
+  context: TenantContext,
+  input: CancelSiteVisitInput
+) {
+  assertPermission(context, "visits:schedule");
+
+  if (!input.visitId?.trim()) {
+    throw new ValidationError("Visit ID is required.");
+  }
+  if (!input.reason?.trim()) {
+    throw new ValidationError("Cancellation reason is required.");
+  }
+
+  const visit = await getSiteVisitById(context, input.visitId);
+
+  return prisma.$transaction(async (tx) => {
+    await tx.siteVisitScheduleHistory.create({
+      data: {
+        tenantId: context.tenantId,
+        siteVisitId: visit.id,
+        previousScheduledAt: visit.scheduledDate,
+        newScheduledAt: null,
+        changeType: ScheduleChangeType.CANCELLED,
+        reason: input.reason.trim(),
+        recordedByUserId: context.userId,
+      },
+    });
+
+    return tx.siteVisit.update({
+      where: { id: visit.id },
+      data: {
+        status: SiteVisitStatus.CANCELLED,
+        cancellationReason: input.reason.trim(),
+        cancelledAt: new Date(),
+        cancelledByPersona: input.cancelledByPersona || VisitPartyPersona.BROKER,
+      },
+      include: FULL_SITE_VISIT_INCLUDE,
+    });
   });
 }
