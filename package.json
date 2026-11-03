@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "postinstall": "prisma generate",
+    "db:migrate:deploy": "prisma migrate deploy",
     "bootstrap:superadmin": "npx tsx scripts/bootstrap-superadmin.ts"
   },
   "dependencies": {
