@@ -526,6 +526,7 @@ model Lead {
   // Lifecycle Status & Tracking
   status                   LeadStatus @default(NOT_YET_VALIDATED)
   unreachableAttemptsCount Int        @default(0)
+  isDoNotContact           Boolean    @default(false)
 
   // Non-Editable Source Metadata (PRD §5.3)
   originalSource  String
@@ -595,6 +596,9 @@ model LeadRequirement {
   preference            TransactionType
   propertyTypes         PropertyType[]  @default([])
   targetArea            Decimal?        @db.Decimal(12, 2)
+  minArea               Decimal?        @db.Decimal(12, 2)
+  maxArea               Decimal?        @db.Decimal(12, 2)
+  areaUnit              String          @default("sq.ft")
   areaType              AreaUnitType?
 
   isConfirmed Boolean  @default(false)
