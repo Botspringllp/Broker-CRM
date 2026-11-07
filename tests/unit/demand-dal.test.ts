@@ -126,7 +126,7 @@ describe("Demand / Lead Management DAL", () => {
           data: expect.objectContaining({
             tenantId: "tenant-broker-1",
             name: "Rohit Verma",
-            primaryPhone: "919810012345",
+            primaryPhone: "9810012345",
             status: LeadStatus.NOT_YET_VALIDATED,
           }),
         })

@@ -301,8 +301,8 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
     sourceCreatedAt: new Date(l.sourceCreatedAt).toLocaleDateString("en-IN"),
     assignedTelecaller: l.assignedTelecaller?.name || "Unassigned",
     advertisedPropertyRef: l.enquiries?.[0]?.advertisedPropertyRef || undefined,
-    advertisedPropertyVerified: false,
-    advertisedPropertyNotes: undefined,
+    advertisedPropertyVerified: l.enquiries?.[0]?.isVerifiedByCaller ?? false,
+    advertisedPropertyNotes: l.enquiries?.[0]?.callerVerificationNotes || undefined,
     requirements: {
       minBudget: minB,
       maxBudget: maxB,

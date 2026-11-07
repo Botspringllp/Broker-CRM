@@ -20,12 +20,14 @@ import { LeadStatus } from "@prisma/client";
 export async function createLeadAction(data: CreateLeadData) {
   try {
     const context = await requireTenantContext();
-    const created = await createLead(context, data);
+    const result = await createLead(context, data);
     revalidatePath("/leads");
     revalidatePath("/");
     return {
       success: true as const,
-      lead: mapPrismaLeadToView(created),
+      lead: mapPrismaLeadToView(result.lead),
+      enquiryId: result.enquiry.id,
+      isExistingBuyer: result.isExistingBuyer,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to create lead.";

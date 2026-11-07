@@ -232,7 +232,13 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
         return;
       }
 
-      setLeads((prev) => [res.lead, ...prev]);
+      setLeads((prev) => {
+        const exists = prev.some((l) => l.id === res.lead.id);
+        if (exists) {
+          return prev.map((l) => (l.id === res.lead.id ? res.lead : l));
+        }
+        return [res.lead, ...prev];
+      });
       setSelectedLead(res.lead);
       setIsCreateModalOpen(false);
 
@@ -241,7 +247,11 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
       setLeadFormPhone("");
       setLeadFormAltPhone("");
       setLeadFormEmail("");
-      setToastMessage(`Prospect ${res.lead.name} registered and saved.`);
+      if (res.isExistingBuyer) {
+        setToastMessage(`Existing buyer "${res.lead.name}" matched. New enquiry logged.`);
+      } else {
+        setToastMessage(`Prospect ${res.lead.name} registered and saved.`);
+      }
     } catch (err: unknown) {
       setCreateLeadError(err instanceof Error ? err.message : "Failed to register prospect.");
     } finally {

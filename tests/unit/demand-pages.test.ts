@@ -195,7 +195,7 @@ describe("Demand Management: Dedicated Pages & Qualification Workspace Tests", (
           data: expect.objectContaining({
             tenantId: "tenant-apex-1",
             name: "Rahul Verma",
-            primaryPhone: "919810123456",
+            primaryPhone: "9810123456",
             status: LeadStatus.NOT_YET_VALIDATED,
           }),
         })

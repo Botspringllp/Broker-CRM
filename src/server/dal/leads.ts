@@ -2,12 +2,14 @@ import { prisma } from "../db";
 import { TenantContext, NotFoundError, ForbiddenError } from "../tenant-context";
 import { assertPermission, hasPermission } from "../permissions";
 import { ValidationError } from "../errors";
+import { normalizeIndianMobile } from "../utils/phone";
 import {
   Prisma,
   UserRole,
   LeadStatus,
   LeadCallingDisposition,
   CallTargetType,
+  Enquiry as PrismaEnquiry,
 } from "@prisma/client";
 
 export interface CreateLeadData {
@@ -23,6 +25,9 @@ export interface CreateLeadData {
   bedroomConfigurations?: string[];
   propertyTypes?: ("APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT")[];
   assignedTelecallerId?: string;
+  advertisedPropertyRef?: string | null;
+  advertisedPropertyId?: string | null;
+  enquiryDetails?: string | null;
 }
 
 export interface EditLeadData {
@@ -59,7 +64,9 @@ const FULL_LEAD_INCLUDE = {
       },
     },
   },
-  enquiries: true,
+  enquiries: {
+    orderBy: { createdAt: "desc" as const },
+  },
   callLogs: {
     include: {
       caller: {
@@ -80,6 +87,166 @@ const FULL_LEAD_INCLUDE = {
     },
   },
 };
+
+export type FullPrismaLead = Prisma.LeadGetPayload<{
+  include: typeof FULL_LEAD_INCLUDE;
+}>;
+
+export interface CreateLeadResult {
+  lead: FullPrismaLead;
+  enquiry: PrismaEnquiry;
+  enquiryId: string;
+  isExistingBuyer: boolean;
+  id: string; // convenient alias to lead.id
+}
+
+function buildEnquiryDetails(
+  userNotes?: string | null,
+  reqSummary?: {
+    preference?: string;
+    city?: string;
+    minBudget?: number;
+    maxBudget?: number;
+    bedroomConfigurations?: string[];
+    propertyTypes?: string[];
+  } | null,
+  isExistingBuyer?: boolean
+): string | null {
+  const parts: string[] = [];
+  if (userNotes?.trim()) {
+    parts.push(userNotes.trim());
+  }
+  if (isExistingBuyer && reqSummary) {
+    const diffParts: string[] = [];
+    if (reqSummary.preference) diffParts.push(`Type: ${reqSummary.preference}`);
+    if (reqSummary.city) diffParts.push(`City: ${reqSummary.city}`);
+    if (reqSummary.minBudget !== undefined && reqSummary.maxBudget !== undefined) {
+      diffParts.push(
+        `Budget: ₹${reqSummary.minBudget.toLocaleString("en-IN")} - ₹${reqSummary.maxBudget.toLocaleString("en-IN")}`
+      );
+    }
+    if (reqSummary.bedroomConfigurations?.length) {
+      diffParts.push(`BHK: ${reqSummary.bedroomConfigurations.join(", ")}`);
+    }
+    if (reqSummary.propertyTypes?.length) {
+      diffParts.push(`Property: ${reqSummary.propertyTypes.join(", ")}`);
+    }
+    if (diffParts.length > 0) {
+      parts.push(`[Submitted Requirements]: ${diffParts.join(" | ")}`);
+    }
+  }
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function isTenantPhoneUniqueConflict(error: unknown): boolean {
+  if (
+    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+    error.code !== "P2002"
+  ) {
+    return false;
+  }
+
+  const metaTarget = error.meta?.target;
+  if (Array.isArray(metaTarget)) {
+    const hasPhone = metaTarget.some(
+      (field) =>
+        typeof field === "string" &&
+        (field.includes("primaryPhone") ||
+          field.includes("primary_phone") ||
+          field.includes("leads_tenant_id_primary_phone_key"))
+    );
+    if (hasPhone) return true;
+  } else if (typeof metaTarget === "string") {
+    if (
+      metaTarget.includes("primaryPhone") ||
+      metaTarget.includes("primary_phone") ||
+      metaTarget.includes("leads_tenant_id_primary_phone_key")
+    ) {
+      return true;
+    }
+  }
+
+  if (typeof error.message === "string") {
+    if (
+      error.message.includes("leads_tenant_id_primary_phone_key") ||
+      (error.message.includes("primaryPhone") && error.message.includes("tenantId")) ||
+      (error.message.includes("primary_phone") && error.message.includes("tenant_id"))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function handleExistingBuyer(
+  tx: Prisma.TransactionClient,
+  context: TenantContext,
+  existingLead: FullPrismaLead,
+  data: CreateLeadData,
+  validatedPropertyId: string | null
+): Promise<CreateLeadResult> {
+  const shouldReopen = existingLead.status === LeadStatus.INACTIVE;
+  const nextStatus = shouldReopen ? LeadStatus.NOT_YET_VALIDATED : existingLead.status;
+
+  let nextAssignedTelecallerId = existingLead.assignedTelecallerId;
+  if (!nextAssignedTelecallerId) {
+    if (context.role === UserRole.TELECALLER) {
+      nextAssignedTelecallerId = context.userId;
+    } else if (data.assignedTelecallerId) {
+      nextAssignedTelecallerId = data.assignedTelecallerId;
+    }
+  }
+
+  if (shouldReopen || nextAssignedTelecallerId !== existingLead.assignedTelecallerId) {
+    await tx.lead.update({
+      where: { id: existingLead.id },
+      data: {
+        status: nextStatus,
+        assignedTelecallerId: nextAssignedTelecallerId,
+      },
+    });
+  }
+
+  const enquiryDetails = buildEnquiryDetails(
+    data.enquiryDetails,
+    {
+      preference: data.preference,
+      city: data.city,
+      minBudget: data.minBudget,
+      maxBudget: data.maxBudget,
+      bedroomConfigurations: data.bedroomConfigurations,
+      propertyTypes: data.propertyTypes,
+    },
+    true
+  );
+
+  const enquiry = await tx.enquiry.create({
+    data: {
+      tenantId: context.tenantId,
+      leadId: existingLead.id,
+      source: data.originalSource.trim(),
+      advertisedPropertyRef: data.advertisedPropertyRef?.trim() || null,
+      advertisedPropertyId: validatedPropertyId,
+      enquiryDetails,
+    },
+  });
+
+  const updatedLead = await tx.lead.findUnique({
+    where: { id: existingLead.id },
+    include: FULL_LEAD_INCLUDE,
+  });
+
+  const finalLead = (updatedLead ?? existingLead) as FullPrismaLead;
+
+  return {
+    lead: finalLead,
+    enquiry,
+    enquiryId: enquiry.id,
+    isExistingBuyer: true,
+    id: finalLead.id,
+  };
+}
 
 /**
  * Lists leads strictly scoped to the authenticated tenant.
@@ -170,18 +337,23 @@ export async function getLeadById(context: TenantContext, leadId: string) {
 
 /**
  * Creates a lead within the tenant context.
+ * - Enforces tenant-scoped deduplication on primaryPhone.
+ * - Reuses existing buyer profile and logs a new Enquiry if already present in the tenant.
+ * - Atomically registers Lead, LeadRequirement, and initial Enquiry for new prospects.
+ * - Gracefully recovers from concurrent P2002 duplicate submission races.
  */
-export async function createLead(context: TenantContext, data: CreateLeadData) {
+export async function createLead(
+  context: TenantContext,
+  data: CreateLeadData
+): Promise<CreateLeadResult> {
   assertPermission(context, "demand:create");
 
   if (!data.name?.trim()) {
     throw new ValidationError("Prospect name is required.");
   }
 
-  const cleanedPhone = data.primaryPhone.replace(/\D/g, "");
-  if (cleanedPhone.length < 10) {
-    throw new ValidationError("Valid 10-digit primary phone number is required.");
-  }
+  // Canonical Indian mobile normalization (enforces 10 digits starting with 6-9)
+  const normalizedPhone = normalizeIndianMobile(data.primaryPhone);
 
   if (data.minBudget < 0 || data.maxBudget < 0) {
     throw new ValidationError("Budget values cannot be negative.");
@@ -199,35 +371,144 @@ export async function createLead(context: TenantContext, data: CreateLeadData) {
     throw new ValidationError("Inquiry source is required.");
   }
 
+  // Tenant-scoped Advertised Property Validation
+  let validatedPropertyId: string | null = null;
+  if (data.advertisedPropertyId?.trim()) {
+    const prop = await prisma.property.findFirst({
+      where: {
+        id: data.advertisedPropertyId.trim(),
+        tenantId: context.tenantId,
+      },
+      select: { id: true },
+    });
+    if (!prop) {
+      throw new ValidationError("Referenced advertised property does not exist.");
+    }
+    validatedPropertyId = prop.id;
+  }
+
+  // Optional alternate phone normalization (best effort)
+  let cleanedAltPhone: string | null = null;
+  if (data.alternatePhone?.trim()) {
+    try {
+      cleanedAltPhone = normalizeIndianMobile(data.alternatePhone);
+    } catch {
+      cleanedAltPhone = data.alternatePhone.trim();
+    }
+  }
+
   const assignedTelecallerId =
     context.role === UserRole.TELECALLER
       ? context.userId
       : data.assignedTelecallerId || null;
 
-  return prisma.lead.create({
-    data: {
-      tenantId: context.tenantId,
-      name: data.name.trim(),
-      primaryPhone: cleanedPhone,
-      alternatePhone: data.alternatePhone?.trim() || null,
-      email: data.email?.trim().toLowerCase() || null,
-      originalSource: data.originalSource.trim(),
-      assignedTelecallerId,
-      status: LeadStatus.NOT_YET_VALIDATED,
-      requirement: {
-        create: {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // 1. Tenant-scoped buyer lookup
+      const existing = await tx.lead.findFirst({
+        where: {
           tenantId: context.tenantId,
-          minBudget: new Prisma.Decimal(data.minBudget),
-          maxBudget: new Prisma.Decimal(data.maxBudget),
-          city: data.city.trim(),
-          preference: data.preference,
-          bedroomConfigurations: data.bedroomConfigurations ?? [],
-          propertyTypes: data.propertyTypes ?? [],
+          primaryPhone: normalizedPhone,
         },
-      },
-    },
-    include: FULL_LEAD_INCLUDE,
-  });
+        include: FULL_LEAD_INCLUDE,
+      });
+
+      if (existing) {
+        return await handleExistingBuyer(
+          tx,
+          context,
+          existing as FullPrismaLead,
+          data,
+          validatedPropertyId
+        );
+      }
+
+      // 2. New prospect creation: Lead + Requirement + first Enquiry
+      const newLead = await tx.lead.create({
+        data: {
+          tenantId: context.tenantId,
+          name: data.name.trim(),
+          primaryPhone: normalizedPhone,
+          alternatePhone: cleanedAltPhone,
+          email: data.email?.trim().toLowerCase() || null,
+          originalSource: data.originalSource.trim(),
+          assignedTelecallerId,
+          status: LeadStatus.NOT_YET_VALIDATED,
+          requirement: {
+            create: {
+              tenantId: context.tenantId,
+              minBudget: new Prisma.Decimal(data.minBudget),
+              maxBudget: new Prisma.Decimal(data.maxBudget),
+              city: data.city.trim(),
+              preference: data.preference,
+              bedroomConfigurations: data.bedroomConfigurations ?? [],
+              propertyTypes: data.propertyTypes ?? [],
+            },
+          },
+          enquiries: {
+            create: {
+              tenantId: context.tenantId,
+              source: data.originalSource.trim(),
+              advertisedPropertyRef: data.advertisedPropertyRef?.trim() || null,
+              advertisedPropertyId: validatedPropertyId,
+              enquiryDetails: data.enquiryDetails?.trim() || null,
+            },
+          },
+        },
+        include: FULL_LEAD_INCLUDE,
+      });
+
+      const initialEnquiry =
+        newLead.enquiries?.[0] ??
+        ({
+          id: `enquiry-${newLead.id}`,
+          tenantId: context.tenantId,
+          leadId: newLead.id,
+          source: data.originalSource.trim(),
+          advertisedPropertyRef: data.advertisedPropertyRef?.trim() || null,
+          advertisedPropertyId: validatedPropertyId,
+          enquiryDetails: data.enquiryDetails?.trim() || null,
+          enquiryDate: new Date(),
+          isVerifiedByCaller: false,
+          callerVerificationNotes: null,
+          createdAt: new Date(),
+        } as unknown as PrismaEnquiry);
+
+      return {
+        lead: newLead as FullPrismaLead,
+        enquiry: initialEnquiry,
+        enquiryId: initialEnquiry.id,
+        isExistingBuyer: false,
+        id: newLead.id,
+      };
+    });
+  } catch (error) {
+    // 3. Concurrency race-condition recovery on confirmed P2002 unique constraint
+    if (isTenantPhoneUniqueConflict(error)) {
+      const winnerLead = await prisma.lead.findFirst({
+        where: {
+          tenantId: context.tenantId,
+          primaryPhone: normalizedPhone,
+        },
+        include: FULL_LEAD_INCLUDE,
+      });
+
+      if (winnerLead) {
+        return await prisma.$transaction(async (tx) => {
+          return await handleExistingBuyer(
+            tx,
+            context,
+            winnerLead as FullPrismaLead,
+            data,
+            validatedPropertyId
+          );
+        });
+      }
+    }
+
+    // Rethrow any unrelated constraint errors or exceptions
+    throw error;
+  }
 }
 
 /**

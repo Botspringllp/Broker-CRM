@@ -88,6 +88,7 @@ export function NewLeadClient({
   const [email, setEmail] = useState("");
   const [originalSource, setOriginalSource] = useState("Direct Inquiry");
   const [assignedTelecallerId, setAssignedTelecallerId] = useState("");
+  const [advertisedPropertyRef, setAdvertisedPropertyRef] = useState("");
 
   // Step 2: Property Requirements
   const [preference, setPreference] = useState<"SALE" | "RENT">("SALE");
@@ -256,6 +257,8 @@ export function NewLeadClient({
         bedroomConfigurations: selectedBhks,
         propertyTypes: selectedTypes,
         assignedTelecallerId: assignedTelecallerId || undefined,
+        advertisedPropertyRef: advertisedPropertyRef.trim() || undefined,
+        enquiryDetails: notes.trim() || undefined,
       });
 
       if (!res.success) {
@@ -264,7 +267,13 @@ export function NewLeadClient({
         return;
       }
 
-      setToastMessage(`Prospect "${res.lead.name}" successfully registered!`);
+      if (res.isExistingBuyer) {
+        setToastMessage(
+          `Existing buyer profile matched for ${res.lead.name}. New enquiry logged under existing record!`
+        );
+      } else {
+        setToastMessage(`Prospect "${res.lead.name}" successfully registered!`);
+      }
       setTimeout(() => {
         router.push(`/leads/${res.lead.id}`);
       }, 1000);
@@ -480,6 +489,23 @@ export function NewLeadClient({
                     </select>
                   </div>
                 )}
+
+                {/* Advertised Property Reference (Optional) */}
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold text-crm-text mb-1">
+                    Advertised Property Reference (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 99A-DLF5-102 or Portal Ad Reference Code"
+                    value={advertisedPropertyRef}
+                    onChange={(e) => setAdvertisedPropertyRef(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                  />
+                  <span className="text-[10px] text-crm-muted mt-0.5 block">
+                    Optional external ad reference code or portal listing ID for this enquiry.
+                  </span>
+                </div>
               </div>
             </div>
           )}
