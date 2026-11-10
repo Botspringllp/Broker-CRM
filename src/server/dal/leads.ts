@@ -51,6 +51,15 @@ export interface EditLeadData {
   localities?: string[];
 }
 
+export interface UpdateLeadData {
+  name?: string;
+  status?: LeadStatus;
+  email?: string | null;
+  alternatePhone?: string | null;
+  assignedTelecallerId?: string | null;
+  [key: string]: unknown;
+}
+
 export interface LogLeadCallInput {
   leadId: string;
   disposition: LeadCallingDisposition | string;
@@ -725,78 +734,139 @@ export async function updateLeadStatus(
 }
 
 /**
- * Updates a lead atomically enforcing tenant scope and permission checks.
+ * Updates a lead with strict allowlist validation, permission enforcement, and atomic audit logging.
+ * Disallows arbitrary or unsupported field mutations to eliminate audit bypass risks.
  */
 export async function updateLead(
   context: TenantContext,
   leadId: string,
-  data: Prisma.LeadUpdateInput
+  data: UpdateLeadData
 ) {
-  if (
-    data.status === "ACTIVE" ||
-    (typeof data.status === "object" && (data.status as { set?: string }).set === "ACTIVE")
-  ) {
+  if (!leadId?.trim()) {
+    throw new ValidationError("Lead ID is required.");
+  }
+
+  // 1. Explicitly check and reject immutable / protected fields
+  if ("primaryPhone" in data && data.primaryPhone !== undefined) {
+    throw new ValidationError("Primary phone number is immutable and cannot be changed.");
+  }
+  if ("originalSource" in data && data.originalSource !== undefined) {
+    throw new ValidationError("Lead source is immutable and cannot be changed.");
+  }
+  if ("sourceCreatedAt" in data && data.sourceCreatedAt !== undefined) {
+    throw new ValidationError("sourceCreatedAt is immutable and cannot be changed.");
+  }
+  if ("isDoNotContact" in data && data.isDoNotContact !== undefined) {
+    throw new ValidationError(
+      "Direct modification of isDoNotContact is not permitted through generic lead updates."
+    );
+  }
+
+  // 2. Strict allowlist validation: reject any unsupported field to prevent silent mutation bypass
+  const ALLOWED_UPDATE_FIELDS = new Set([
+    "name",
+    "status",
+    "email",
+    "alternatePhone",
+    "assignedTelecallerId",
+  ]);
+
+  for (const key of Object.keys(data)) {
+    if (!ALLOWED_UPDATE_FIELDS.has(key)) {
+      throw new ValidationError(`Unsupported field in update payload: '${key}'.`);
+    }
+  }
+
+  // 3. Permission checks for status changes
+  if (data.status === LeadStatus.ACTIVE) {
     assertPermission(context, "demand:activate");
-  } else if (
-    data.status === "INACTIVE" ||
-    (typeof data.status === "object" && (data.status as { set?: string }).set === "INACTIVE")
-  ) {
+  } else if (data.status === LeadStatus.INACTIVE) {
     assertPermission(context, "demand:inactivate");
   } else {
     assertPermission(context, "demand:log_call");
   }
 
+  // 4. Retrieve existing lead ensuring tenant isolation & telecaller scoping
   const lead = await getLeadById(context, leadId);
 
-  // Enforce field immutability (PRD §5.3)
-  if (data.primaryPhone !== undefined) {
-    const raw =
-      typeof data.primaryPhone === "string"
-        ? data.primaryPhone
-        : (data.primaryPhone as { set?: string }).set;
-    if (raw && raw !== lead.primaryPhone) {
-      throw new ValidationError("Primary phone number is immutable and cannot be changed.");
+  // 5. Assignment permission check if assignedTelecallerId is changing
+  let targetTelecallerId = lead.assignedTelecallerId;
+  if ("assignedTelecallerId" in data && data.assignedTelecallerId !== undefined) {
+    const rawTelecaller = data.assignedTelecallerId ? data.assignedTelecallerId.trim() : null;
+    if (rawTelecaller !== lead.assignedTelecallerId) {
+      const canAssign = hasPermission(
+        context.role,
+        "assignment:assign_telecaller",
+        context.user?.delegatedPermissions || context.delegatedPermissions
+      );
+      if (!canAssign) {
+        throw new ForbiddenError(
+          "You do not have permission to assign or reassign telecallers."
+        );
+      }
+      targetTelecallerId = rawTelecaller;
     }
   }
-  if (data.originalSource !== undefined) {
-    const raw =
-      typeof data.originalSource === "string"
-        ? data.originalSource
-        : (data.originalSource as { set?: string }).set;
-    if (raw && raw !== lead.originalSource) {
-      throw new ValidationError("Lead source is immutable and cannot be changed.");
+
+  // 6. Build sanitized Prisma update payload and field comparison list
+  const sanitizedUpdate: Prisma.LeadUpdateInput = {};
+  const changes: FieldComparison[] = [];
+
+  if ("name" in data && data.name !== undefined) {
+    const trimmedName = data.name.trim();
+    if (!trimmedName) {
+      throw new ValidationError("Prospect name cannot be blank.");
     }
+    sanitizedUpdate.name = trimmedName;
+    changes.push({ fieldName: "name", previousValue: lead.name, newValue: trimmedName });
   }
-  if (data.sourceCreatedAt !== undefined) {
-    throw new ValidationError("sourceCreatedAt is immutable and cannot be changed.");
+
+  if ("status" in data && data.status !== undefined) {
+    sanitizedUpdate.status = data.status;
+    changes.push({ fieldName: "status", previousValue: lead.status, newValue: data.status });
+  }
+
+  if ("email" in data && data.email !== undefined) {
+    const cleanedEmail = data.email ? data.email.trim().toLowerCase() : null;
+    sanitizedUpdate.email = cleanedEmail;
+    changes.push({ fieldName: "email", previousValue: lead.email, newValue: cleanedEmail });
+  }
+
+  if ("alternatePhone" in data && data.alternatePhone !== undefined) {
+    const trimmedAlt = data.alternatePhone ? data.alternatePhone.trim() : null;
+    sanitizedUpdate.alternatePhone = trimmedAlt;
+    changes.push({
+      fieldName: "alternatePhone",
+      previousValue: lead.alternatePhone,
+      newValue: trimmedAlt,
+    });
+  }
+
+  if ("assignedTelecallerId" in data && data.assignedTelecallerId !== undefined) {
+    sanitizedUpdate.assignedTelecaller = targetTelecallerId
+      ? { connect: { id: targetTelecallerId } }
+      : { disconnect: true };
+    changes.push({
+      fieldName: "assignedTelecallerId",
+      previousValue: lead.assignedTelecallerId,
+      newValue: targetTelecallerId,
+    });
   }
 
   return prisma.$transaction(async (tx) => {
-    const changes: FieldComparison[] = [];
-    if (data.name !== undefined) {
-      const val = typeof data.name === "string" ? data.name : (data.name as { set?: string }).set;
-      changes.push({ fieldName: "name", previousValue: lead.name, newValue: val });
-    }
-    if (data.status !== undefined) {
-      const val =
-        typeof data.status === "string"
-          ? data.status
-          : (data.status as { set?: LeadStatus }).set;
-      changes.push({ fieldName: "status", previousValue: lead.status, newValue: val });
-    }
-    if (data.email !== undefined) {
-      const val =
-        typeof data.email === "string"
-          ? data.email
-          : (data.email as { set?: string | null }).set;
-      changes.push({ fieldName: "email", previousValue: lead.email, newValue: val });
-    }
-    if (data.alternatePhone !== undefined) {
-      const val =
-        typeof data.alternatePhone === "string"
-          ? data.alternatePhone
-          : (data.alternatePhone as { set?: string | null }).set;
-      changes.push({ fieldName: "alternatePhone", previousValue: lead.alternatePhone, newValue: val });
+    // If activating lead, ensure requirement isConfirmed is synced and audited
+    if (data.status === LeadStatus.ACTIVE && lead.requirement) {
+      if (!lead.requirement.isConfirmed) {
+        changes.push({
+          fieldName: "isConfirmed",
+          previousValue: false,
+          newValue: true,
+        });
+      }
+      await tx.leadRequirement.update({
+        where: { leadId: lead.id },
+        data: { isConfirmed: true },
+      });
     }
 
     await recordLeadFieldChanges({
@@ -815,7 +885,7 @@ export async function updateLead(
           tenantId: context.tenantId,
         },
       },
-      data,
+      data: sanitizedUpdate,
       include: FULL_LEAD_INCLUDE,
     });
   });
@@ -829,6 +899,18 @@ export async function updateLead(
 export async function editLead(context: TenantContext, data: EditLeadData) {
   if (!data.id?.trim()) {
     throw new ValidationError("Lead ID is required.");
+  }
+
+  // Reject protected fields
+  const rawData = data as unknown as Record<string, unknown>;
+  if ("isDoNotContact" in rawData && rawData.isDoNotContact !== undefined) {
+    throw new ValidationError(
+      "Direct modification of isDoNotContact is not permitted through generic lead updates."
+    );
+  }
+
+  if ("sourceCreatedAt" in rawData && rawData.sourceCreatedAt !== undefined) {
+    throw new ValidationError("sourceCreatedAt is immutable and cannot be changed.");
   }
 
   // Enforces tenant scope, permissions, and telecaller assignment via getLeadById

@@ -24,6 +24,14 @@ vi.mock("@/server/auth", () => ({
   },
 }));
 
+vi.mock("@/server/db", () => ({
+  prisma: {
+    user: {
+      findUnique: vi.fn(),
+    },
+  },
+}));
+
 import { auth } from "@/server/auth";
 
 describe("Tenant Context & Session Authorization", () => {

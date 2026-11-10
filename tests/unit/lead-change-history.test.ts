@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { UserRole, LeadStatus, LeadCallingDisposition, Prisma } from "@prisma/client";
 import { TenantContext } from "@/server/tenant-context";
-import { NotFoundError, ValidationError } from "@/server/errors";
+import { NotFoundError, ValidationError, ForbiddenError } from "@/server/errors";
 
 vi.mock("@/server/db", () => {
   const mockPrisma = {
@@ -52,6 +52,7 @@ import {
   updateLeadStatus,
   logLeadCall,
   createLead,
+  updateLead,
 } from "@/server/dal/leads";
 
 describe("DV-05 Phase 2A: Lead Change History Audit Logging Engine", () => {
@@ -89,6 +90,26 @@ describe("DV-05 Phase 2A: Lead Change History Audit Logging Engine", () => {
     session: {
       id: "sess-other",
       token: "tok-other",
+      expiresAt: new Date(Date.now() + 86400000),
+    },
+  };
+
+  const telecallerContext: TenantContext = {
+    tenantId: "tenant-apex-1",
+    userId: "telecaller-1",
+    role: UserRole.TELECALLER,
+    user: {
+      id: "telecaller-1",
+      name: "Pooja Telecaller",
+      email: "pooja@apexrealty.in",
+      role: UserRole.TELECALLER,
+      tenantId: "tenant-apex-1",
+      isActive: true,
+      delegatedPermissions: [],
+    },
+    session: {
+      id: "sess-tc",
+      token: "tok-tc",
       expiresAt: new Date(Date.now() + 86400000),
     },
   };
@@ -668,7 +689,7 @@ describe("DV-05 Phase 2A: Lead Change History Audit Logging Engine", () => {
   // T16: Audit insertion failure rolls back the entire transaction
   it("T16: rolls back the entire transaction if audit log persistence fails", async () => {
     (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
-    (prisma.leadChangeLog.createMany as any).mockRejectedValue(
+    (prisma.leadChangeLog.createMany as any).mockRejectedValueOnce(
       new Error("Database write error: connection lost")
     );
 
@@ -686,6 +707,190 @@ describe("DV-05 Phase 2A: Lead Change History Audit Logging Engine", () => {
     ).rejects.toThrow("Database write error: connection lost");
 
     // Because createMany threw inside the transaction, the update on lead and upsert on leadRequirement fail
+    expect(prisma.lead.update).not.toHaveBeenCalled();
+  });
+
+  // T17: Generic updateLead updates supported fields and records audit logs
+  it("T17: updateLead updates supported fields (name, email, alternatePhone) and records audit logs", async () => {
+    (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+    (prisma.lead.update as any).mockResolvedValue({
+      ...sampleLead,
+      name: "Rohan V. Gupta",
+      email: "rohan.gupta@example.com",
+    });
+
+    await updateLead(brokerContext, "lead-100", {
+      name: "Rohan V. Gupta",
+      email: "rohan.gupta@example.com",
+    });
+
+    expect(prisma.leadChangeLog.createMany).toHaveBeenCalledTimes(1);
+    const callArgs = (prisma.leadChangeLog.createMany as any).mock.calls[0][0].data;
+    const fieldNames = callArgs.map((c: any) => c.fieldName);
+
+    expect(fieldNames).toContain("name");
+    expect(fieldNames).toContain("email");
+    expect(callArgs[0]).toEqual(
+      expect.objectContaining({
+        tenantId: "tenant-apex-1",
+        leadId: "lead-100",
+        changedByUserId: "broker-owner-1",
+        changeSource: "USER",
+      })
+    );
+  });
+
+  // T18: Generic updateLead updates assignedTelecallerId and records audit log
+  it("T18: updateLead updates assignedTelecallerId when user has permission and records audit log", async () => {
+    (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+    (prisma.lead.update as any).mockResolvedValue({
+      ...sampleLead,
+      assignedTelecallerId: "telecaller-1",
+    });
+
+    await updateLead(brokerContext, "lead-100", {
+      assignedTelecallerId: "telecaller-1",
+    });
+
+    expect(prisma.leadChangeLog.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          fieldName: "assignedTelecallerId",
+          previousValue: null,
+          newValue: "telecaller-1",
+          changeSource: "USER",
+          changedByUserId: "broker-owner-1",
+        }),
+      ],
+    });
+  });
+
+  // T19: Generic updateLead denies reassignment if user lacks assignment permission
+  it("T19: updateLead denies reassignment if user lacks 'assignment:assign_telecaller' permission", async () => {
+    // Telecaller context without assignment permission attempting to reassign a lead assigned to them
+    const leadAssignedToTelecaller = {
+      ...sampleLead,
+      assignedTelecallerId: "telecaller-1",
+    };
+    (prisma.lead.findFirst as any).mockResolvedValue(leadAssignedToTelecaller);
+
+    await expect(
+      updateLead(telecallerContext, "lead-100", {
+        assignedTelecallerId: "telecaller-2",
+      })
+    ).rejects.toThrow(ForbiddenError);
+
+    expect(prisma.lead.update).not.toHaveBeenCalled();
+    expect(prisma.leadChangeLog.createMany).not.toHaveBeenCalled();
+  });
+
+  // T20: Generic updateLead strictly rejects unsupported fields to eliminate audit bypass
+  it("T20: updateLead strictly rejects unsupported/arbitrary fields to prevent audit bypass", async () => {
+    (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+
+    // Attempting to pass unreachableAttemptsCount or arbitrary keys
+    await expect(
+      updateLead(brokerContext, "lead-100", {
+        unreachableAttemptsCount: 5,
+      } as any)
+    ).rejects.toThrow("Unsupported field in update payload: 'unreachableAttemptsCount'.");
+
+    await expect(
+      updateLead(brokerContext, "lead-100", {
+        unsupportedField: "bypass-test",
+      } as any)
+    ).rejects.toThrow("Unsupported field in update payload: 'unsupportedField'.");
+
+    expect(prisma.lead.update).not.toHaveBeenCalled();
+    expect(prisma.leadChangeLog.createMany).not.toHaveBeenCalled();
+  });
+
+  // T21: updateLead and editLead strictly reject direct modification of isDoNotContact
+  it("T21: updateLead and editLead strictly reject direct modification of isDoNotContact", async () => {
+    (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+
+    // In updateLead
+    await expect(
+      updateLead(brokerContext, "lead-100", {
+        isDoNotContact: true,
+      } as any)
+    ).rejects.toThrow(
+      "Direct modification of isDoNotContact is not permitted through generic lead updates."
+    );
+
+    // In editLead
+    await expect(
+      editLead(brokerContext, {
+        id: "lead-100",
+        name: "Rohan Gupta",
+        primaryPhone: "9876543210",
+        originalSource: "99acres",
+        minBudget: 5000000,
+        maxBudget: 10000000,
+        city: "Gurugram",
+        preference: "SALE",
+        isDoNotContact: true,
+      } as any)
+    ).rejects.toThrow(
+      "Direct modification of isDoNotContact is not permitted through generic lead updates."
+    );
+
+    expect(prisma.lead.update).not.toHaveBeenCalled();
+    expect(prisma.leadChangeLog.createMany).not.toHaveBeenCalled();
+  });
+
+  // T22: updateLead rejects immutable fields
+  it("T22: updateLead rejects immutable fields (primaryPhone, originalSource, sourceCreatedAt)", async () => {
+    (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+
+    await expect(
+      updateLead(brokerContext, "lead-100", {
+        primaryPhone: "9999988888",
+      } as any)
+    ).rejects.toThrow("Primary phone number is immutable and cannot be changed.");
+
+    await expect(
+      updateLead(brokerContext, "lead-100", {
+        originalSource: "MagicBricks",
+      } as any)
+    ).rejects.toThrow("Lead source is immutable and cannot be changed.");
+
+    await expect(
+      updateLead(brokerContext, "lead-100", {
+        sourceCreatedAt: new Date(),
+      } as any)
+    ).rejects.toThrow("sourceCreatedAt is immutable and cannot be changed.");
+
+    expect(prisma.lead.update).not.toHaveBeenCalled();
+    expect(prisma.leadChangeLog.createMany).not.toHaveBeenCalled();
+  });
+
+  // T23: updateLead suppresses no-op updates when fields are identical
+  it("T23: updateLead generates zero changelog entries when submitted values match existing values", async () => {
+    (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+    (prisma.lead.update as any).mockResolvedValue(sampleLead);
+
+    await updateLead(brokerContext, "lead-100", {
+      name: "Rohan Gupta", // matches sampleLead.name exactly
+    });
+
+    expect(prisma.leadChangeLog.createMany).not.toHaveBeenCalled();
+    expect(prisma.lead.update).toHaveBeenCalled();
+  });
+
+  // T24: updateLead rolls back transaction on audit failure
+  it("T24: updateLead rolls back transaction if audit log persistence fails", async () => {
+    (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+    (prisma.leadChangeLog.createMany as any).mockRejectedValueOnce(
+      new Error("Audit logging DB failure")
+    );
+
+    await expect(
+      updateLead(brokerContext, "lead-100", {
+        name: "Rohan Transaction Test",
+      })
+    ).rejects.toThrow("Audit logging DB failure");
+
     expect(prisma.lead.update).not.toHaveBeenCalled();
   });
 });
