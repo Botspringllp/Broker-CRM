@@ -12,6 +12,11 @@ vi.mock("@/server/db", () => {
       create: vi.fn(),
       update: vi.fn(),
     },
+    leadChangeLog: {
+      createMany: vi.fn(),
+      create: vi.fn(),
+      findMany: vi.fn(),
+    },
     leadRequirement: {
       update: vi.fn(),
     },

@@ -57,10 +57,8 @@ export function EditLeadClient({
 
   // Contact Info
   const [name, setName] = useState(lead.name);
-  const [primaryPhone, setPrimaryPhone] = useState(lead.primaryPhone);
   const [alternatePhone, setAlternatePhone] = useState(lead.alternatePhone || "");
   const [email, setEmail] = useState(lead.email || "");
-  const [originalSource, setOriginalSource] = useState(lead.originalSource);
   const [assignedTelecallerId, setAssignedTelecallerId] = useState(
     eligibleTelecallers.find((t) => t.name === lead.assignedTelecaller)?.id || ""
   );
@@ -126,7 +124,7 @@ export function EditLeadClient({
       return;
     }
 
-    const cleanedPhone = primaryPhone.replace(/\D/g, "");
+    const cleanedPhone = lead.primaryPhone.replace(/\D/g, "");
     if (cleanedPhone.length < 10) {
       setErrorMessage("A valid 10-digit primary mobile number is required.");
       return;
@@ -161,13 +159,18 @@ export function EditLeadClient({
         .map((s) => s.trim())
         .filter(Boolean);
 
+      const localitiesArr = localities
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+
       const res = await editLeadAction({
         id: lead.id,
         name: name.trim(),
-        primaryPhone: cleanedPhone,
+        primaryPhone: lead.primaryPhone,
         alternatePhone: alternatePhone.trim() || null,
         email: email.trim() || null,
-        originalSource: originalSource.trim(),
+        originalSource: lead.originalSource,
         minBudget: minB,
         maxBudget: maxB,
         city: city.trim(),
@@ -175,6 +178,7 @@ export function EditLeadClient({
         bedroomConfigurations: selectedBhks,
         propertyTypes: selectedTypes,
         societies: societiesArr,
+        localities: localitiesArr,
         targetArea: targetArea.trim() ? parseFloat(targetArea) : null,
         areaType,
         assignedTelecallerId: canAssignTelecaller ? assignedTelecallerId || null : undefined,
@@ -263,22 +267,30 @@ export function EditLeadClient({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-crm-text mb-1">
-                  Primary Mobile Number <span className="text-red-500">*</span>
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-crm-text">
+                    Primary Mobile Number <span className="text-red-500">*</span>
+                  </label>
+                  <span className="text-[10px] text-crm-muted font-medium bg-stone-100 px-1.5 py-0.5 rounded border border-crm-border">
+                    Immutable
+                  </span>
+                </div>
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-xs text-crm-muted font-medium">
                     +91
                   </span>
                   <input
                     type="tel"
-                    required
-                    maxLength={10}
-                    value={primaryPhone}
-                    onChange={(e) => setPrimaryPhone(e.target.value.replace(/\D/g, ""))}
-                    className="w-full pl-10 pr-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                    disabled
+                    readOnly
+                    value={lead.primaryPhone}
+                    className="w-full pl-10 pr-3 py-2 text-xs rounded border border-crm-border bg-stone-100 text-stone-600 cursor-not-allowed select-none"
+                    title="Primary mobile number is the unique buyer identifier and cannot be modified (PRD §5.3)."
                   />
                 </div>
+                <span className="text-[10px] text-crm-muted mt-1 block">
+                  Primary mobile number is immutable per PRD §5.3.
+                </span>
               </div>
 
               <div>
@@ -308,13 +320,19 @@ export function EditLeadClient({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-crm-text mb-1">
-                  Origin / Lead Source <span className="text-red-500">*</span>
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-crm-text">
+                    Origin / Lead Source <span className="text-red-500">*</span>
+                  </label>
+                  <span className="text-[10px] text-crm-muted font-medium bg-stone-100 px-1.5 py-0.5 rounded border border-crm-border">
+                    Immutable
+                  </span>
+                </div>
                 <select
-                  value={originalSource}
-                  onChange={(e) => setOriginalSource(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                  disabled
+                  value={lead.originalSource}
+                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-100 text-stone-600 cursor-not-allowed select-none"
+                  title="Original inquiry source cannot be modified after registration (PRD §5.3)."
                 >
                   {SOURCES.map((s) => (
                     <option key={s} value={s}>
@@ -322,6 +340,9 @@ export function EditLeadClient({
                     </option>
                   ))}
                 </select>
+                <span className="text-[10px] text-crm-muted mt-1 block">
+                  Acquisition source is immutable per PRD §5.3.
+                </span>
               </div>
 
               {canAssignTelecaller && eligibleTelecallers.length > 0 && (

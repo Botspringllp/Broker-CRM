@@ -3,6 +3,7 @@ import { TenantContext, NotFoundError, ForbiddenError } from "../tenant-context"
 import { assertPermission, hasPermission } from "../permissions";
 import { ValidationError } from "../errors";
 import { normalizeIndianMobile } from "../utils/phone";
+import { recordLeadFieldChanges, FieldComparison } from "./lead-changelog";
 import {
   Prisma,
   UserRole,
@@ -47,6 +48,7 @@ export interface EditLeadData {
   areaType?: ("CARPET" | "BUILT_UP" | "SUPER_BUILT_UP") | null;
   societies?: string[];
   assignedTelecallerId?: string | null;
+  localities?: string[];
 }
 
 export interface LogLeadCallInput {
@@ -199,6 +201,31 @@ async function handleExistingBuyer(
   }
 
   if (shouldReopen || nextAssignedTelecallerId !== existingLead.assignedTelecallerId) {
+    const changes: FieldComparison[] = [];
+    if (shouldReopen) {
+      changes.push({
+        fieldName: "status",
+        previousValue: existingLead.status,
+        newValue: nextStatus,
+      });
+    }
+    if (nextAssignedTelecallerId !== existingLead.assignedTelecallerId) {
+      changes.push({
+        fieldName: "assignedTelecallerId",
+        previousValue: existingLead.assignedTelecallerId,
+        newValue: nextAssignedTelecallerId,
+      });
+    }
+
+    await recordLeadFieldChanges({
+      tx,
+      tenantId: context.tenantId,
+      leadId: existingLead.id,
+      changedByUserId: context.userId,
+      changeSource: "SYSTEM",
+      changes,
+    });
+
     await tx.lead.update({
       where: { id: existingLead.id },
       data: {
@@ -597,6 +624,23 @@ export async function logLeadCall(context: TenantContext, input: LogLeadCallInpu
       },
     });
 
+    if (nextStatus !== lead.status) {
+      await recordLeadFieldChanges({
+        tx,
+        tenantId: context.tenantId,
+        leadId: lead.id,
+        changedByUserId: context.userId,
+        changeSource: "SYSTEM",
+        changes: [
+          {
+            fieldName: "status",
+            previousValue: lead.status,
+            newValue: nextStatus,
+          },
+        ],
+      });
+    }
+
     return tx.lead.update({
       where: {
         id_tenantId: {
@@ -632,12 +676,38 @@ export async function updateLeadStatus(
   const lead = await getLeadById(context, leadId);
 
   return prisma.$transaction(async (tx) => {
+    const changes: FieldComparison[] = [];
+
+    if (lead.status !== status) {
+      changes.push({
+        fieldName: "status",
+        previousValue: lead.status,
+        newValue: status,
+      });
+    }
+
     if (status === LeadStatus.ACTIVE && lead.requirement) {
+      if (!lead.requirement.isConfirmed) {
+        changes.push({
+          fieldName: "isConfirmed",
+          previousValue: false,
+          newValue: true,
+        });
+      }
       await tx.leadRequirement.update({
         where: { leadId: lead.id },
         data: { isConfirmed: true },
       });
     }
+
+    await recordLeadFieldChanges({
+      tx,
+      tenantId: context.tenantId,
+      leadId: lead.id,
+      changedByUserId: context.userId,
+      changeSource: "USER",
+      changes,
+    });
 
     return tx.lead.update({
       where: {
@@ -676,17 +746,78 @@ export async function updateLead(
     assertPermission(context, "demand:log_call");
   }
 
-  await getLeadById(context, leadId);
+  const lead = await getLeadById(context, leadId);
 
-  return prisma.lead.update({
-    where: {
-      id_tenantId: {
-        id: leadId,
-        tenantId: context.tenantId,
+  // Enforce field immutability (PRD §5.3)
+  if (data.primaryPhone !== undefined) {
+    const raw =
+      typeof data.primaryPhone === "string"
+        ? data.primaryPhone
+        : (data.primaryPhone as { set?: string }).set;
+    if (raw && raw !== lead.primaryPhone) {
+      throw new ValidationError("Primary phone number is immutable and cannot be changed.");
+    }
+  }
+  if (data.originalSource !== undefined) {
+    const raw =
+      typeof data.originalSource === "string"
+        ? data.originalSource
+        : (data.originalSource as { set?: string }).set;
+    if (raw && raw !== lead.originalSource) {
+      throw new ValidationError("Lead source is immutable and cannot be changed.");
+    }
+  }
+  if (data.sourceCreatedAt !== undefined) {
+    throw new ValidationError("sourceCreatedAt is immutable and cannot be changed.");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const changes: FieldComparison[] = [];
+    if (data.name !== undefined) {
+      const val = typeof data.name === "string" ? data.name : (data.name as { set?: string }).set;
+      changes.push({ fieldName: "name", previousValue: lead.name, newValue: val });
+    }
+    if (data.status !== undefined) {
+      const val =
+        typeof data.status === "string"
+          ? data.status
+          : (data.status as { set?: LeadStatus }).set;
+      changes.push({ fieldName: "status", previousValue: lead.status, newValue: val });
+    }
+    if (data.email !== undefined) {
+      const val =
+        typeof data.email === "string"
+          ? data.email
+          : (data.email as { set?: string | null }).set;
+      changes.push({ fieldName: "email", previousValue: lead.email, newValue: val });
+    }
+    if (data.alternatePhone !== undefined) {
+      const val =
+        typeof data.alternatePhone === "string"
+          ? data.alternatePhone
+          : (data.alternatePhone as { set?: string | null }).set;
+      changes.push({ fieldName: "alternatePhone", previousValue: lead.alternatePhone, newValue: val });
+    }
+
+    await recordLeadFieldChanges({
+      tx,
+      tenantId: context.tenantId,
+      leadId: lead.id,
+      changedByUserId: context.userId,
+      changeSource: "USER",
+      changes,
+    });
+
+    return tx.lead.update({
+      where: {
+        id_tenantId: {
+          id: leadId,
+          tenantId: context.tenantId,
+        },
       },
-    },
-    data,
-    include: FULL_LEAD_INCLUDE,
+      data,
+      include: FULL_LEAD_INCLUDE,
+    });
   });
 }
 
@@ -712,6 +843,20 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
     throw new ValidationError("Valid 10-digit primary phone number is required.");
   }
 
+  const normalizedPhone =
+    cleanedPhone.length > 10 && cleanedPhone.startsWith("91")
+      ? cleanedPhone.slice(-10)
+      : cleanedPhone;
+
+  // PRD §5.3 Immutability checks
+  if (normalizedPhone !== lead.primaryPhone) {
+    throw new ValidationError("Primary phone number is immutable and cannot be changed.");
+  }
+
+  if (data.originalSource.trim() !== lead.originalSource) {
+    throw new ValidationError("Lead source is immutable and cannot be changed.");
+  }
+
   if (data.minBudget < 0 || data.maxBudget < 0) {
     throw new ValidationError("Budget values cannot be negative.");
   }
@@ -722,10 +867,6 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
 
   if (!data.city?.trim()) {
     throw new ValidationError("Target city is required.");
-  }
-
-  if (!data.originalSource?.trim()) {
-    throw new ValidationError("Inquiry source is required.");
   }
 
   let assignedTelecallerId = lead.assignedTelecallerId;
@@ -739,12 +880,101 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
     assignedTelecallerId = data.assignedTelecallerId || null;
   }
 
-  const normalizedPhone =
-    cleanedPhone.length > 10 && cleanedPhone.startsWith("91")
-      ? cleanedPhone.slice(-10)
-      : cleanedPhone;
+  const trimmedAlternatePhone = data.alternatePhone?.trim() || null;
+  const cleanedEmail = data.email?.trim().toLowerCase() || null;
 
   return prisma.$transaction(async (tx) => {
+    // Collect field comparisons
+    const changes: FieldComparison[] = [
+      {
+        fieldName: "name",
+        previousValue: lead.name,
+        newValue: data.name.trim(),
+      },
+      {
+        fieldName: "alternatePhone",
+        previousValue: lead.alternatePhone,
+        newValue: trimmedAlternatePhone,
+      },
+      {
+        fieldName: "email",
+        previousValue: lead.email,
+        newValue: cleanedEmail,
+      },
+      {
+        fieldName: "assignedTelecallerId",
+        previousValue: lead.assignedTelecallerId,
+        newValue: assignedTelecallerId,
+      },
+      {
+        fieldName: "minBudget",
+        previousValue: lead.requirement?.minBudget ?? null,
+        newValue: data.minBudget,
+      },
+      {
+        fieldName: "maxBudget",
+        previousValue: lead.requirement?.maxBudget ?? null,
+        newValue: data.maxBudget,
+      },
+      {
+        fieldName: "city",
+        previousValue: lead.requirement?.city ?? null,
+        newValue: data.city.trim(),
+      },
+      {
+        fieldName: "preference",
+        previousValue: lead.requirement?.preference ?? null,
+        newValue: data.preference,
+      },
+      {
+        fieldName: "bedroomConfigurations",
+        previousValue: lead.requirement?.bedroomConfigurations ?? [],
+        newValue: data.bedroomConfigurations ?? [],
+      },
+      {
+        fieldName: "propertyTypes",
+        previousValue: lead.requirement?.propertyTypes ?? [],
+        newValue: data.propertyTypes ?? [],
+      },
+      {
+        fieldName: "societies",
+        previousValue: lead.requirement?.societies ?? [],
+        newValue: data.societies ?? [],
+      },
+      {
+        fieldName: "targetArea",
+        previousValue: lead.requirement?.targetArea ?? null,
+        newValue: data.targetArea ? new Prisma.Decimal(data.targetArea) : null,
+      },
+      {
+        fieldName: "areaType",
+        previousValue: lead.requirement?.areaType ?? null,
+        newValue: data.areaType ?? null,
+      },
+    ];
+
+    if (data.localities !== undefined) {
+      const prevLocs = (lead.requirement?.localities ?? [])
+        .map((l) => l.locality?.name || l.localityId)
+        .filter(Boolean)
+        .sort();
+      const nextLocs = [...data.localities].map((s) => s.trim()).filter(Boolean).sort();
+      changes.push({
+        fieldName: "localities",
+        previousValue: prevLocs,
+        newValue: nextLocs,
+      });
+    }
+
+    await recordLeadFieldChanges({
+      tx,
+      tenantId: context.tenantId,
+      leadId: lead.id,
+      changedByUserId: context.userId,
+      changeSource: "USER",
+      changes,
+    });
+
     await tx.lead.update({
       where: {
         id_tenantId: {
@@ -754,10 +984,8 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
       },
       data: {
         name: data.name.trim(),
-        primaryPhone: normalizedPhone,
-        alternatePhone: data.alternatePhone?.trim() || null,
-        email: data.email?.trim().toLowerCase() || null,
-        originalSource: data.originalSource.trim(),
+        alternatePhone: trimmedAlternatePhone,
+        email: cleanedEmail,
         assignedTelecallerId,
       },
     });

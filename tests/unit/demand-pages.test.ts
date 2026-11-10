@@ -21,6 +21,11 @@ vi.mock("@/server/db", () => {
       create: vi.fn(),
       findMany: vi.fn(),
     },
+    leadChangeLog: {
+      createMany: vi.fn(),
+      create: vi.fn(),
+      findMany: vi.fn(),
+    },
     $transaction: vi.fn(async (arg) => {
       if (typeof arg === "function") {
         return arg(mockPrisma);
@@ -257,6 +262,40 @@ describe("Demand Management: Dedicated Pages & Qualification Workspace Tests", (
       ).rejects.toThrow("Maximum budget cannot be less than minimum budget.");
     });
 
+    it("rejects edit if primaryPhone is changed (immutable per PRD §5.3)", async () => {
+      (prisma.lead.findFirst as any).mockResolvedValue(existingLead);
+
+      await expect(
+        editLead(brokerContext, {
+          id: "lead-1",
+          name: "Amit Sharma",
+          primaryPhone: "9999999999",
+          originalSource: "Direct Inquiry",
+          city: "Gurugram",
+          preference: "SALE",
+          minBudget: 6000000,
+          maxBudget: 12000000,
+        })
+      ).rejects.toThrow("Primary phone number is immutable and cannot be changed.");
+    });
+
+    it("rejects edit if originalSource is changed (immutable per PRD §5.3)", async () => {
+      (prisma.lead.findFirst as any).mockResolvedValue(existingLead);
+
+      await expect(
+        editLead(brokerContext, {
+          id: "lead-1",
+          name: "Amit Sharma",
+          primaryPhone: "9811122233",
+          originalSource: "MagicBricks",
+          city: "Gurugram",
+          preference: "SALE",
+          minBudget: 6000000,
+          maxBudget: 12000000,
+        })
+      ).rejects.toThrow("Lead source is immutable and cannot be changed.");
+    });
+
     it("enforces tenant boundary on editLead", async () => {
       // FindFirst returns null because tenantId does not match
       (prisma.lead.findFirst as any).mockResolvedValue(null);
@@ -318,7 +357,7 @@ describe("Demand Management: Dedicated Pages & Qualification Workspace Tests", (
         id: "lead-1",
         name: "Amit Sharma Updated",
         primaryPhone: "9811122233",
-        originalSource: "MagicBricks",
+        originalSource: "Direct Inquiry",
         city: "Gurugram",
         preference: "SALE",
         minBudget: 7000000,
@@ -337,8 +376,6 @@ describe("Demand Management: Dedicated Pages & Qualification Workspace Tests", (
           },
           data: expect.objectContaining({
             name: "Amit Sharma Updated",
-            primaryPhone: "9811122233",
-            originalSource: "MagicBricks",
           }),
         })
       );

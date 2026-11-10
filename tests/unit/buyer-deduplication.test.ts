@@ -12,6 +12,11 @@ vi.mock("@/server/db", () => {
       create: vi.fn(),
       update: vi.fn(),
     },
+    leadChangeLog: {
+      createMany: vi.fn(),
+      create: vi.fn(),
+      findMany: vi.fn(),
+    },
     enquiry: {
       create: vi.fn(),
     },
@@ -65,6 +70,11 @@ describe("DV-03: Tenant-Scoped Buyer Deduplication & Enquiry Creation", () => {
       isActive: true,
       delegatedPermissions: [],
     },
+    session: {
+      id: "sess-a",
+      token: "tok-a",
+      expiresAt: new Date(Date.now() + 86400000),
+    },
   };
 
   const brokerContextB: TenantContext = {
@@ -79,6 +89,11 @@ describe("DV-03: Tenant-Scoped Buyer Deduplication & Enquiry Creation", () => {
       tenantId: tenantB,
       isActive: true,
       delegatedPermissions: [],
+    },
+    session: {
+      id: "sess-b",
+      token: "tok-b",
+      expiresAt: new Date(Date.now() + 86400000),
     },
   };
 
@@ -95,6 +110,11 @@ describe("DV-03: Tenant-Scoped Buyer Deduplication & Enquiry Creation", () => {
       isActive: true,
       delegatedPermissions: [],
     },
+    session: {
+      id: "sess-tc",
+      token: "tok-tc",
+      expiresAt: new Date(Date.now() + 86400000),
+    },
   };
 
   const unauthorizedContext: TenantContext = {
@@ -109,6 +129,11 @@ describe("DV-03: Tenant-Scoped Buyer Deduplication & Enquiry Creation", () => {
       tenantId: tenantA,
       isActive: true,
       delegatedPermissions: [],
+    },
+    session: {
+      id: "sess-v",
+      token: "tok-v",
+      expiresAt: new Date(Date.now() + 86400000),
     },
   };
 
