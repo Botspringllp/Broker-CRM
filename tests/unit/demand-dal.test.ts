@@ -19,6 +19,38 @@ vi.mock("@/server/db", () => {
     },
     leadRequirement: {
       update: vi.fn(),
+      upsert: vi.fn(),
+    },
+    locality: {
+      findMany: vi.fn().mockImplementation(async (args) => {
+        return [
+          {
+            id: "loc-1",
+            tenantId: args?.where?.tenantId || "tenant-broker-1",
+            name: "Sector 54",
+            city: args?.where?.city?.equals || "Gurugram",
+            latitude: null,
+            longitude: null,
+          },
+          {
+            id: "loc-2",
+            tenantId: args?.where?.tenantId || "tenant-broker-1",
+            name: "Golf Course Road",
+            city: args?.where?.city?.equals || "Gurugram",
+            latitude: null,
+            longitude: null,
+          },
+        ];
+      }),
+      findFirst: vi.fn(),
+    },
+    leadRequirementLocality: {
+      findMany: vi.fn().mockResolvedValue([]),
+      createMany: vi.fn().mockResolvedValue({ count: 2 }),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+    property: {
+      findFirst: vi.fn(),
     },
     callLog: {
       create: vi.fn(),
@@ -267,7 +299,7 @@ describe("Demand / Lead Management DAL", () => {
       );
     });
 
-    it("automatically marks lead INACTIVE on 3rd unreachable attempt (PRD §5.5 limit)", async () => {
+    it("increments unreachable count to 3 without automatically marking lead INACTIVE (PRD §5.5 discretionary)", async () => {
       vi.mocked(prisma.lead.findFirst).mockResolvedValueOnce({
         id: "lead-1",
         tenantId: "tenant-broker-1",
@@ -280,7 +312,7 @@ describe("Demand / Lead Management DAL", () => {
       vi.mocked(prisma.lead.update).mockResolvedValueOnce({
         id: "lead-1",
         unreachableAttemptsCount: 3,
-        status: LeadStatus.INACTIVE,
+        status: LeadStatus.NOT_YET_VALIDATED,
         callLogs: [],
       } as any);
 
@@ -293,7 +325,7 @@ describe("Demand / Lead Management DAL", () => {
         expect.objectContaining({
           data: expect.objectContaining({
             unreachableAttemptsCount: 3,
-            status: LeadStatus.INACTIVE,
+            status: LeadStatus.NOT_YET_VALIDATED,
           }),
         })
       );

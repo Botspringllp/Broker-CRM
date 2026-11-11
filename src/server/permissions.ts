@@ -25,6 +25,7 @@ export type AppAction =
   | "demand:log_call"
   | "demand:activate"
   | "demand:inactivate"
+  | "demand:mark_dnc"
   | "demand:view_changelog"
   // Matching Engine
   | "matching:view_matches"
@@ -78,6 +79,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<AppAction>> = {
     "demand:log_call",
     "demand:activate",
     "demand:inactivate",
+    "demand:mark_dnc",
     "demand:view_changelog",
     "matching:view_matches",
     "matching:query_active_pool",
@@ -118,6 +120,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<AppAction>> = {
     "demand:log_call",
     "demand:activate",
     "demand:inactivate",
+    "demand:mark_dnc",
     "demand:view_changelog",
     "matching:view_matches",
     "matching:query_active_pool",
@@ -153,6 +156,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<AppAction>> = {
     "demand:log_call",
     "demand:activate",
     "demand:inactivate",
+    "demand:mark_dnc",
     "demand:view_changelog",
     "matching:view_matches",
     "matching:query_active_pool",

@@ -104,8 +104,11 @@ export function NewLeadClient({
   const [localitiesInput, setLocalitiesInput] = useState("Golf Course Road, DLF Phase 5");
   const [societiesInput, setSocietiesInput] = useState("");
 
-  // Step 4: Additional Requirements
+  // Step 4: Additional Requirements & Area Specifications
   const [targetArea, setTargetArea] = useState("");
+  const [minArea, setMinArea] = useState("");
+  const [maxArea, setMaxArea] = useState("");
+  const [areaUnit, setAreaUnit] = useState<"sq.ft" | "sq.yd" | "sq.m">("sq.ft");
   const [areaType, setAreaType] = useState<"CARPET" | "BUILT_UP" | "SUPER_BUILT_UP">("SUPER_BUILT_UP");
   const [notes, setNotes] = useState("");
 
@@ -196,8 +199,30 @@ export function NewLeadClient({
     if (step === 4) {
       if (targetArea.trim()) {
         const areaNum = parseFloat(targetArea);
-        if (isNaN(areaNum) || areaNum <= 0) {
-          setStepError("Target area must be a positive number if provided.");
+        if (isNaN(areaNum) || areaNum < 0) {
+          setStepError("Target area must be a non-negative number if provided.");
+          return false;
+        }
+      }
+      if (minArea.trim()) {
+        const minNum = parseFloat(minArea);
+        if (isNaN(minNum) || minNum < 0) {
+          setStepError("Minimum area must be a non-negative number if provided.");
+          return false;
+        }
+      }
+      if (maxArea.trim()) {
+        const maxNum = parseFloat(maxArea);
+        if (isNaN(maxNum) || maxNum < 0) {
+          setStepError("Maximum area must be a non-negative number if provided.");
+          return false;
+        }
+      }
+      if (minArea.trim() && maxArea.trim()) {
+        const minNum = parseFloat(minArea);
+        const maxNum = parseFloat(maxArea);
+        if (maxNum < minNum) {
+          setStepError("Maximum area cannot be less than minimum area.");
           return false;
         }
       }
@@ -243,6 +268,17 @@ export function NewLeadClient({
     try {
       const minB = parseFloat(minBudget);
       const maxB = parseFloat(maxBudget);
+      const parsedLocalities = localitiesInput
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const parsedSocieties = societiesInput
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const parsedTargetArea = targetArea.trim() ? parseFloat(targetArea) : null;
+      const parsedMinArea = minArea.trim() ? parseFloat(minArea) : null;
+      const parsedMaxArea = maxArea.trim() ? parseFloat(maxArea) : null;
 
       const res = await createLeadAction({
         name: name.trim(),
@@ -256,6 +292,13 @@ export function NewLeadClient({
         maxBudget: maxB,
         bedroomConfigurations: selectedBhks,
         propertyTypes: selectedTypes,
+        localities: parsedLocalities.length > 0 ? parsedLocalities : undefined,
+        societies: parsedSocieties.length > 0 ? parsedSocieties : undefined,
+        targetArea: parsedTargetArea,
+        minArea: parsedMinArea,
+        maxArea: parsedMaxArea,
+        areaUnit,
+        areaType,
         assignedTelecallerId: assignedTelecallerId || undefined,
         advertisedPropertyRef: advertisedPropertyRef.trim() || undefined,
         enquiryDetails: notes.trim() || undefined,
@@ -480,7 +523,7 @@ export function NewLeadClient({
                       onChange={(e) => setAssignedTelecallerId(e.target.value)}
                       className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
                     >
-                      <option value="">Leave Unassigned (or Queue Default)</option>
+                      <option value="">Auto-Assign via Round Robin (Default)</option>
                       {eligibleTelecallers.map((t) => (
                         <option key={t.id} value={t.id}>
                           {t.name} ({t.email})
@@ -749,15 +792,45 @@ export function NewLeadClient({
                   Step 4: Area Specifications & Additional Notes
                 </h2>
                 <p className="text-xs text-crm-muted mt-0.5">
-                  Record carpet or built-up area expectations and special prospect preferences.
+                  Record area range, measurement units, area type, and special prospect preferences.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Min Area */}
+                <div>
+                  <label className="block text-xs font-semibold text-crm-text mb-1">
+                    Minimum Area
+                  </label>
+                  <input
+                    type="number"
+                    step="10"
+                    placeholder="e.g. 1200"
+                    value={minArea}
+                    onChange={(e) => setMinArea(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                  />
+                </div>
+
+                {/* Max Area */}
+                <div>
+                  <label className="block text-xs font-semibold text-crm-text mb-1">
+                    Maximum Area
+                  </label>
+                  <input
+                    type="number"
+                    step="10"
+                    placeholder="e.g. 2500"
+                    value={maxArea}
+                    onChange={(e) => setMaxArea(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                  />
+                </div>
+
                 {/* Target Area */}
                 <div>
                   <label className="block text-xs font-semibold text-crm-text mb-1">
-                    Target Area (sq.ft / sq.yd)
+                    Target Area (Approx)
                   </label>
                   <input
                     type="number"
@@ -769,10 +842,26 @@ export function NewLeadClient({
                   />
                 </div>
 
-                {/* Area Unit Type */}
+                {/* Area Unit */}
                 <div>
                   <label className="block text-xs font-semibold text-crm-text mb-1">
-                    Area Unit Type
+                    Area Unit
+                  </label>
+                  <select
+                    value={areaUnit}
+                    onChange={(e) => setAreaUnit(e.target.value as "sq.ft" | "sq.yd" | "sq.m")}
+                    className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                  >
+                    <option value="sq.ft">Square Feet (sq.ft)</option>
+                    <option value="sq.yd">Square Yards (sq.yd)</option>
+                    <option value="sq.m">Square Meters (sq.m)</option>
+                  </select>
+                </div>
+
+                {/* Area Measurement Type */}
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold text-crm-text mb-1">
+                    Area Measurement Type
                   </label>
                   <select
                     value={areaType}
@@ -915,9 +1004,13 @@ export function NewLeadClient({
                       <span className="font-bold text-crm-text">{city}</span>
                     </div>
                     <div>
-                      <span className="text-crm-muted block text-[10px]">Target Area</span>
+                      <span className="text-crm-muted block text-[10px]">Area Specifications</span>
                       <span className="font-medium text-crm-text">
-                        {targetArea ? `${targetArea} sq.ft (${areaType.replace(/_/g, " ")})` : "Not specified"}
+                        {minArea || maxArea
+                          ? `${minArea || "–"} to ${maxArea || "–"} ${areaUnit} (${areaType.replace(/_/g, " ")})`
+                          : targetArea
+                          ? `${targetArea} ${areaUnit} (${areaType.replace(/_/g, " ")})`
+                          : "Not specified"}
                       </span>
                     </div>
                     <div>
@@ -930,6 +1023,10 @@ export function NewLeadClient({
                   <div>
                     <span className="text-crm-muted block text-[10px]">Localities</span>
                     <span className="font-medium text-crm-text">{localitiesInput || "None specified"}</span>
+                  </div>
+                  <div>
+                    <span className="text-crm-muted block text-[10px]">Societies / Projects</span>
+                    <span className="font-medium text-crm-text">{societiesInput || "None specified"}</span>
                   </div>
                   {notes && (
                     <div>

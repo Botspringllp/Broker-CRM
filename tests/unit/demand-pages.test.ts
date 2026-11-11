@@ -474,7 +474,7 @@ describe("Demand Management: Dedicated Pages & Qualification Workspace Tests", (
       );
     });
 
-    it("automatically marks lead INACTIVE on 3rd unreachable attempt", async () => {
+    it("increments unreachableAttemptsCount on 3rd unreachable attempt without auto-inactivating", async () => {
       const twoAttemptsLead = {
         ...activeLead,
         unreachableAttemptsCount: 2,
@@ -484,7 +484,7 @@ describe("Demand Management: Dedicated Pages & Qualification Workspace Tests", (
       (prisma.lead.update as any).mockResolvedValue({
         ...twoAttemptsLead,
         unreachableAttemptsCount: 3,
-        status: LeadStatus.INACTIVE,
+        status: LeadStatus.NOT_YET_VALIDATED,
       });
 
       await logLeadCall(telecallerContext, {
@@ -497,7 +497,7 @@ describe("Demand Management: Dedicated Pages & Qualification Workspace Tests", (
         expect.objectContaining({
           data: expect.objectContaining({
             unreachableAttemptsCount: 3,
-            status: LeadStatus.INACTIVE, // 3-attempt unreachable threshold enforced
+            status: LeadStatus.NOT_YET_VALIDATED,
           }),
         })
       );

@@ -40,6 +40,19 @@ export interface PropertyAssignment {
   notes?: string | null;
 }
 
+export interface LeadAssignment {
+  id: string;
+  assignedUserId: string;
+  assignedUserName: string;
+  assignedByUserId?: string | null;
+  assignedByUserName?: string | null;
+  assignmentMethod: "Manual" | "Round Robin";
+  status: "Active" | "Reassigned" | "Completed" | "Cancelled";
+  assignedAt: string;
+  unassignedAt?: string | null;
+  notes?: string | null;
+}
+
 export interface Property {
   id: string;
   flatNumber: string;
@@ -149,9 +162,13 @@ export interface Lead {
   email?: string;
   status: "Not Yet Validated" | "Active" | "Inactive";
   unreachableCount: number;
+  isDoNotContact: boolean;
   originalSource: string;
   sourceCreatedAt: string;
   assignedTelecaller: string;
+  assignedTelecallerId?: string | null;
+  currentAssignment?: LeadAssignment | null;
+  assignmentHistory?: LeadAssignment[];
   advertisedPropertyRef?: string;
   advertisedPropertyVerified: boolean;
   advertisedPropertyNotes?: string;
@@ -165,18 +182,44 @@ export interface Lead {
     bedroomConfigurations: string[];
     preference: "Sale" | "Rent";
     propertyTypes: string[];
-    targetArea?: number;
+    targetArea?: number | null;
+    minArea?: number | null;
+    maxArea?: number | null;
+    areaUnit?: string | null;
+    areaType?: string | null;
     isConfirmed: boolean;
   };
   currentDisposition: string;
   callHistory: CallLogItem[];
   topMatches: MatchingPropertySummary[];
+  enquiries?: LeadEnquiryItem[];
   siteVisitHistory: {
     date: string;
     propertySociety: string;
     outcome: string;
     agentName: string;
   }[];
+}
+
+export interface LeadEnquiryItem {
+  id: string;
+  source: string;
+  advertisedPropertyRef?: string | null;
+  isVerifiedByCaller: boolean;
+  callerVerificationNotes?: string | null;
+  enquiryDate: string;
+}
+
+export interface LeadChangeLogItem {
+  id: string;
+  leadId: string;
+  fieldName: string;
+  previousValue: string | null;
+  newValue: string | null;
+  changedByUserId: string | null;
+  actorName: string;
+  changeSource: "USER" | "SYSTEM" | "API";
+  changedAt: string;
 }
 
 export interface SiteVisitItem {
@@ -226,4 +269,22 @@ export interface SiteVisit {
     recordedBy: string;
   }[];
 }
+
+export interface PendingCallbackItem {
+  callLogId: string;
+  leadId: string;
+  leadName: string;
+  primaryPhone: string;
+  assignedTelecallerName: string;
+  assignedTelecallerId: string | null;
+  callbackScheduledAt: string;
+  callbackFormatted: string;
+  isOverdue: boolean;
+  isDueToday: boolean;
+  notes: string | null;
+  leadStatus: string;
+  budgetFormatted: string;
+  city: string;
+}
+
 

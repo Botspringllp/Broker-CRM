@@ -5,14 +5,22 @@ import Link from "next/link";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Toast } from "@/components/ui/Toast";
+import { Modal } from "@/components/ui/Modal";
 import { Lead } from "@/types/crm";
-import { updateLeadStatusAction } from "../actions";
+import {
+  updateLeadStatusAction,
+  assignLeadAction,
+  assignLeadRoundRobinAction,
+} from "../actions";
 
 interface LeadDetailsClientProps {
   lead: Lead;
   canEdit: boolean;
   canLogCall: boolean;
   canActivate: boolean;
+  canViewChangelog?: boolean;
+  canAssignTelecaller?: boolean;
+  eligibleTelecallers?: { id: string; name: string; email: string; phone: string }[];
   userRole: string;
 }
 
@@ -21,10 +29,75 @@ export function LeadDetailsClient({
   canEdit,
   canLogCall,
   canActivate,
+  canAssignTelecaller = false,
+  eligibleTelecallers = [],
 }: LeadDetailsClientProps) {
   const [lead, setLead] = useState<Lead>(initialLead);
   const [isActivating, setIsActivating] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Assignment Modal state (DV-08 / PRD §5.6)
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [selectedTelecallerId, setSelectedTelecallerId] = useState(
+    eligibleTelecallers.find((t) => t.name === initialLead.assignedTelecaller)?.id ||
+      eligibleTelecallers[0]?.id ||
+      ""
+  );
+  const [assignmentNotes, setAssignmentNotes] = useState("");
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [assignModalError, setAssignModalError] = useState<string | null>(null);
+
+  const handleAssignManual = async () => {
+    if (!selectedTelecallerId) return;
+    setIsAssigning(true);
+    setAssignModalError(null);
+    try {
+      const res = await assignLeadAction({
+        leadId: lead.id,
+        telecallerId: selectedTelecallerId,
+        notes: assignmentNotes.trim() || undefined,
+      });
+
+      if (!res.success) {
+        setAssignModalError(res.error || "Failed to assign lead.");
+        return;
+      }
+
+      setLead(res.lead);
+      setToastMessage(`Lead assigned to ${res.lead.assignedTelecaller} successfully.`);
+      setAssignModalOpen(false);
+    } catch (err: unknown) {
+      setAssignModalError(err instanceof Error ? err.message : "Failed to assign lead.");
+    } finally {
+      setIsAssigning(false);
+    }
+  };
+
+  const handleAssignRoundRobin = async () => {
+    setIsAssigning(true);
+    setAssignModalError(null);
+    try {
+      const res = await assignLeadRoundRobinAction({
+        leadId: lead.id,
+        notes: assignmentNotes.trim() || undefined,
+      });
+
+      if (!res.success) {
+        setAssignModalError(res.error || "Failed to execute round-robin assignment.");
+        return;
+      }
+
+      setLead(res.lead);
+      setToastMessage(`Auto-assigned to ${res.lead.assignedTelecaller} via round-robin.`);
+      setAssignModalOpen(false);
+    } catch (err: unknown) {
+      setAssignModalError(
+        err instanceof Error ? err.message : "Failed to execute round-robin assignment."
+      );
+    } finally {
+      setIsAssigning(false);
+    }
+  };
 
   const handleActivate = async () => {
     if (isActivating) return;
@@ -88,6 +161,11 @@ export function LeadDetailsClient({
                 </h1>
                 <StatusBadge status={lead.status} />
                 <StatusBadge status={lead.requirements.preference} />
+                {lead.isDoNotContact && (
+                  <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                    🛑 Do Not Contact
+                  </span>
+                )}
                 <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-stone-100 text-crm-muted border border-crm-border">
                   {lead.requirements.city}
                 </span>
@@ -104,6 +182,14 @@ export function LeadDetailsClient({
                 <span>
                   • Assigned Telecaller: <strong className="text-crm-text">{lead.assignedTelecaller}</strong>
                 </span>
+                <span>
+                  • Disposition: <strong className="text-crm-text">{lead.currentDisposition}</strong>
+                </span>
+                {lead.unreachableCount > 0 && (
+                  <span>
+                    • Unreachable: <strong className={lead.unreachableCount >= 3 ? "text-rose-700" : "text-crm-text"}>{lead.unreachableCount} / 3 Max</strong>
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -126,13 +212,35 @@ export function LeadDetailsClient({
               </Link>
             )}
 
-            {canLogCall && (
-              <Link
-                href={`/leads/${lead.id}/qualify`}
-                className="px-4 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover transition-all flex items-center gap-1.5 shadow-2xs"
+            {canAssignTelecaller && (
+              <button
+                type="button"
+                onClick={() => setAssignModalOpen(true)}
+                className="px-3.5 py-1.5 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
               >
-                <span>📞</span> Qualify / Log Call
-              </Link>
+                <span>👤</span>
+                {lead.assignedTelecaller && lead.assignedTelecaller !== "Unassigned"
+                  ? "Reassign Telecaller"
+                  : "Assign Telecaller"}
+              </button>
+            )}
+
+            {canLogCall && (
+              lead.isDoNotContact ? (
+                <span
+                  className="px-3.5 py-1.5 text-xs font-semibold rounded bg-stone-100 text-stone-400 border border-stone-200 cursor-not-allowed"
+                  title="Calling blocked: Prospect marked Do Not Contact"
+                >
+                  🛑 DNC (Calling Blocked)
+                </span>
+              ) : (
+                <Link
+                  href={`/leads/${lead.id}/qualify`}
+                  className="px-4 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover transition-all flex items-center gap-1.5 shadow-2xs"
+                >
+                  <span>📞</span> Qualify / Log Call
+                </Link>
+              )
             )}
 
             {canActivate && lead.status !== "Active" && (
@@ -154,6 +262,24 @@ export function LeadDetailsClient({
             )}
           </div>
         </div>
+
+        {/* DNC Alert Banner */}
+        {lead.isDoNotContact && (
+          <div className="p-3.5 rounded-lg bg-rose-100 border border-rose-300 text-rose-900 text-xs font-bold flex items-center gap-2">
+            <span>🛑</span>
+            <span>DO NOT CONTACT (DNC): This prospect has requested no further contact. All calling is strictly disabled.</span>
+          </div>
+        )}
+
+        {/* Unreachable Limit Banner (PRD §5.5) */}
+        {!lead.isDoNotContact && lead.unreachableCount >= 3 && lead.status !== "Inactive" && (
+          <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-center gap-2">
+            <span>⚠️</span>
+            <span>
+              <strong>Unreachable Limit:</strong> 3 unsuccessful calling attempts logged. Per PRD §5.5, the caller may mark this lead Inactive.
+            </span>
+          </div>
+        )}
 
         {/* 2-Column Responsive Information Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -245,12 +371,55 @@ export function LeadDetailsClient({
                     </div>
                   </div>
 
-                  {lead.requirements.targetArea && (
-                    <div>
-                      <span className="text-crm-muted block text-[11px]">Target Area</span>
-                      <strong className="text-crm-text">{lead.requirements.targetArea} sq.ft</strong>
+                  <div className="sm:col-span-2">
+                    <span className="text-crm-muted block text-[11px]">Preferred Societies / Projects</span>
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {lead.requirements.societies && lead.requirements.societies.length > 0 ? (
+                        lead.requirements.societies.map((soc, i) => (
+                          <span
+                            key={i}
+                            className="px-2 py-0.5 rounded bg-stone-100 text-crm-text font-medium text-[11px] border border-crm-border"
+                          >
+                            {soc}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-crm-muted italic">No specific societies specified</span>
+                      )}
                     </div>
-                  )}
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <span className="text-crm-muted block text-[11px]">Area Range & Specifications</span>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                      {lead.requirements.minArea != null || lead.requirements.maxArea != null ? (
+                        <span className="font-semibold text-crm-text">
+                          {lead.requirements.minArea != null ? lead.requirements.minArea : "–"} to{" "}
+                          {lead.requirements.maxArea != null ? lead.requirements.maxArea : "–"}{" "}
+                          {lead.requirements.areaUnit || "sq.ft"}
+                        </span>
+                      ) : lead.requirements.targetArea ? (
+                        <span className="font-semibold text-crm-text">
+                          Target: {lead.requirements.targetArea} {lead.requirements.areaUnit || "sq.ft"}
+                        </span>
+                      ) : (
+                        <span className="text-crm-muted italic">Not specified</span>
+                      )}
+
+                      {lead.requirements.areaType && (
+                        <span className="px-2 py-0.5 rounded bg-stone-100 text-crm-muted text-[10px] font-medium border border-crm-border">
+                          {lead.requirements.areaType.replace(/_/g, " ")}
+                        </span>
+                      )}
+
+                      {lead.requirements.targetArea &&
+                        (lead.requirements.minArea != null || lead.requirements.maxArea != null) && (
+                          <span className="text-crm-muted text-[11px]">
+                            (Target: {lead.requirements.targetArea} {lead.requirements.areaUnit || "sq.ft"})
+                          </span>
+                        )}
+                    </div>
+                  </div>
 
                   <div>
                     <span className="text-crm-muted block text-[11px]">Requirement Confirmed</span>
@@ -335,6 +504,85 @@ export function LeadDetailsClient({
                             <span>⏰ Scheduled Callback:</span>
                             <span>{call.callbackDate}</span>
                           </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Card: Assignment History (DV-08 / PRD §5.6) */}
+            <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
+              <div className="px-5 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xs font-bold text-crm-text uppercase tracking-wider">
+                    Assignment History ({lead.assignmentHistory?.length || 0})
+                  </h2>
+                  <span className="text-[11px] text-crm-muted">PRD §5.6 Audit Trail</span>
+                </div>
+                {canAssignTelecaller && (
+                  <button
+                    type="button"
+                    onClick={() => setAssignModalOpen(true)}
+                    className="text-xs font-semibold text-crm-primary hover:underline cursor-pointer"
+                  >
+                    + Assign / Reassign
+                  </button>
+                )}
+              </div>
+
+              <div className="p-5">
+                {!lead.assignmentHistory || lead.assignmentHistory.length === 0 ? (
+                  <div className="p-6 text-center text-crm-muted space-y-1 border border-dashed border-crm-border rounded-lg bg-stone-50/50 text-xs">
+                    <p className="font-semibold text-crm-text">No Assignment Records Yet</p>
+                    <p className="text-[11px]">
+                      {lead.assignedTelecaller !== "Unassigned"
+                        ? `Currently assigned to ${lead.assignedTelecaller}.`
+                        : "This lead is currently unassigned. Click '+ Assign / Reassign' to allocate."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {lead.assignmentHistory.map((asgn) => (
+                      <div
+                        key={asgn.id}
+                        className="p-3.5 rounded-lg border border-crm-border bg-stone-50/40 space-y-2 text-xs"
+                      >
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-crm-text">👤 {asgn.assignedUserName}</span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                                asgn.status === "Active"
+                                  ? "bg-teal-50 text-teal-800 border border-teal-200"
+                                  : "bg-stone-100 text-crm-muted border border-crm-border"
+                              }`}
+                            >
+                              {asgn.status}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-stone-100 text-crm-muted border border-crm-border">
+                              {asgn.assignmentMethod}
+                            </span>
+                          </div>
+                          <span className="text-[11px] text-crm-muted font-medium">
+                            {asgn.assignedAt}
+                          </span>
+                        </div>
+
+                        {asgn.assignedByUserName && (
+                          <p className="text-[11px] text-crm-muted">
+                            Assigned by: <strong className="text-crm-text">{asgn.assignedByUserName}</strong>
+                            {asgn.unassignedAt && (
+                              <span className="ml-2 text-stone-400">• Unassigned: {asgn.unassignedAt}</span>
+                            )}
+                          </p>
+                        )}
+
+                        {asgn.notes && (
+                          <p className="text-crm-text bg-white p-2.5 rounded border border-crm-border leading-relaxed text-[11px]">
+                            {asgn.notes}
+                          </p>
                         )}
                       </div>
                     ))}
@@ -490,6 +738,102 @@ export function LeadDetailsClient({
           </div>
         </div>
       </div>
+
+      {/* Assignment Modal (DV-08 / PRD §5.6) */}
+      <Modal
+        isOpen={assignModalOpen}
+        onClose={() => setAssignModalOpen(false)}
+        title={lead.assignedTelecaller && lead.assignedTelecaller !== "Unassigned" ? "Reassign Telecaller" : "Assign Telecaller"}
+      >
+        <div className="space-y-4 text-xs">
+          <div className="p-3 rounded bg-stone-50 border border-crm-border space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-crm-text text-sm">{lead.name}</span>
+              <span className="text-crm-muted font-medium">+91 {lead.primaryPhone}</span>
+            </div>
+            <p className="text-[11px] text-crm-muted">
+              Current Assignee:{" "}
+              <strong className="text-crm-text">
+                {lead.assignedTelecaller}
+              </strong>
+              {lead.currentAssignment?.assignmentMethod && (
+                <span className="ml-1 text-[10px] text-crm-muted">
+                  ({lead.currentAssignment.assignmentMethod})
+                </span>
+              )}
+            </p>
+          </div>
+
+          {assignModalError && (
+            <div className="p-2.5 rounded bg-rose-50 border border-rose-200 text-rose-800 text-xs">
+              {assignModalError}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-crm-text mb-1">
+              Select Eligible Telecaller
+            </label>
+            <select
+              value={selectedTelecallerId}
+              onChange={(e) => setSelectedTelecallerId(e.target.value)}
+              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+            >
+              {eligibleTelecallers.length === 0 ? (
+                <option value="">No active telecallers found</option>
+              ) : (
+                eligibleTelecallers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.email})
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-crm-text mb-1">
+              Assignment Notes (Optional)
+            </label>
+            <textarea
+              rows={2}
+              placeholder="e.g. Assigned for high intent follow-up..."
+              value={assignmentNotes}
+              onChange={(e) => setAssignmentNotes(e.target.value)}
+              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+            />
+          </div>
+
+          <div className="pt-2 border-t border-crm-border flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={handleAssignRoundRobin}
+              disabled={isAssigning}
+              className="px-3 py-2 text-xs font-bold rounded bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 cursor-pointer disabled:opacity-50"
+            >
+              🎲 Auto-Assign (Round Robin)
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAssignModalOpen(false)}
+                className="px-3 py-2 text-xs font-medium rounded border border-crm-border text-crm-muted hover:bg-stone-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAssignManual}
+                disabled={isAssigning || !selectedTelecallerId}
+                className="px-4 py-2 text-xs font-bold rounded bg-crm-primary hover:bg-crm-primary-hover text-white shadow-2xs cursor-pointer disabled:opacity-50"
+              >
+                {isAssigning ? "Assigning..." : "Assign Telecaller"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       {toastMessage && (
         <Toast message={toastMessage} onClose={() => setToastMessage(null)} />

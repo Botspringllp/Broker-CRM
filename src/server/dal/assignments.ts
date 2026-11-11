@@ -1,7 +1,7 @@
 import { prisma } from "../db";
 import { TenantContext } from "../tenant-context";
-import { assertPermission } from "../permissions";
-import { NotFoundError, ValidationError } from "../errors";
+import { assertPermission, hasPermission } from "../permissions";
+import { NotFoundError, ValidationError, ForbiddenError } from "../errors";
 import {
   UserRole,
   AssignmentTargetType,
@@ -11,7 +11,9 @@ import {
   PropertyVerificationStatus,
   SupplyValidationStatus,
   PropertyAvailabilityStatus,
+  Prisma,
 } from "@prisma/client";
+import { recordLeadFieldChanges } from "./lead-changelog";
 
 export interface AssignPropertyInput {
   propertyId: string;
@@ -21,6 +23,17 @@ export interface AssignPropertyInput {
 
 export interface RoundRobinPropertyInput {
   propertyId: string;
+  notes?: string;
+}
+
+export interface AssignLeadInput {
+  leadId: string;
+  telecallerId: string;
+  notes?: string;
+}
+
+export interface RoundRobinLeadInput {
+  leadId: string;
   notes?: string;
 }
 
@@ -566,5 +579,522 @@ export async function assignPropertyToFieldVerifier(
     });
 
     return { assignment, verification };
+  });
+}
+
+// ---------------------------------------------------------
+// LEAD ASSIGNMENT ENGINE (DV-08 / PRD §5.6)
+// ---------------------------------------------------------
+
+export interface RecordLeadAssignmentTxParams {
+  tx: Prisma.TransactionClient;
+  tenantId: string;
+  leadId: string;
+  targetTelecallerId: string;
+  assignedByUserId: string | null;
+  method: AssignmentMethod;
+  notes?: string | null;
+}
+
+interface TxWithOptionalModels {
+  user?: Prisma.UserDelegate;
+  assignment?: Prisma.AssignmentDelegate;
+}
+
+/**
+ * Validates target telecaller in tenant and executes active assignment transition.
+ * Marks previous active LEAD assignment as REASSIGNED.
+ * Creates new ACTIVE Assignment record.
+ */
+export async function recordLeadAssignmentTx(
+  params: RecordLeadAssignmentTxParams
+) {
+  const { tx, tenantId, leadId, targetTelecallerId, assignedByUserId, method, notes } = params;
+
+  const userClient = (tx as unknown as TxWithOptionalModels)?.user ?? (prisma as unknown as TxWithOptionalModels)?.user;
+  const assignmentClient = (tx as unknown as TxWithOptionalModels)?.assignment ?? (prisma as unknown as TxWithOptionalModels)?.assignment;
+
+  if (!userClient?.findFirst || !assignmentClient?.create) {
+    return null;
+  }
+
+  // 1. Verify target telecaller exists, belongs to tenant, is active and has TELECALLER role
+  const targetUser = await userClient.findFirst({
+    where: {
+      id: targetTelecallerId.trim(),
+      tenantId,
+      role: UserRole.TELECALLER,
+      isActive: true,
+    },
+    select: { id: true, name: true, role: true, isActive: true },
+  });
+
+  if (!targetUser) {
+    throw new ValidationError(
+      "Target user is not an eligible active telecaller in this brokerage."
+    );
+  }
+
+  // 2. Check for existing active assignment
+  const existingActive = await assignmentClient.findFirst({
+    where: {
+      leadId,
+      tenantId,
+      targetType: AssignmentTargetType.LEAD,
+      status: AssignmentStatus.ACTIVE,
+    },
+  });
+
+  // Duplicate active-assignment check
+  if (existingActive && existingActive.assignedUserId === targetUser.id) {
+    return existingActive;
+  }
+
+  // Reassign previous assignment if one was active
+  if (existingActive) {
+    await assignmentClient.update({
+      where: { id: existingActive.id },
+      data: {
+        status: AssignmentStatus.REASSIGNED,
+        unassignedAt: new Date(),
+      },
+    });
+  }
+
+  // Create new active assignment
+  return assignmentClient.create({
+    data: {
+      tenantId,
+      targetType: AssignmentTargetType.LEAD,
+      leadId,
+      assignedUserId: targetUser.id,
+      assignedByUserId,
+      roleInAssignment: AssignmentRole.TELECALLER_VALIDATION,
+      assignmentMethod: method,
+      status: AssignmentStatus.ACTIVE,
+      notes: notes?.trim() || null,
+    },
+    include: {
+      assignedUser: true,
+      assignedByUser: true,
+    },
+  });
+}
+
+/**
+ * Picks the least-loaded active telecaller in the tenant using fair round-robin.
+ * Balances workload by counting active LEAD assignments.
+ * Tie-breaks using oldest assignment timestamp.
+ */
+export async function pickRoundRobinTelecallerTx(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  excludeUserId?: string | null
+): Promise<string> {
+  const userClient = (tx as unknown as TxWithOptionalModels)?.user ?? (prisma as unknown as TxWithOptionalModels)?.user;
+  const assignmentClient = (tx as unknown as TxWithOptionalModels)?.assignment ?? (prisma as unknown as TxWithOptionalModels)?.assignment;
+
+  if (!userClient?.findMany) {
+    throw new ValidationError(
+      "No eligible active telecallers available in this brokerage."
+    );
+  }
+
+  const eligibleTelecallers = (await userClient.findMany({
+    where: {
+      tenantId,
+      role: UserRole.TELECALLER,
+      isActive: true,
+    },
+    select: { id: true, name: true, createdAt: true },
+    orderBy: { createdAt: "asc" },
+  })) || [];
+
+  if (!Array.isArray(eligibleTelecallers) || eligibleTelecallers.length === 0) {
+    throw new ValidationError(
+      "No eligible active telecallers available in this brokerage."
+    );
+  }
+
+  const workloads = await Promise.all(
+    eligibleTelecallers.map(async (t: { id: string; name: string; createdAt: Date }) => {
+      const activeCount = assignmentClient?.count
+        ? await assignmentClient.count({
+            where: {
+              tenantId,
+              assignedUserId: t.id,
+              targetType: AssignmentTargetType.LEAD,
+              status: AssignmentStatus.ACTIVE,
+            },
+          })
+        : 0;
+
+      const lastAssignment = assignmentClient?.findFirst
+        ? await assignmentClient.findFirst({
+            where: {
+              tenantId,
+              assignedUserId: t.id,
+              targetType: AssignmentTargetType.LEAD,
+            },
+            orderBy: { assignedAt: "desc" },
+            select: { assignedAt: true },
+          })
+        : null;
+
+      return {
+        id: t.id,
+        activeCount,
+        lastAssignedTimestamp: lastAssignment?.assignedAt ? lastAssignment.assignedAt.getTime() : 0,
+        createdAt: t.createdAt.getTime(),
+      };
+    })
+  );
+
+  workloads.sort((a, b) => {
+    if (a.activeCount !== b.activeCount) {
+      return a.activeCount - b.activeCount;
+    }
+    if (a.lastAssignedTimestamp !== b.lastAssignedTimestamp) {
+      return a.lastAssignedTimestamp - b.lastAssignedTimestamp;
+    }
+    return a.createdAt - b.createdAt;
+  });
+
+  let selected = workloads[0];
+  if (excludeUserId && selected.id === excludeUserId && workloads.length > 1) {
+    selected = workloads[1];
+  } else if (excludeUserId && selected.id === excludeUserId && workloads.length === 1) {
+    throw new ValidationError("Lead is already actively assigned to this telecaller.");
+  }
+
+  return selected.id;
+}
+
+/**
+ * Manually assigns a lead validation task to a designated telecaller.
+ * - Enforces "assignment:assign_telecaller" permission (Broker Owner, Team Leader).
+ * - Enforces lead and target user belong strictly to context.tenantId.
+ * - Validates target user is an active telecaller.
+ * - Prevents duplicate active assignment to the exact same telecaller.
+ * - Atomically marks previous active assignment as REASSIGNED.
+ * - Persists Assignment with MANUAL method, updates Lead.assignedTelecallerId, and logs to LeadChangeLog.
+ */
+export async function assignLeadManually(
+  context: TenantContext,
+  input: AssignLeadInput
+) {
+  assertPermission(context, "assignment:assign_telecaller");
+
+  if (!input.leadId || typeof input.leadId !== "string" || !input.leadId.trim()) {
+    throw new ValidationError("Lead ID is required.");
+  }
+  if (!input.telecallerId || typeof input.telecallerId !== "string" || !input.telecallerId.trim()) {
+    throw new ValidationError("Telecaller ID is required.");
+  }
+
+  const leadId = input.leadId.trim();
+  const telecallerId = input.telecallerId.trim();
+
+  // 1. Verify lead belongs to the authenticated tenant
+  const lead = await prisma.lead.findFirst({
+    where: {
+      id: leadId,
+      tenantId: context.tenantId, // STRICT TENANT SCOPE
+    },
+    select: { id: true, tenantId: true, assignedTelecallerId: true },
+  });
+
+  if (!lead) {
+    throw new NotFoundError("Lead not found.");
+  }
+
+  // 2. Verify target telecaller exists, is active, is a TELECALLER, and belongs to tenant
+  const targetUser = await prisma.user.findFirst({
+    where: {
+      id: telecallerId,
+      tenantId: context.tenantId, // STRICT TENANT SCOPE
+      role: UserRole.TELECALLER,
+      isActive: true,
+    },
+    select: { id: true, name: true, role: true, isActive: true },
+  });
+
+  if (!targetUser) {
+    throw new ValidationError(
+      "Target user is not an eligible active telecaller in this brokerage."
+    );
+  }
+
+  return prisma.$transaction(async (tx) => {
+    // Prevent duplicate active assignment
+    const existingActive = await tx.assignment.findFirst({
+      where: {
+        leadId: lead.id,
+        tenantId: context.tenantId,
+        targetType: AssignmentTargetType.LEAD,
+        status: AssignmentStatus.ACTIVE,
+      },
+    });
+
+    if (
+      (existingActive && existingActive.assignedUserId === targetUser.id) ||
+      lead.assignedTelecallerId === targetUser.id
+    ) {
+      throw new ValidationError("Lead is already actively assigned to this telecaller.");
+    }
+
+    // Row-lock lead
+    await tx.lead.update({
+      where: { id: lead.id },
+      data: {
+        assignedTelecallerId: targetUser.id,
+        updatedAt: new Date(),
+      },
+    });
+
+    // Reassign previous assignment if active
+    if (existingActive) {
+      await tx.assignment.update({
+        where: { id: existingActive.id },
+        data: {
+          status: AssignmentStatus.REASSIGNED,
+          unassignedAt: new Date(),
+        },
+      });
+    }
+
+    // Create new active assignment
+    const newAssignment = await tx.assignment.create({
+      data: {
+        tenantId: context.tenantId,
+        targetType: AssignmentTargetType.LEAD,
+        leadId: lead.id,
+        assignedUserId: targetUser.id,
+        assignedByUserId: context.userId,
+        roleInAssignment: AssignmentRole.TELECALLER_VALIDATION,
+        assignmentMethod: AssignmentMethod.MANUAL,
+        status: AssignmentStatus.ACTIVE,
+        notes: input.notes?.trim() || null,
+      },
+      include: {
+        assignedUser: true,
+        assignedByUser: true,
+      },
+    });
+
+    // Record LeadChangeLog if assignee changed
+    if (lead.assignedTelecallerId !== targetUser.id) {
+      await recordLeadFieldChanges({
+        tx,
+        tenantId: context.tenantId,
+        leadId: lead.id,
+        changedByUserId: context.userId,
+        changeSource: "USER",
+        changes: [
+          {
+            fieldName: "assignedTelecallerId",
+            previousValue: lead.assignedTelecallerId,
+            newValue: targetUser.id,
+          },
+        ],
+      });
+    }
+
+    return newAssignment;
+  });
+}
+
+/**
+ * Automatically assigns a lead validation task to eligible telecallers using fair round-robin.
+ * - Enforces "assignment:assign_telecaller" permission (Broker Owner, Team Leader).
+ * - Balances workload: selects eligible telecaller with the lowest active lead assignment count.
+ * - Tie-break: selects telecaller with the oldest last assigned timestamp.
+ * - Reassigns cleanly if lead already has an active assignment.
+ * - Atomic transaction with row lock guarantees concurrency safety.
+ */
+export async function assignLeadRoundRobin(
+  context: TenantContext,
+  input: RoundRobinLeadInput
+) {
+  assertPermission(context, "assignment:assign_telecaller");
+
+  if (!input.leadId || typeof input.leadId !== "string" || !input.leadId.trim()) {
+    throw new ValidationError("Lead ID is required.");
+  }
+
+  const leadId = input.leadId.trim();
+
+  // 1. Verify lead belongs to the authenticated tenant
+  const lead = await prisma.lead.findFirst({
+    where: {
+      id: leadId,
+      tenantId: context.tenantId, // STRICT TENANT SCOPE
+    },
+    select: { id: true, tenantId: true, assignedTelecallerId: true },
+  });
+
+  if (!lead) {
+    throw new NotFoundError("Lead not found.");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    // Row lock on lead
+    await tx.lead.update({
+      where: { id: lead.id },
+      data: { updatedAt: new Date() },
+    });
+
+    // Check existing active assignment
+    const existingActive = await tx.assignment.findFirst({
+      where: {
+        leadId: lead.id,
+        tenantId: context.tenantId,
+        targetType: AssignmentTargetType.LEAD,
+        status: AssignmentStatus.ACTIVE,
+      },
+    });
+
+    // Pick least-loaded telecaller (excluding current assignee if multiple exist)
+    const selectedTelecallerId = await pickRoundRobinTelecallerTx(
+      tx,
+      context.tenantId,
+      existingActive?.assignedUserId || lead.assignedTelecallerId
+    );
+
+    // Reassign previous assignment if active
+    if (existingActive) {
+      await tx.assignment.update({
+        where: { id: existingActive.id },
+        data: {
+          status: AssignmentStatus.REASSIGNED,
+          unassignedAt: new Date(),
+        },
+      });
+    }
+
+    // Create new active assignment with ROUND_ROBIN method
+    const newAssignment = await tx.assignment.create({
+      data: {
+        tenantId: context.tenantId,
+        targetType: AssignmentTargetType.LEAD,
+        leadId: lead.id,
+        assignedUserId: selectedTelecallerId,
+        assignedByUserId: context.userId,
+        roleInAssignment: AssignmentRole.TELECALLER_VALIDATION,
+        assignmentMethod: AssignmentMethod.ROUND_ROBIN,
+        status: AssignmentStatus.ACTIVE,
+        notes: input.notes?.trim() || null,
+      },
+      include: {
+        assignedUser: true,
+        assignedByUser: true,
+      },
+    });
+
+    // Update lead
+    await tx.lead.update({
+      where: { id: lead.id },
+      data: {
+        assignedTelecallerId: selectedTelecallerId,
+        updatedAt: new Date(),
+      },
+    });
+
+    // Record LeadChangeLog if assignee changed
+    if (lead.assignedTelecallerId !== selectedTelecallerId) {
+      await recordLeadFieldChanges({
+        tx,
+        tenantId: context.tenantId,
+        leadId: lead.id,
+        changedByUserId: context.userId,
+        changeSource: "USER",
+        changes: [
+          {
+            fieldName: "assignedTelecallerId",
+            previousValue: lead.assignedTelecallerId,
+            newValue: selectedTelecallerId,
+          },
+        ],
+      });
+    }
+
+    return newAssignment;
+  });
+}
+
+/**
+ * Retrieves the full assignment audit trail for a lead strictly within the tenant.
+ * Authorized for Broker Owners, Team Leaders, and assigned Telecallers.
+ */
+export async function getLeadAssignmentHistory(
+  context: TenantContext,
+  leadId: string
+) {
+  if (!leadId || typeof leadId !== "string" || !leadId.trim()) {
+    throw new ValidationError("Lead ID is required.");
+  }
+
+  // Permission check
+  const canViewAll = hasPermission(
+    context.role,
+    "demand:view_all",
+    context.user?.delegatedPermissions || context.delegatedPermissions
+  );
+  const canViewAssigned = hasPermission(
+    context.role,
+    "demand:view_assigned",
+    context.user?.delegatedPermissions || context.delegatedPermissions
+  );
+
+  if (!canViewAll && !canViewAssigned) {
+    throw new ForbiddenError("You do not have permission to view lead assignments.");
+  }
+
+  // Verify lead belongs to tenant
+  const lead = await prisma.lead.findFirst({
+    where: {
+      id: leadId.trim(),
+      tenantId: context.tenantId, // STRICT TENANT SCOPE
+    },
+    select: { id: true, assignedTelecallerId: true },
+  });
+
+  if (!lead) {
+    throw new NotFoundError("Lead not found.");
+  }
+
+  // Telecallers cannot view assignments for leads not assigned to them (anti-enumeration)
+  if (context.role === UserRole.TELECALLER && !canViewAll) {
+    if (lead.assignedTelecallerId !== context.userId) {
+      throw new NotFoundError("Lead not found.");
+    }
+  }
+
+  return prisma.assignment.findMany({
+    where: {
+      leadId: lead.id,
+      tenantId: context.tenantId,
+      targetType: AssignmentTargetType.LEAD,
+    },
+    orderBy: { assignedAt: "desc" },
+    include: {
+      assignedUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          role: true,
+        },
+      },
+      assignedByUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+        },
+      },
+    },
   });
 }

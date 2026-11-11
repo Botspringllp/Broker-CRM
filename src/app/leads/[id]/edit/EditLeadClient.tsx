@@ -90,11 +90,18 @@ export function EditLeadClient({
   const [city, setCity] = useState(lead.requirements.city);
   const [localities, setLocalities] = useState(lead.requirements.localities.join(", "));
   const [societies, setSocieties] = useState(lead.requirements.societies.join(", "));
+  const [minArea, setMinArea] = useState(
+    lead.requirements.minArea != null ? lead.requirements.minArea.toString() : ""
+  );
+  const [maxArea, setMaxArea] = useState(
+    lead.requirements.maxArea != null ? lead.requirements.maxArea.toString() : ""
+  );
+  const [areaUnit, setAreaUnit] = useState(lead.requirements.areaUnit || "sq.ft");
   const [targetArea, setTargetArea] = useState(
-    lead.requirements.targetArea ? lead.requirements.targetArea.toString() : ""
+    lead.requirements.targetArea != null ? lead.requirements.targetArea.toString() : ""
   );
   const [areaType, setAreaType] = useState<"CARPET" | "BUILT_UP" | "SUPER_BUILT_UP">(
-    "SUPER_BUILT_UP"
+    (lead.requirements.areaType as "CARPET" | "BUILT_UP" | "SUPER_BUILT_UP") || "SUPER_BUILT_UP"
   );
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -151,6 +158,27 @@ export function EditLeadClient({
       return;
     }
 
+    const parsedMinArea = minArea.trim() ? parseFloat(minArea) : null;
+    const parsedMaxArea = maxArea.trim() ? parseFloat(maxArea) : null;
+    const parsedTargetArea = targetArea.trim() ? parseFloat(targetArea) : null;
+
+    if (parsedMinArea != null && (isNaN(parsedMinArea) || parsedMinArea < 0)) {
+      setErrorMessage("Minimum area must be a non-negative number.");
+      return;
+    }
+    if (parsedMaxArea != null && (isNaN(parsedMaxArea) || parsedMaxArea < 0)) {
+      setErrorMessage("Maximum area must be a non-negative number.");
+      return;
+    }
+    if (parsedMinArea != null && parsedMaxArea != null && parsedMaxArea < parsedMinArea) {
+      setErrorMessage("Maximum area cannot be less than minimum area.");
+      return;
+    }
+    if (parsedTargetArea != null && (isNaN(parsedTargetArea) || parsedTargetArea < 0)) {
+      setErrorMessage("Target area must be a non-negative number.");
+      return;
+    }
+
     setIsSubmitting(true);
 
     try {
@@ -179,7 +207,10 @@ export function EditLeadClient({
         propertyTypes: selectedTypes,
         societies: societiesArr,
         localities: localitiesArr,
-        targetArea: targetArea.trim() ? parseFloat(targetArea) : null,
+        targetArea: parsedTargetArea,
+        minArea: parsedMinArea,
+        maxArea: parsedMaxArea,
+        areaUnit,
         areaType,
         assignedTelecallerId: canAssignTelecaller ? assignedTelecallerId || null : undefined,
       });
@@ -516,7 +547,7 @@ export function EditLeadClient({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
+              <div className="sm:col-span-2">
                 <label className="block text-xs font-semibold text-crm-text mb-1">
                   Target City <span className="text-red-500">*</span>
                 </label>
@@ -531,26 +562,71 @@ export function EditLeadClient({
 
               <div>
                 <label className="block text-xs font-semibold text-crm-text mb-1">
-                  Target Area & Measurement Unit
+                  Minimum Area
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="number"
-                    placeholder="e.g. 1850"
-                    value={targetArea}
-                    onChange={(e) => setTargetArea(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
-                  />
-                  <select
-                    value={areaType}
-                    onChange={(e) => setAreaType(e.target.value as "CARPET" | "BUILT_UP" | "SUPER_BUILT_UP")}
-                    className="w-full px-2 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
-                  >
-                    <option value="SUPER_BUILT_UP">Super Built-up</option>
-                    <option value="BUILT_UP">Built-up</option>
-                    <option value="CARPET">Carpet Area</option>
-                  </select>
-                </div>
+                <input
+                  type="number"
+                  placeholder="e.g. 1200"
+                  value={minArea}
+                  onChange={(e) => setMinArea(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-crm-text mb-1">
+                  Maximum Area
+                </label>
+                <input
+                  type="number"
+                  placeholder="e.g. 2500"
+                  value={maxArea}
+                  onChange={(e) => setMaxArea(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-crm-text mb-1">
+                  Area Unit
+                </label>
+                <select
+                  value={areaUnit}
+                  onChange={(e) => setAreaUnit(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                >
+                  <option value="sq.ft">Square Feet (sq.ft)</option>
+                  <option value="sq.yd">Square Yards (sq.yd)</option>
+                  <option value="sq.m">Square Meters (sq.m)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-crm-text mb-1">
+                  Area Measurement Type
+                </label>
+                <select
+                  value={areaType}
+                  onChange={(e) => setAreaType(e.target.value as "CARPET" | "BUILT_UP" | "SUPER_BUILT_UP")}
+                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                >
+                  <option value="SUPER_BUILT_UP">Super Built-up Area</option>
+                  <option value="BUILT_UP">Built-up Area</option>
+                  <option value="CARPET">Carpet Area</option>
+                </select>
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-crm-text mb-1">
+                  Target Area (Approx)
+                </label>
+                <input
+                  type="number"
+                  placeholder="e.g. 1850"
+                  value={targetArea}
+                  onChange={(e) => setTargetArea(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+                />
               </div>
 
               <div className="sm:col-span-2">

@@ -1,6 +1,8 @@
 import { Suspense } from "react";
 import { requireTenantContext } from "@/server/tenant-context";
 import { listLeads } from "@/server/dal/leads";
+import { listEligibleTelecallers } from "@/server/dal/assignments";
+import { hasPermission } from "@/server/permissions";
 import { mapPrismaLeadToView } from "@/server/dal/mappers";
 import { Lead } from "@/types/crm";
 import { LeadValidationClient } from "./LeadValidationClient";
@@ -32,6 +34,21 @@ async function LeadValidationData() {
     redirect("/verifier");
   }
 
+  const canAssignTelecaller = hasPermission(
+    context.role,
+    "assignment:assign_telecaller",
+    context.user?.delegatedPermissions || context.delegatedPermissions
+  );
+
+  let eligibleTelecallers: { id: string; name: string; email: string; phone: string }[] = [];
+  if (canAssignTelecaller) {
+    try {
+      eligibleTelecallers = await listEligibleTelecallers(context);
+    } catch {
+      eligibleTelecallers = [];
+    }
+  }
+
   let leads: Lead[] = [];
 
   try {
@@ -41,7 +58,13 @@ async function LeadValidationData() {
     leads = [];
   }
 
-  return <LeadValidationClient initialLeads={leads} />;
+  return (
+    <LeadValidationClient
+      initialLeads={leads}
+      canAssignTelecaller={canAssignTelecaller}
+      eligibleTelecallers={eligibleTelecallers}
+    />
+  );
 }
 
 export default function LeadValidationPage() {

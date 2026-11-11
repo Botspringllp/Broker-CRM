@@ -1,4 +1,4 @@
-import { Property, Lead, SiteVisit, PropertyVerificationView } from "@/types/crm";
+import { Property, Lead, SiteVisit, PropertyVerificationView, LeadChangeLogItem } from "@/types/crm";
 import {
   Property as PrismaProperty,
   KeyHolder as PrismaKeyHolder,
@@ -12,6 +12,7 @@ import {
   SiteVisitScheduleHistory as PrismaSiteVisitScheduleHistory,
   Locality as PrismaLocality,
   LeadRequirementLocality as PrismaLeadRequirementLocality,
+  LeadChangeLog as PrismaLeadChangeLog,
   User as PrismaUser,
   Assignment as PrismaAssignment,
 } from "@prisma/client";
@@ -24,6 +25,20 @@ export function formatIndianCurrency(amount: number, isRent = false): string {
     return `₹${(amount / 100000).toFixed(2)} L`;
   }
   return `₹${amount.toLocaleString("en-IN")}${isRent ? " / mo" : ""}`;
+}
+
+export function formatIndianDateTime(date: Date | string | null | undefined): string {
+  if (!date) return "";
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
 }
 
 type FullPrismaProperty = PrismaProperty & {
@@ -278,6 +293,10 @@ type FullPrismaLead = PrismaLead & {
   enquiries?: PrismaEnquiry[];
   callLogs?: (PrismaCallLog & { caller?: { id: string; name: string; role: string } | null })[];
   assignedTelecaller?: { id: string; name: string; email?: string } | null;
+  assignments?: (PrismaAssignment & {
+    assignedUser?: { id: string; name: string; email?: string } | null;
+    assignedByUser?: { id: string; name: string; email?: string } | null;
+  })[];
 };
 
 export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
@@ -297,12 +316,85 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
         ? "Inactive"
         : "Not Yet Validated",
     unreachableCount: l.unreachableAttemptsCount,
+    isDoNotContact: Boolean(l.isDoNotContact),
     originalSource: l.originalSource,
     sourceCreatedAt: new Date(l.sourceCreatedAt).toLocaleDateString("en-IN"),
     assignedTelecaller: l.assignedTelecaller?.name || "Unassigned",
+    assignedTelecallerId: l.assignedTelecallerId || null,
+    currentAssignment: (() => {
+      const active = l.assignments?.find(
+        (a) => a.status === "ACTIVE" && a.targetType === "LEAD"
+      );
+      if (!active) return null;
+      const assignedDate = new Date(active.assignedAt);
+      const formattedAssignedAt = !isNaN(assignedDate.getTime())
+        ? formatIndianDateTime(assignedDate)
+        : "Recently";
+
+      return {
+        id: active.id,
+        assignedUserId: active.assignedUserId,
+        assignedUserName: active.assignedUser?.name || l.assignedTelecaller?.name || "Telecaller",
+        assignedByUserId: active.assignedByUserId,
+        assignedByUserName: active.assignedByUser?.name || null,
+        assignmentMethod:
+          active.assignmentMethod === "ROUND_ROBIN"
+            ? ("Round Robin" as const)
+            : ("Manual" as const),
+        status: "Active" as const,
+        assignedAt: formattedAssignedAt,
+        notes: active.notes || null,
+      };
+    })(),
+    assignmentHistory:
+      l.assignments
+        ?.filter((a) => a.targetType === "LEAD")
+        ?.map((a) => {
+          const assignedDate = new Date(a.assignedAt);
+          const formattedAssignedAt = !isNaN(assignedDate.getTime())
+            ? formatIndianDateTime(assignedDate)
+            : "Recently";
+          const unassignedDate = a.unassignedAt ? new Date(a.unassignedAt) : null;
+          const formattedUnassignedAt =
+            unassignedDate && !isNaN(unassignedDate.getTime())
+              ? formatIndianDateTime(unassignedDate)
+              : null;
+
+          return {
+            id: a.id,
+            assignedUserId: a.assignedUserId,
+            assignedUserName: a.assignedUser?.name || "Telecaller",
+            assignedByUserId: a.assignedByUserId,
+            assignedByUserName: a.assignedByUser?.name || null,
+            assignmentMethod:
+              a.assignmentMethod === "ROUND_ROBIN"
+                ? ("Round Robin" as const)
+                : ("Manual" as const),
+            status:
+              a.status === "ACTIVE"
+                ? ("Active" as const)
+                : a.status === "REASSIGNED"
+                ? ("Reassigned" as const)
+                : a.status === "COMPLETED"
+                ? ("Completed" as const)
+                : ("Cancelled" as const),
+            assignedAt: formattedAssignedAt,
+            unassignedAt: formattedUnassignedAt,
+            notes: a.notes || null,
+          };
+        }) || [],
     advertisedPropertyRef: l.enquiries?.[0]?.advertisedPropertyRef || undefined,
     advertisedPropertyVerified: l.enquiries?.[0]?.isVerifiedByCaller ?? false,
     advertisedPropertyNotes: l.enquiries?.[0]?.callerVerificationNotes || undefined,
+    enquiries:
+      l.enquiries?.map((e) => ({
+        id: e.id,
+        source: e.source,
+        advertisedPropertyRef: e.advertisedPropertyRef || null,
+        isVerifiedByCaller: Boolean(e.isVerifiedByCaller),
+        callerVerificationNotes: e.callerVerificationNotes || null,
+        enquiryDate: formatIndianDateTime(e.enquiryDate),
+      })) || [],
     requirements: {
       minBudget: minB,
       maxBudget: maxB,
@@ -312,7 +404,7 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
         l.requirement?.localities
           ?.map((loc) => loc.locality?.name || "")
           .filter(Boolean) || [],
-      societies: [],
+      societies: l.requirement?.societies || [],
       bedroomConfigurations: l.requirement?.bedroomConfigurations?.length
         ? l.requirement.bedroomConfigurations
         : l.requirement?.minBedrooms
@@ -320,19 +412,23 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
         : [],
       preference: l.requirement?.preference === "RENT" ? "Rent" : "Sale",
       propertyTypes: l.requirement?.propertyTypes || [],
-      targetArea: l.requirement?.targetArea ? Number(l.requirement.targetArea) : undefined,
-      isConfirmed: l.status === "ACTIVE",
+      targetArea: l.requirement?.targetArea ? Number(l.requirement.targetArea) : null,
+      minArea: l.requirement?.minArea ? Number(l.requirement.minArea) : null,
+      maxArea: l.requirement?.maxArea ? Number(l.requirement.maxArea) : null,
+      areaUnit: l.requirement?.areaUnit || "sq.ft",
+      areaType: l.requirement?.areaType || null,
+      isConfirmed: Boolean(l.requirement?.isConfirmed),
     },
     currentDisposition: l.callLogs?.[0]?.leadDisposition?.replace(/_/g, " ") || "Not Called",
     callHistory:
       l.callLogs?.map((c) => ({
         id: c.id,
-        calledAt: new Date(c.calledAt).toLocaleDateString("en-IN"),
+        calledAt: formatIndianDateTime(c.calledAt) || "Recently",
         callerName: c.caller?.name || "Telecaller",
         disposition: c.leadDisposition ? c.leadDisposition.replace(/_/g, " ") : "Called",
         notes: c.notes || "",
         callbackDate: c.callbackScheduledAt
-          ? new Date(c.callbackScheduledAt).toLocaleDateString("en-IN")
+          ? formatIndianDateTime(c.callbackScheduledAt)
           : undefined,
       })) || [],
     topMatches: [],
@@ -517,6 +613,47 @@ export function mapPrismaVerificationToView(v: any): PropertyVerificationView {
       createdAt: m.createdAt ? new Date(m.createdAt).toISOString() : undefined,
     })),
     createdAt: v.createdAt ? new Date(v.createdAt).toISOString() : new Date().toISOString(),
+  };
+}
+
+export type FullPrismaLeadChangeLog = PrismaLeadChangeLog & {
+  changedByUser?: Pick<PrismaUser, "id" | "name" | "email" | "role"> | null;
+};
+
+export function mapPrismaLeadChangeLogToView(
+  log: FullPrismaLeadChangeLog
+): LeadChangeLogItem {
+  let actorName = "System";
+  if (log.changeSource === "SYSTEM") {
+    actorName = "Automated System";
+  } else if (log.changedByUser?.name) {
+    actorName = log.changedByUser.name;
+  } else if (log.changedByUserId) {
+    actorName = "Former User";
+  }
+
+  const d = new Date(log.changedAt);
+  const formattedDate = !isNaN(d.getTime())
+    ? d.toLocaleString("en-IN", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      })
+    : "Recently";
+
+  return {
+    id: log.id,
+    leadId: log.leadId,
+    fieldName: log.fieldName,
+    previousValue: log.previousValue,
+    newValue: log.newValue,
+    changedByUserId: log.changedByUserId,
+    actorName,
+    changeSource: log.changeSource as "USER" | "SYSTEM" | "API",
+    changedAt: formattedDate,
   };
 }
 

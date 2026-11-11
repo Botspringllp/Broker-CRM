@@ -23,6 +23,48 @@ vi.mock("@/server/db", () => {
     property: {
       findFirst: vi.fn(),
     },
+    locality: {
+      findMany: vi.fn().mockImplementation(async (args) => {
+        return [
+          {
+            id: "loc-1",
+            tenantId: args?.where?.tenantId || "tenant-alpha",
+            name: "Sector 54",
+            city: args?.where?.city?.equals || "Gurugram",
+            latitude: null,
+            longitude: null,
+          },
+          {
+            id: "loc-2",
+            tenantId: args?.where?.tenantId || "tenant-alpha",
+            name: "Golf Course Road",
+            city: args?.where?.city?.equals || "Gurugram",
+            latitude: null,
+            longitude: null,
+          },
+        ];
+      }),
+      findFirst: vi.fn(),
+    },
+    leadRequirementLocality: {
+      findMany: vi.fn().mockResolvedValue([]),
+      createMany: vi.fn().mockResolvedValue({ count: 2 }),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
+    user: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
+    },
+    assignment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn().mockImplementation(async (args) => ({
+        id: "mock-assignment-1",
+        ...args.data,
+        assignedAt: new Date(),
+      })),
+      update: vi.fn(),
+    },
     $transaction: vi.fn(async (arg) => {
       if (typeof arg === "function") {
         return arg(mockPrisma);
@@ -546,7 +588,7 @@ describe("DV-03: Tenant-Scoped Buyer Deduplication & Enquiry Creation", () => {
     expect(result.lead.status).toBe(LeadStatus.NOT_YET_VALIDATED);
   });
 
-  // T10: Existing DNC flag remains true
+  // T10: Existing DNC flag remains true and lead is not reactivated
   it("T10: preserves isDoNotContact flag on existing DNC buyer upon receiving a fresh enquiry", async () => {
     const dncLead = {
       id: "lead-dnc",
@@ -559,14 +601,10 @@ describe("DV-03: Tenant-Scoped Buyer Deduplication & Enquiry Creation", () => {
     };
 
     vi.mocked(prisma.lead.findFirst).mockResolvedValueOnce(dncLead as any);
-    vi.mocked(prisma.lead.update).mockResolvedValueOnce({
-      ...dncLead,
-      status: LeadStatus.NOT_YET_VALIDATED,
-    } as any);
     vi.mocked(prisma.enquiry.create).mockResolvedValueOnce({ id: "enq-dnc-new" } as any);
     vi.mocked(prisma.lead.findUnique).mockResolvedValueOnce({
       ...dncLead,
-      status: LeadStatus.NOT_YET_VALIDATED,
+      status: LeadStatus.INACTIVE,
       isDoNotContact: true,
     } as any);
 
@@ -580,14 +618,9 @@ describe("DV-03: Tenant-Scoped Buyer Deduplication & Enquiry Creation", () => {
       maxBudget: 10000000,
     });
 
-    expect(prisma.lead.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.not.objectContaining({
-          isDoNotContact: false,
-        }),
-      })
-    );
+    expect(prisma.lead.update).not.toHaveBeenCalled();
     expect(result.lead.isDoNotContact).toBe(true);
+    expect(result.lead.status).toBe(LeadStatus.INACTIVE);
   });
 
   // T11: Existing assigned telecaller remains unchanged

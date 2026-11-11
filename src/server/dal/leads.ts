@@ -4,6 +4,8 @@ import { assertPermission, hasPermission } from "../permissions";
 import { ValidationError } from "../errors";
 import { normalizeIndianMobile } from "../utils/phone";
 import { recordLeadFieldChanges, FieldComparison } from "./lead-changelog";
+import { mapPrismaLeadChangeLogToView, formatIndianCurrency, formatIndianDateTime } from "./mappers";
+import { LeadChangeLogItem, PendingCallbackItem } from "@/types/crm";
 import {
   Prisma,
   UserRole,
@@ -11,7 +13,73 @@ import {
   LeadCallingDisposition,
   CallTargetType,
   Enquiry as PrismaEnquiry,
+  AssignmentMethod,
+  AssignmentStatus,
+  AssignmentTargetType,
 } from "@prisma/client";
+import {
+  recordLeadAssignmentTx,
+  pickRoundRobinTelecallerTx,
+} from "./assignments";
+
+export const ALLOWED_AREA_UNITS = ["sq.ft", "sq.yd", "sq.m"] as const;
+export type AllowedAreaUnit = (typeof ALLOWED_AREA_UNITS)[number];
+
+export const ALLOWED_AREA_TYPES = ["CARPET", "BUILT_UP", "SUPER_BUILT_UP"] as const;
+export type AllowedAreaType = (typeof ALLOWED_AREA_TYPES)[number];
+
+export function validateAreaRequirements(data: {
+  targetArea?: number | null;
+  minArea?: number | null;
+  maxArea?: number | null;
+  areaUnit?: string | null;
+  areaType?: string | null;
+}): void {
+  if (data.targetArea !== undefined && data.targetArea !== null) {
+    if (isNaN(Number(data.targetArea)) || Number(data.targetArea) < 0) {
+      throw new ValidationError("Target area cannot be negative.");
+    }
+  }
+
+  if (data.minArea !== undefined && data.minArea !== null) {
+    if (isNaN(Number(data.minArea)) || Number(data.minArea) < 0) {
+      throw new ValidationError("Minimum area cannot be negative.");
+    }
+  }
+
+  if (data.maxArea !== undefined && data.maxArea !== null) {
+    if (isNaN(Number(data.maxArea)) || Number(data.maxArea) < 0) {
+      throw new ValidationError("Maximum area cannot be negative.");
+    }
+  }
+
+  if (
+    data.minArea !== undefined &&
+    data.minArea !== null &&
+    data.maxArea !== undefined &&
+    data.maxArea !== null
+  ) {
+    if (Number(data.maxArea) < Number(data.minArea)) {
+      throw new ValidationError("Maximum area cannot be less than minimum area.");
+    }
+  }
+
+  if (data.areaUnit !== undefined && data.areaUnit !== null && data.areaUnit.trim() !== "") {
+    if (!ALLOWED_AREA_UNITS.includes(data.areaUnit.trim() as AllowedAreaUnit)) {
+      throw new ValidationError(
+        `Invalid area unit '${data.areaUnit}'. Allowed units: ${ALLOWED_AREA_UNITS.join(", ")}.`
+      );
+    }
+  }
+
+  if (data.areaType !== undefined && data.areaType !== null) {
+    if (!ALLOWED_AREA_TYPES.includes(data.areaType as AllowedAreaType)) {
+      throw new ValidationError(
+        `Invalid area type '${data.areaType}'. Allowed types: ${ALLOWED_AREA_TYPES.join(", ")}.`
+      );
+    }
+  }
+}
 
 export interface CreateLeadData {
   name: string;
@@ -25,6 +93,13 @@ export interface CreateLeadData {
   preference: "SALE" | "RENT";
   bedroomConfigurations?: string[];
   propertyTypes?: ("APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT")[];
+  localities?: string[];
+  societies?: string[];
+  targetArea?: number | null;
+  minArea?: number | null;
+  maxArea?: number | null;
+  areaUnit?: string | null;
+  areaType?: ("CARPET" | "BUILT_UP" | "SUPER_BUILT_UP") | null;
   assignedTelecallerId?: string;
   advertisedPropertyRef?: string | null;
   advertisedPropertyId?: string | null;
@@ -45,6 +120,9 @@ export interface EditLeadData {
   bedroomConfigurations?: string[];
   propertyTypes?: ("APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT")[];
   targetArea?: number | null;
+  minArea?: number | null;
+  maxArea?: number | null;
+  areaUnit?: string | null;
   areaType?: ("CARPET" | "BUILT_UP" | "SUPER_BUILT_UP") | null;
   societies?: string[];
   assignedTelecallerId?: string | null;
@@ -65,6 +143,10 @@ export interface LogLeadCallInput {
   disposition: LeadCallingDisposition | string;
   notes?: string | null;
   callbackScheduledAt?: string | null;
+  enquiryId?: string | null;
+  isEnquiryVerified?: boolean | null;
+  enquiryVerificationNotes?: string | null;
+  isDoNotContact?: boolean;
 }
 
 const FULL_LEAD_INCLUDE = {
@@ -96,6 +178,26 @@ const FULL_LEAD_INCLUDE = {
       name: true,
       email: true,
     },
+  },
+  assignments: {
+    where: { targetType: AssignmentTargetType.LEAD },
+    include: {
+      assignedUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
+      assignedByUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      },
+    },
+    orderBy: { assignedAt: "desc" as const },
   },
 };
 
@@ -197,15 +299,30 @@ async function handleExistingBuyer(
   data: CreateLeadData,
   validatedPropertyId: string | null
 ): Promise<CreateLeadResult> {
-  const shouldReopen = existingLead.status === LeadStatus.INACTIVE;
+  const shouldReopen = existingLead.status === LeadStatus.INACTIVE && !existingLead.isDoNotContact;
   const nextStatus = shouldReopen ? LeadStatus.NOT_YET_VALIDATED : existingLead.status;
 
   let nextAssignedTelecallerId = existingLead.assignedTelecallerId;
+  let assignmentMethod: AssignmentMethod = AssignmentMethod.MANUAL;
+
   if (!nextAssignedTelecallerId) {
     if (context.role === UserRole.TELECALLER) {
       nextAssignedTelecallerId = context.userId;
-    } else if (data.assignedTelecallerId) {
-      nextAssignedTelecallerId = data.assignedTelecallerId;
+      assignmentMethod = AssignmentMethod.MANUAL;
+    } else if (data.assignedTelecallerId?.trim()) {
+      nextAssignedTelecallerId = data.assignedTelecallerId.trim();
+      assignmentMethod = AssignmentMethod.MANUAL;
+    } else {
+      try {
+        nextAssignedTelecallerId = await pickRoundRobinTelecallerTx(tx, context.tenantId);
+        assignmentMethod = AssignmentMethod.ROUND_ROBIN;
+      } catch (err) {
+        if (err instanceof ValidationError) {
+          nextAssignedTelecallerId = null;
+        } else {
+          throw err;
+        }
+      }
     }
   }
 
@@ -223,6 +340,15 @@ async function handleExistingBuyer(
         fieldName: "assignedTelecallerId",
         previousValue: existingLead.assignedTelecallerId,
         newValue: nextAssignedTelecallerId,
+      });
+
+      await recordLeadAssignmentTx({
+        tx,
+        tenantId: context.tenantId,
+        leadId: existingLead.id,
+        targetTelecallerId: nextAssignedTelecallerId!,
+        assignedByUserId: context.userId,
+        method: assignmentMethod,
       });
     }
 
@@ -372,6 +498,129 @@ export async function getLeadById(context: TenantContext, leadId: string) {
 }
 
 /**
+ * Synchronizes a lead requirement's locality associations against verified locality master records.
+ *
+ * Rules:
+ * 1. Normalize submitted locality names (trim, ignore empty, deduplicate case-insensitively).
+ * 2. If localities is undefined, do not modify existing associations.
+ * 3. If localities is empty array [], remove all associations.
+ * 4. If localities are provided:
+ *    - Query existing verified locality master records for tenantId and city.
+ *    - If any submitted locality does not exist in the verified master, throw ValidationError.
+ *    - Delete associations that are no longer selected.
+ *    - Preserve unchanged associations.
+ *    - Create newly selected LeadRequirementLocality records.
+ */
+export async function syncLeadRequirementLocalities({
+  tx,
+  tenantId,
+  requirementId,
+  city,
+  localities,
+}: {
+  tx: Prisma.TransactionClient;
+  tenantId: string;
+  requirementId: string;
+  city: string;
+  localities?: string[];
+}): Promise<void> {
+  if (localities === undefined) {
+    return;
+  }
+
+  // Normalize submitted names (trim, drop empty, case-insensitive deduplication)
+  const seenLower = new Set<string>();
+  const normalizedNames: string[] = [];
+  for (const raw of localities) {
+    const trimmed = typeof raw === "string" ? raw.trim() : "";
+    if (trimmed.length > 0 && !seenLower.has(trimmed.toLowerCase())) {
+      seenLower.add(trimmed.toLowerCase());
+      normalizedNames.push(trimmed);
+    }
+  }
+
+  // If empty array, clear all existing associations
+  if (normalizedNames.length === 0) {
+    await tx.leadRequirementLocality.deleteMany({
+      where: {
+        tenantId,
+        requirementId,
+      },
+    });
+    return;
+  }
+
+  // Query verified locality master records for tenant and city
+  const masterLocalities = await tx.locality.findMany({
+    where: {
+      tenantId,
+      city: { equals: city.trim(), mode: "insensitive" },
+    },
+  });
+
+  const matchedMasterIds: string[] = [];
+  const missingNames: string[] = [];
+
+  for (const submittedName of normalizedNames) {
+    const match = masterLocalities.find(
+      (ml) => ml.name.trim().toLowerCase() === submittedName.toLowerCase()
+    );
+    if (match) {
+      matchedMasterIds.push(match.id);
+    } else {
+      missingNames.push(submittedName);
+    }
+  }
+
+  if (missingNames.length > 0) {
+    throw new ValidationError(
+      `Locality '${missingNames.join(
+        "', '"
+      )}' does not exist in the verified locality master for city '${city.trim()}'. Please select verified master localities.`
+    );
+  }
+
+  // Existing associations
+  const existingAssocs = await tx.leadRequirementLocality.findMany({
+    where: {
+      tenantId,
+      requirementId,
+    },
+  });
+
+  const existingLocalityIds = new Set(existingAssocs.map((a) => a.localityId));
+
+  // Associations to delete
+  const idsToDelete = existingAssocs
+    .filter((a) => !matchedMasterIds.includes(a.localityId))
+    .map((a) => a.localityId);
+
+  if (idsToDelete.length > 0) {
+    await tx.leadRequirementLocality.deleteMany({
+      where: {
+        tenantId,
+        requirementId,
+        localityId: { in: idsToDelete },
+      },
+    });
+  }
+
+  // Associations to create
+  const uniqueMasterIds = Array.from(new Set(matchedMasterIds));
+  const idsToAdd = uniqueMasterIds.filter((id) => !existingLocalityIds.has(id));
+  if (idsToAdd.length > 0) {
+    await tx.leadRequirementLocality.createMany({
+      data: idsToAdd.map((localityId) => ({
+        tenantId,
+        requirementId,
+        localityId,
+      })),
+      skipDuplicates: true,
+    });
+  }
+}
+
+/**
  * Creates a lead within the tenant context.
  * - Enforces tenant-scoped deduplication on primaryPhone.
  * - Reuses existing buyer profile and logs a new Enquiry if already present in the tenant.
@@ -403,9 +652,13 @@ export async function createLead(
     throw new ValidationError("Target city is required.");
   }
 
+  validateAreaRequirements(data);
+
   if (!data.originalSource?.trim()) {
     throw new ValidationError("Inquiry source is required.");
   }
+
+  validateAreaRequirements(data);
 
   // Tenant-scoped Advertised Property Validation
   let validatedPropertyId: string | null = null;
@@ -433,11 +686,6 @@ export async function createLead(
     }
   }
 
-  const assignedTelecallerId =
-    context.role === UserRole.TELECALLER
-      ? context.userId
-      : data.assignedTelecallerId || null;
-
   try {
     return await prisma.$transaction(async (tx) => {
       // 1. Tenant-scoped buyer lookup
@@ -459,6 +707,32 @@ export async function createLead(
         );
       }
 
+      // Determine assignment for new prospect (PRD §5.6)
+      let targetTelecallerId: string | null = null;
+      let assignmentMethod: AssignmentMethod | null = null;
+
+      if (context.role === UserRole.TELECALLER) {
+        targetTelecallerId = context.userId;
+        assignmentMethod = AssignmentMethod.MANUAL;
+      } else if (data.assignedTelecallerId?.trim()) {
+        targetTelecallerId = data.assignedTelecallerId.trim();
+        assignmentMethod = AssignmentMethod.MANUAL;
+      } else {
+        // Manager did not explicitly select a telecaller -> fair round-robin
+        try {
+          targetTelecallerId = await pickRoundRobinTelecallerTx(tx, context.tenantId);
+          assignmentMethod = AssignmentMethod.ROUND_ROBIN;
+        } catch (err) {
+          if (err instanceof ValidationError) {
+            // Per PRD §5.6: If no active telecallers exist in the tenant, leave assignedTelecallerId null without crashing prospect creation
+            targetTelecallerId = null;
+            assignmentMethod = null;
+          } else {
+            throw err;
+          }
+        }
+      }
+
       // 2. New prospect creation: Lead + Requirement + first Enquiry
       const newLead = await tx.lead.create({
         data: {
@@ -468,7 +742,7 @@ export async function createLead(
           alternatePhone: cleanedAltPhone,
           email: data.email?.trim().toLowerCase() || null,
           originalSource: data.originalSource.trim(),
-          assignedTelecallerId,
+          assignedTelecallerId: targetTelecallerId,
           status: LeadStatus.NOT_YET_VALIDATED,
           requirement: {
             create: {
@@ -479,6 +753,12 @@ export async function createLead(
               preference: data.preference,
               bedroomConfigurations: data.bedroomConfigurations ?? [],
               propertyTypes: data.propertyTypes ?? [],
+              societies: data.societies ?? [],
+              targetArea: data.targetArea ? new Prisma.Decimal(data.targetArea) : null,
+              minArea: data.minArea ? new Prisma.Decimal(data.minArea) : null,
+              maxArea: data.maxArea ? new Prisma.Decimal(data.maxArea) : null,
+              areaUnit: data.areaUnit?.trim() || "sq.ft",
+              areaType: data.areaType ?? null,
             },
           },
           enquiries: {
@@ -494,12 +774,49 @@ export async function createLead(
         include: FULL_LEAD_INCLUDE,
       });
 
-      const initialEnquiry =
-        newLead.enquiries?.[0] ??
-        ({
-          id: `enquiry-${newLead.id}`,
+      // 3. Atomically create the active Assignment record if telecaller assigned
+      if (targetTelecallerId && assignmentMethod) {
+        await recordLeadAssignmentTx({
+          tx,
           tenantId: context.tenantId,
           leadId: newLead.id,
+          targetTelecallerId,
+          assignedByUserId: context.userId,
+          method: assignmentMethod,
+        });
+      }
+
+      let finalLead = newLead as FullPrismaLead;
+
+      if (data.localities !== undefined && newLead.requirement) {
+        await syncLeadRequirementLocalities({
+          tx,
+          tenantId: context.tenantId,
+          requirementId: newLead.requirement.id,
+          city: data.city.trim(),
+          localities: data.localities,
+        });
+
+        const refreshed = await tx.lead.findUnique({
+          where: {
+            id_tenantId: {
+              id: newLead.id,
+              tenantId: context.tenantId,
+            },
+          },
+          include: FULL_LEAD_INCLUDE,
+        });
+        if (refreshed) {
+          finalLead = refreshed as FullPrismaLead;
+        }
+      }
+
+      const initialEnquiry =
+        finalLead.enquiries?.[0] ??
+        ({
+          id: `enquiry-${finalLead.id}`,
+          tenantId: context.tenantId,
+          leadId: finalLead.id,
           source: data.originalSource.trim(),
           advertisedPropertyRef: data.advertisedPropertyRef?.trim() || null,
           advertisedPropertyId: validatedPropertyId,
@@ -511,11 +828,11 @@ export async function createLead(
         } as unknown as PrismaEnquiry);
 
       return {
-        lead: newLead as FullPrismaLead,
+        lead: finalLead,
         enquiry: initialEnquiry,
         enquiryId: initialEnquiry.id,
         isExistingBuyer: false,
-        id: newLead.id,
+        id: finalLead.id,
       };
     });
   } catch (error) {
@@ -551,9 +868,12 @@ export async function createLead(
  * Logs an owner/prospect qualification call on a lead with audit persistence.
  * Enforces:
  * - 4 standard PRD lead dispositions.
- * - Callback scheduling requirements on CALL_BACK.
- * - 3-attempt unreachable threshold (automatically marks lead INACTIVE on 3 consecutive unreachable attempts).
+ * - Callback scheduling requirements on CALL_BACK (cannot be in the past).
+ * - PRD §5.5 unreachable attempt tracking: increments count, caller may mark Inactive at discretion (not automatic).
  * - Immediate INACTIVE transition when buyer states not looking.
+ * - One later follow-up rule: allows exactly 1 subsequent call after BUYER_SAYS_NOT_LOOKING.
+ * - DNC rejection: blocks calls if prospect is marked Do Not Contact.
+ * - Advertised enquiry verification: updates isVerifiedByCaller and callerVerificationNotes atomically.
  * - Unreachable counter reset on successful CONNECTED call.
  */
 export async function logLeadCall(context: TenantContext, input: LogLeadCallInput) {
@@ -572,6 +892,41 @@ export async function logLeadCall(context: TenantContext, input: LogLeadCallInpu
     lead.assignedTelecallerId !== context.userId
   ) {
     throw new ForbiddenError("Telecallers may only log calls for leads actively assigned to them.");
+  }
+
+  // DNC Enforcement: reject all calls if prospect is marked Do Not Contact
+  if (lead.isDoNotContact) {
+    throw new ValidationError("Cannot call lead: this prospect is marked as Do Not Contact (DNC).");
+  }
+
+  // Inactive prospect and one later follow-up rule enforcement (PRD §5.5)
+  if (lead.status === LeadStatus.INACTIVE) {
+    const latestNotLookingCall = await prisma.callLog.findFirst({
+      where: {
+        tenantId: context.tenantId,
+        leadId: lead.id,
+        leadDisposition: LeadCallingDisposition.BUYER_SAYS_NOT_LOOKING,
+      },
+      orderBy: { calledAt: "desc" },
+    });
+
+    if (!latestNotLookingCall) {
+      throw new ValidationError("Cannot call lead: prospect is inactive. Re-activate the lead to resume calling.");
+    }
+
+    const followUpCallsCount = await prisma.callLog.count({
+      where: {
+        tenantId: context.tenantId,
+        leadId: lead.id,
+        calledAt: { gt: latestNotLookingCall.calledAt },
+      },
+    });
+
+    if (followUpCallsCount >= 1) {
+      throw new ValidationError(
+        "Cannot call lead: the single permitted follow-up call after 'Not Looking' has already been used."
+      );
+    }
   }
 
   // Normalize disposition
@@ -598,10 +953,16 @@ export async function logLeadCall(context: TenantContext, input: LogLeadCallInpu
     if (isNaN(d.getTime())) {
       throw new ValidationError("Invalid callback date and time format.");
     }
+    if (d.getTime() < Date.now()) {
+      throw new ValidationError("Callback date and time cannot be in the past.");
+    }
     callbackDate = d;
   } else if (input.callbackScheduledAt?.trim()) {
     const d = new Date(input.callbackScheduledAt);
     if (!isNaN(d.getTime())) {
+      if (d.getTime() < Date.now()) {
+        throw new ValidationError("Callback date and time cannot be in the past.");
+      }
       callbackDate = d;
     }
   }
@@ -613,14 +974,62 @@ export async function logLeadCall(context: TenantContext, input: LogLeadCallInpu
     nextStatus = LeadStatus.INACTIVE;
   } else if (normalizedDisposition === LeadCallingDisposition.RINGING_OR_NOT_ANSWERING) {
     nextUnreachable += 1;
-    if (nextUnreachable >= 3) {
-      nextStatus = LeadStatus.INACTIVE;
-    }
+    // PRD §5.5: After three unsuccessful attempts, the caller may mark the lead Inactive at discretion.
+    // We do NOT automatically force status to INACTIVE.
   } else if (normalizedDisposition === LeadCallingDisposition.CONNECTED) {
     nextUnreachable = 0;
   }
 
+  const markDnc = Boolean(input.isDoNotContact);
+  if (markDnc) {
+    nextStatus = LeadStatus.INACTIVE;
+  }
+
   return prisma.$transaction(async (tx) => {
+    // Inactive prospect concurrency lock and atomic re-verification (PRD §5.5)
+    if (lead.status === LeadStatus.INACTIVE) {
+      // Touching the lead row within the transaction locks the record exclusively (FOR UPDATE),
+      // strictly serializing simultaneous follow-up calls on the same lead.
+      await tx.lead.update({
+        where: {
+          id_tenantId: {
+            id: lead.id,
+            tenantId: context.tenantId,
+          },
+        },
+        data: {
+          updatedAt: new Date(),
+        },
+      });
+
+      const latestNotLookingCallTx = await tx.callLog.findFirst({
+        where: {
+          tenantId: context.tenantId,
+          leadId: lead.id,
+          leadDisposition: LeadCallingDisposition.BUYER_SAYS_NOT_LOOKING,
+        },
+        orderBy: { calledAt: "desc" },
+      });
+
+      if (!latestNotLookingCallTx) {
+        throw new ValidationError("Cannot call lead: prospect is inactive. Re-activate the lead to resume calling.");
+      }
+
+      const followUpCallsCountTx = await tx.callLog.count({
+        where: {
+          tenantId: context.tenantId,
+          leadId: lead.id,
+          calledAt: { gt: latestNotLookingCallTx.calledAt },
+        },
+      });
+
+      if (followUpCallsCountTx >= 1) {
+        throw new ValidationError(
+          "Cannot call lead: the single permitted follow-up call after 'Not Looking' has already been used."
+        );
+      }
+    }
+
     await tx.callLog.create({
       data: {
         tenantId: context.tenantId,
@@ -633,20 +1042,57 @@ export async function logLeadCall(context: TenantContext, input: LogLeadCallInpu
       },
     });
 
+    if (input.enquiryId?.trim()) {
+      const enquiry = await tx.enquiry.findFirst({
+        where: {
+          id: input.enquiryId.trim(),
+          tenantId: context.tenantId,
+          leadId: lead.id,
+        },
+        select: { id: true },
+      });
+      if (!enquiry) {
+        throw new ValidationError("Referenced enquiry does not exist for this prospect.");
+      }
+      await tx.enquiry.update({
+        where: { id: enquiry.id },
+        data: {
+          isVerifiedByCaller:
+            input.isEnquiryVerified !== undefined && input.isEnquiryVerified !== null
+              ? Boolean(input.isEnquiryVerified)
+              : true,
+          callerVerificationNotes:
+            input.enquiryVerificationNotes !== undefined
+              ? input.enquiryVerificationNotes?.trim() || null
+              : undefined,
+        },
+      });
+    }
+
+    const changes: FieldComparison[] = [];
     if (nextStatus !== lead.status) {
+      changes.push({
+        fieldName: "status",
+        previousValue: lead.status,
+        newValue: nextStatus,
+      });
+    }
+    if (markDnc && !lead.isDoNotContact) {
+      changes.push({
+        fieldName: "isDoNotContact",
+        previousValue: false,
+        newValue: true,
+      });
+    }
+
+    if (changes.length > 0) {
       await recordLeadFieldChanges({
         tx,
         tenantId: context.tenantId,
         leadId: lead.id,
         changedByUserId: context.userId,
         changeSource: "SYSTEM",
-        changes: [
-          {
-            fieldName: "status",
-            previousValue: lead.status,
-            newValue: nextStatus,
-          },
-        ],
+        changes,
       });
     }
 
@@ -660,6 +1106,7 @@ export async function logLeadCall(context: TenantContext, input: LogLeadCallInpu
       data: {
         status: nextStatus,
         unreachableAttemptsCount: nextUnreachable,
+        ...(markDnc ? { isDoNotContact: true } : {}),
       },
       include: FULL_LEAD_INCLUDE,
     });
@@ -878,6 +1325,41 @@ export async function updateLead(
       changes,
     });
 
+    if (
+      "assignedTelecallerId" in data &&
+      data.assignedTelecallerId !== undefined &&
+      targetTelecallerId !== lead.assignedTelecallerId
+    ) {
+      if (targetTelecallerId) {
+        await recordLeadAssignmentTx({
+          tx,
+          tenantId: context.tenantId,
+          leadId: lead.id,
+          targetTelecallerId,
+          assignedByUserId: context.userId,
+          method: AssignmentMethod.MANUAL,
+        });
+      } else {
+        const activeAssignment = await tx.assignment.findFirst({
+          where: {
+            leadId: lead.id,
+            tenantId: context.tenantId,
+            targetType: AssignmentTargetType.LEAD,
+            status: AssignmentStatus.ACTIVE,
+          },
+        });
+        if (activeAssignment) {
+          await tx.assignment.update({
+            where: { id: activeAssignment.id },
+            data: {
+              status: AssignmentStatus.REASSIGNED,
+              unassignedAt: new Date(),
+            },
+          });
+        }
+      }
+    }
+
     return tx.lead.update({
       where: {
         id_tenantId: {
@@ -950,6 +1432,8 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
   if (!data.city?.trim()) {
     throw new ValidationError("Target city is required.");
   }
+
+  validateAreaRequirements(data);
 
   let assignedTelecallerId = lead.assignedTelecallerId;
   const canAssignTelecaller = hasPermission(
@@ -1026,7 +1510,22 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
       {
         fieldName: "targetArea",
         previousValue: lead.requirement?.targetArea ?? null,
-        newValue: data.targetArea ? new Prisma.Decimal(data.targetArea) : null,
+        newValue: data.targetArea !== undefined && data.targetArea !== null ? new Prisma.Decimal(data.targetArea) : null,
+      },
+      {
+        fieldName: "minArea",
+        previousValue: lead.requirement?.minArea ?? null,
+        newValue: data.minArea !== undefined && data.minArea !== null ? new Prisma.Decimal(data.minArea) : null,
+      },
+      {
+        fieldName: "maxArea",
+        previousValue: lead.requirement?.maxArea ?? null,
+        newValue: data.maxArea !== undefined && data.maxArea !== null ? new Prisma.Decimal(data.maxArea) : null,
+      },
+      {
+        fieldName: "areaUnit",
+        previousValue: lead.requirement?.areaUnit ?? "sq.ft",
+        newValue: data.areaUnit !== undefined && data.areaUnit !== null ? data.areaUnit.trim() : "sq.ft",
       },
       {
         fieldName: "areaType",
@@ -1040,7 +1539,9 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
         .map((l) => l.locality?.name || l.localityId)
         .filter(Boolean)
         .sort();
-      const nextLocs = [...data.localities].map((s) => s.trim()).filter(Boolean).sort();
+      const nextLocs = Array.from(
+        new Set([...data.localities].map((s) => s.trim()).filter(Boolean))
+      ).sort();
       changes.push({
         fieldName: "localities",
         previousValue: prevLocs,
@@ -1057,6 +1558,40 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
       changes,
     });
 
+    if (
+      data.assignedTelecallerId !== undefined &&
+      assignedTelecallerId !== lead.assignedTelecallerId
+    ) {
+      if (assignedTelecallerId) {
+        await recordLeadAssignmentTx({
+          tx,
+          tenantId: context.tenantId,
+          leadId: lead.id,
+          targetTelecallerId: assignedTelecallerId,
+          assignedByUserId: context.userId,
+          method: AssignmentMethod.MANUAL,
+        });
+      } else {
+        const activeAssignment = await tx.assignment.findFirst({
+          where: {
+            leadId: lead.id,
+            tenantId: context.tenantId,
+            targetType: AssignmentTargetType.LEAD,
+            status: AssignmentStatus.ACTIVE,
+          },
+        });
+        if (activeAssignment) {
+          await tx.assignment.update({
+            where: { id: activeAssignment.id },
+            data: {
+              status: AssignmentStatus.REASSIGNED,
+              unassignedAt: new Date(),
+            },
+          });
+        }
+      }
+    }
+
     await tx.lead.update({
       where: {
         id_tenantId: {
@@ -1072,7 +1607,7 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
       },
     });
 
-    await tx.leadRequirement.upsert({
+    const updatedReq = await tx.leadRequirement.upsert({
       where: { leadId: lead.id },
       create: {
         tenantId: context.tenantId,
@@ -1084,7 +1619,10 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
         bedroomConfigurations: data.bedroomConfigurations ?? [],
         propertyTypes: data.propertyTypes ?? [],
         societies: data.societies ?? [],
-        targetArea: data.targetArea ? new Prisma.Decimal(data.targetArea) : null,
+        targetArea: data.targetArea !== undefined ? (data.targetArea ? new Prisma.Decimal(data.targetArea) : null) : null,
+        minArea: data.minArea !== undefined ? (data.minArea ? new Prisma.Decimal(data.minArea) : null) : null,
+        maxArea: data.maxArea !== undefined ? (data.maxArea ? new Prisma.Decimal(data.maxArea) : null) : null,
+        areaUnit: data.areaUnit !== undefined ? (data.areaUnit?.trim() || "sq.ft") : "sq.ft",
         areaType: data.areaType ?? null,
       },
       update: {
@@ -1095,10 +1633,27 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
         bedroomConfigurations: data.bedroomConfigurations ?? [],
         propertyTypes: data.propertyTypes ?? [],
         societies: data.societies ?? [],
-        targetArea: data.targetArea ? new Prisma.Decimal(data.targetArea) : null,
-        areaType: data.areaType ?? null,
+        targetArea: data.targetArea !== undefined ? (data.targetArea ? new Prisma.Decimal(data.targetArea) : null) : undefined,
+        minArea: data.minArea !== undefined ? (data.minArea ? new Prisma.Decimal(data.minArea) : null) : undefined,
+        maxArea: data.maxArea !== undefined ? (data.maxArea ? new Prisma.Decimal(data.maxArea) : null) : undefined,
+        areaUnit: data.areaUnit !== undefined ? (data.areaUnit?.trim() || "sq.ft") : undefined,
+        areaType: data.areaType !== undefined ? data.areaType : undefined,
       },
     });
+
+    if (data.localities !== undefined) {
+      const reqId =
+        updatedReq?.id ||
+        lead.requirement?.id ||
+        (await tx.leadRequirement.findUniqueOrThrow({ where: { leadId: lead.id } })).id;
+      await syncLeadRequirementLocalities({
+        tx,
+        tenantId: context.tenantId,
+        requirementId: reqId,
+        city: data.city.trim(),
+        localities: data.localities,
+      });
+    }
 
     return tx.lead.findUniqueOrThrow({
       where: {
@@ -1110,4 +1665,313 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
       include: FULL_LEAD_INCLUDE,
     });
   });
+}
+
+export interface GetLeadChangeHistoryOptions {
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Retrieves change history records for a lead strictly scoped to tenant context and role permissions.
+ * Enforces demand:view_changelog permission and tenant/telecaller scoping via getLeadById.
+ * Returns results ordered by changedAt descending, mapped safely for client consumption.
+ */
+export async function getLeadChangeHistory(
+  context: TenantContext,
+  leadId: string,
+  options?: GetLeadChangeHistoryOptions
+): Promise<LeadChangeLogItem[]> {
+  if (!leadId?.trim()) {
+    throw new ValidationError("Lead ID is required.");
+  }
+
+  // 1. Permission check
+  assertPermission(context, "demand:view_changelog");
+
+  // 2. Strict tenant scoping & telecaller assignment scoping via getLeadById
+  // Throws NotFoundError if lead belongs to another tenant or telecaller is unassigned
+  await getLeadById(context, leadId);
+
+  const take = Math.min(Math.max(options?.limit ?? 100, 1), 200);
+  const skip = Math.max(options?.offset ?? 0, 0);
+
+  // 3. Query changelog scoped to tenant and lead, ordered newest first
+  const logs = await prisma.leadChangeLog.findMany({
+    where: {
+      tenantId: context.tenantId,
+      leadId,
+    },
+    include: {
+      changedByUser: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+        },
+      },
+    },
+    orderBy: {
+      changedAt: "desc",
+    },
+    take,
+    skip,
+  });
+
+  return logs.map(mapPrismaLeadChangeLogToView);
+}
+
+/**
+ * Retrieves verified master localities for a tenant and optional city.
+ * Used for form autocompletion, selectors, and master data inspection.
+ */
+export async function getVerifiedLocalities(
+  context: TenantContext,
+  city?: string
+) {
+  assertPermission(context, "demand:view_assigned");
+
+  return prisma.locality.findMany({
+    where: {
+      tenantId: context.tenantId,
+      ...(city?.trim()
+        ? { city: { equals: city.trim(), mode: "insensitive" } }
+        : {}),
+    },
+    select: {
+      id: true,
+      name: true,
+      city: true,
+      latitude: true,
+      longitude: true,
+    },
+    orderBy: { name: "asc" },
+  });
+}
+
+/**
+ * Marks a lead as Do Not Contact (DNC) and transitions it to INACTIVE.
+ * Enforces demand:mark_dnc or demand:inactivate permission, tenant isolation, and telecaller assignment.
+ * Generates audit log records for isDoNotContact (and status if changed).
+ * No-op if already DNC and INACTIVE.
+ */
+export async function markLeadDoNotContact(
+  context: TenantContext,
+  leadId: string,
+  reason?: string | null
+): Promise<FullPrismaLead> {
+  void reason;
+  if (!leadId?.trim()) {
+    throw new ValidationError("Lead ID is required.");
+  }
+
+  const canMarkDnc =
+    hasPermission(
+      context.role,
+      "demand:mark_dnc",
+      context.user?.delegatedPermissions || context.delegatedPermissions
+    ) ||
+    hasPermission(
+      context.role,
+      "demand:inactivate",
+      context.user?.delegatedPermissions || context.delegatedPermissions
+    );
+
+  if (!canMarkDnc) {
+    throw new ForbiddenError("You do not have permission to mark a prospect as Do Not Contact.");
+  }
+
+  const lead = await getLeadById(context, leadId);
+
+  if (
+    context.role === UserRole.TELECALLER &&
+    lead.assignedTelecallerId &&
+    lead.assignedTelecallerId !== context.userId
+  ) {
+    throw new ForbiddenError("Telecallers may only update leads actively assigned to them.");
+  }
+
+  if (lead.isDoNotContact && lead.status === LeadStatus.INACTIVE) {
+    return prisma.lead.findUniqueOrThrow({
+      where: {
+        id_tenantId: {
+          id: lead.id,
+          tenantId: context.tenantId,
+        },
+      },
+      include: FULL_LEAD_INCLUDE,
+    });
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const changes: FieldComparison[] = [];
+
+    if (!lead.isDoNotContact) {
+      changes.push({
+        fieldName: "isDoNotContact",
+        previousValue: false,
+        newValue: true,
+      });
+    }
+
+    if (lead.status !== LeadStatus.INACTIVE) {
+      changes.push({
+        fieldName: "status",
+        previousValue: lead.status,
+        newValue: LeadStatus.INACTIVE,
+      });
+    }
+
+    if (changes.length > 0) {
+      await recordLeadFieldChanges({
+        tx,
+        tenantId: context.tenantId,
+        leadId: lead.id,
+        changedByUserId: context.userId,
+        changeSource: "USER",
+        changes,
+      });
+    }
+
+    return tx.lead.update({
+      where: {
+        id_tenantId: {
+          id: lead.id,
+          tenantId: context.tenantId,
+        },
+      },
+      data: {
+        isDoNotContact: true,
+        status: LeadStatus.INACTIVE,
+      },
+      include: FULL_LEAD_INCLUDE,
+    });
+  });
+}
+
+export interface ListPendingCallbacksOptions {
+  timeframe?: "overdue" | "today" | "upcoming" | "all";
+  limit?: number;
+}
+
+/**
+ * Retrieves pending callbacks for the tenant context.
+ * - Restricts telecallers to their assigned prospects.
+ * - Excludes prospects marked as Do Not Contact (isDoNotContact = true).
+ * - Excludes historical/resolved callbacks (only counts when lead's latest call was CALL_BACK).
+ * - Supports filtering by timeframe: 'overdue', 'today', 'upcoming', 'all'.
+ * - Formats dates with full Indian date and time (formatIndianDateTime).
+ */
+export async function listPendingCallbacks(
+  context: TenantContext,
+  options?: ListPendingCallbacksOptions
+): Promise<PendingCallbackItem[]> {
+  assertPermission(context, "demand:view_assigned");
+
+  const timeframe = options?.timeframe ?? "all";
+  const limit = Math.min(Math.max(options?.limit ?? 50, 1), 200);
+
+  const logs = await prisma.callLog.findMany({
+    where: {
+      tenantId: context.tenantId,
+      leadDisposition: LeadCallingDisposition.CALL_BACK,
+      callbackScheduledAt: { not: null },
+      lead: {
+        isDoNotContact: false,
+        ...(context.role === UserRole.TELECALLER ? { assignedTelecallerId: context.userId } : {}),
+      },
+    },
+    include: {
+      lead: {
+        include: {
+          requirement: true,
+          assignedTelecaller: {
+            select: { id: true, name: true, email: true },
+          },
+          callLogs: {
+            orderBy: { calledAt: "desc" },
+            take: 1,
+            select: { id: true, leadDisposition: true, calledAt: true },
+          },
+        },
+      },
+    },
+    orderBy: {
+      callbackScheduledAt: "asc",
+    },
+  });
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+  const seenLeadIds = new Set<string>();
+  const results: PendingCallbackItem[] = [];
+
+  for (const log of logs) {
+    if (!log.leadId || !log.lead || log.lead.isDoNotContact) {
+      continue;
+    }
+
+    if (seenLeadIds.has(log.leadId)) {
+      continue;
+    }
+
+    // Check if resolved by a later call
+    if (log.lead.callLogs && log.lead.callLogs.length > 0) {
+      const latestCall = log.lead.callLogs[0];
+      if (latestCall.id !== log.id || latestCall.leadDisposition !== LeadCallingDisposition.CALL_BACK) {
+        continue;
+      }
+    }
+
+    if (!log.callbackScheduledAt) {
+      continue;
+    }
+
+    const cbDate = new Date(log.callbackScheduledAt);
+    if (isNaN(cbDate.getTime())) {
+      continue;
+    }
+
+    const isOverdue = cbDate.getTime() < now.getTime();
+    const isDueToday = cbDate.getTime() >= startOfToday.getTime() && cbDate.getTime() <= endOfToday.getTime();
+
+    if (timeframe === "overdue" && !isOverdue) continue;
+    if (timeframe === "today" && !isDueToday) continue;
+    if (timeframe === "upcoming" && cbDate.getTime() <= now.getTime()) continue;
+
+    seenLeadIds.add(log.leadId);
+
+    const minB = log.lead.requirement?.minBudget ? Number(log.lead.requirement.minBudget) : 0;
+    const maxB = log.lead.requirement?.maxBudget ? Number(log.lead.requirement.maxBudget) : 0;
+    const budgetFormatted =
+      log.lead.requirement && (minB > 0 || maxB > 0)
+        ? `${formatIndianCurrency(minB)} - ${formatIndianCurrency(maxB)}`
+        : "Not specified";
+
+    results.push({
+      callLogId: log.id,
+      leadId: log.leadId,
+      leadName: log.lead.name,
+      primaryPhone: log.lead.primaryPhone,
+      assignedTelecallerName: log.lead.assignedTelecaller?.name || "Unassigned",
+      assignedTelecallerId: log.lead.assignedTelecallerId || null,
+      callbackScheduledAt: cbDate.toISOString(),
+      callbackFormatted: formatIndianDateTime(cbDate),
+      isOverdue,
+      isDueToday,
+      notes: log.notes || null,
+      leadStatus: log.lead.status,
+      budgetFormatted,
+      city: log.lead.requirement?.city || "Not specified",
+    });
+
+    if (results.length >= limit) {
+      break;
+    }
+  }
+
+  return results;
 }

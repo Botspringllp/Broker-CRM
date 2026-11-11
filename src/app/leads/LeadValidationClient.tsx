@@ -7,17 +7,33 @@ import { StatusBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { Lead } from "@/types/crm";
+import { PendingCallbacksCompact } from "@/components/leads/PendingCallbacksCompact";
 import {
   createLeadAction,
   logLeadCallAction,
   updateLeadStatusAction,
+  assignLeadAction,
+  assignLeadRoundRobinAction,
 } from "./actions";
+
+interface EligibleTelecallerOption {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+}
 
 interface LeadValidationClientProps {
   initialLeads: Lead[];
+  canAssignTelecaller?: boolean;
+  eligibleTelecallers?: EligibleTelecallerOption[];
 }
 
-export function LeadValidationClient({ initialLeads }: LeadValidationClientProps) {
+export function LeadValidationClient({
+  initialLeads,
+  canAssignTelecaller = false,
+  eligibleTelecallers = [],
+}: LeadValidationClientProps) {
   const [leads, setLeads] = useState<Lead[]>(initialLeads);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(initialLeads[0] || null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -27,6 +43,16 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
   const [budgetFilter, setBudgetFilter] = useState("All");
   const [telecallerFilter, setTelecallerFilter] = useState("All");
   const [callbackFilter, setCallbackFilter] = useState("All");
+
+  // Assignment Modal state (DV-08 / PRD §5.6)
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [leadToAssign, setLeadToAssign] = useState<Lead | null>(null);
+  const [selectedTelecallerId, setSelectedTelecallerId] = useState(
+    eligibleTelecallers[0]?.id || ""
+  );
+  const [assignmentNotes, setAssignmentNotes] = useState("");
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [assignModalError, setAssignModalError] = useState<string | null>(null);
 
   // Call Logging state
   const [isCallModalOpen, setIsCallModalOpen] = useState(false);
@@ -112,7 +138,11 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
       }
 
       // Telecaller Filter
-      if (telecallerFilter !== "All" && lead.assignedTelecaller !== telecallerFilter) {
+      if (telecallerFilter === "Unassigned") {
+        if (lead.assignedTelecaller && lead.assignedTelecaller !== "Unassigned") {
+          return false;
+        }
+      } else if (telecallerFilter !== "All" && lead.assignedTelecaller !== telecallerFilter) {
         return false;
       }
 
@@ -126,8 +156,93 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
     });
   }, [leads, searchTerm, statusFilter, preferenceFilter, bhkFilter, budgetFilter, telecallerFilter, callbackFilter]);
 
+  const handleOpenAssignModal = (lead: Lead) => {
+    setLeadToAssign(lead);
+    const existingMatch = eligibleTelecallers.find((t) => t.name === lead.assignedTelecaller);
+    setSelectedTelecallerId(existingMatch?.id || eligibleTelecallers[0]?.id || "");
+    setAssignmentNotes("");
+    setAssignModalError(null);
+    setAssignModalOpen(true);
+  };
+
+  const handleAssignManual = async () => {
+    if (!leadToAssign || !selectedTelecallerId) return;
+    setIsAssigning(true);
+    setAssignModalError(null);
+    try {
+      const res = await assignLeadAction({
+        leadId: leadToAssign.id,
+        telecallerId: selectedTelecallerId,
+        notes: assignmentNotes.trim() || undefined,
+      });
+
+      if (!res.success) {
+        setAssignModalError(res.error || "Failed to assign lead.");
+        return;
+      }
+
+      setLeads((prev) =>
+        prev.map((l) => (l.id === res.lead.id ? res.lead : l))
+      );
+      if (selectedLead?.id === res.lead.id) {
+        setSelectedLead(res.lead);
+      }
+      setToastMessage(`Lead assigned to ${res.lead.assignedTelecaller} successfully.`);
+      setAssignModalOpen(false);
+    } catch (err: unknown) {
+      setAssignModalError(err instanceof Error ? err.message : "Failed to assign lead.");
+    } finally {
+      setIsAssigning(false);
+    }
+  };
+
+  const handleAssignRoundRobin = async (target?: Lead) => {
+    const lead = target || leadToAssign;
+    if (!lead) return;
+    setIsAssigning(true);
+    setAssignModalError(null);
+    try {
+      const res = await assignLeadRoundRobinAction({
+        leadId: lead.id,
+        notes: assignmentNotes.trim() || undefined,
+      });
+
+      if (!res.success) {
+        const errorMsg = res.error || "Failed to execute round-robin assignment.";
+        if (assignModalOpen) {
+          setAssignModalError(errorMsg);
+        } else {
+          setToastMessage(`Auto-assignment failed: ${errorMsg}`);
+        }
+        return;
+      }
+
+      setLeads((prev) =>
+        prev.map((l) => (l.id === res.lead.id ? res.lead : l))
+      );
+      if (selectedLead?.id === res.lead.id) {
+        setSelectedLead(res.lead);
+      }
+      setToastMessage(`Auto-assigned to ${res.lead.assignedTelecaller} via round-robin.`);
+      setAssignModalOpen(false);
+    } catch (err: unknown) {
+      const errorMsg = err instanceof Error ? err.message : "Failed to execute round-robin assignment.";
+      if (assignModalOpen) {
+        setAssignModalError(errorMsg);
+      } else {
+        setToastMessage(`Auto-assignment failed: ${errorMsg}`);
+      }
+    } finally {
+      setIsAssigning(false);
+    }
+  };
+
   const handleOpenCallModal = () => {
     if (!selectedLead) return;
+    if (selectedLead.isDoNotContact) {
+      setToastMessage("Cannot call: this prospect is marked Do Not Contact (DNC).");
+      return;
+    }
     setCallDisposition(selectedLead.currentDisposition || "Connected");
     setCallNotes("");
     setCallbackTime("");
@@ -185,6 +300,31 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
       setToastMessage(`${res.lead.name} marked ACTIVE (Requirements Confirmed).`);
     } catch (err: unknown) {
       setToastMessage(err instanceof Error ? err.message : "Failed to activate lead.");
+    } finally {
+      setIsStatusUpdating(false);
+    }
+  };
+
+  const handleMarkLeadInactive = async () => {
+    if (!selectedLead || isStatusUpdating) return;
+    setIsStatusUpdating(true);
+
+    try {
+      const res = await updateLeadStatusAction({
+        leadId: selectedLead.id,
+        status: "INACTIVE",
+      });
+
+      if (!res.success) {
+        setToastMessage(`Failed to mark lead inactive: ${res.error}`);
+        return;
+      }
+
+      setLeads((prev) => prev.map((l) => (l.id === res.lead.id ? res.lead : l)));
+      setSelectedLead(res.lead);
+      setToastMessage(`${res.lead.name} marked INACTIVE.`);
+    } catch (err: unknown) {
+      setToastMessage(err instanceof Error ? err.message : "Failed to mark lead inactive.");
     } finally {
       setIsStatusUpdating(false);
     }
@@ -400,6 +540,7 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                 className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
               >
                 <option value="All">All Callers</option>
+                <option value="Unassigned">⚠️ Unassigned Only</option>
                 {distinctTelecallers.map((t) => (
                   <option key={t} value={t}>
                     {t}
@@ -427,6 +568,14 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
 
         {/* Master-Detail Architecture: Compact Table on Top, 3-Column Inspector Below */}
         <div className="space-y-6">
+          {/* Pending Callbacks Compact Queue */}
+          <PendingCallbacksCompact
+            onSelectLeadId={(leadId) => {
+              const match = leads.find((l) => l.id === leadId);
+              if (match) setSelectedLead(match);
+            }}
+          />
+
           {/* Leads List Table */}
           <div className="rounded-lg bg-crm-surface border border-crm-border shadow-2xs overflow-hidden">
             <div className="px-4 py-2.5 bg-stone-50 border-b border-crm-border text-xs font-semibold text-crm-text flex items-center justify-between">
@@ -443,6 +592,7 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                     <th className="px-3 py-2.5">Target Localities</th>
                     <th className="px-3 py-2.5">Source & Ad Reference</th>
                     <th className="px-3 py-2.5">Lead Status</th>
+                    <th className="px-3 py-2.5">Assigned Telecaller</th>
                     <th className="px-3 py-2.5">Current Disposition</th>
                     <th className="px-4 py-2.5 text-right">Action</th>
                   </tr>
@@ -450,7 +600,7 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                 <tbody className="divide-y divide-crm-border">
                   {leads.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-12 text-center text-crm-muted">
+                      <td colSpan={8} className="px-4 py-12 text-center text-crm-muted">
                         <div className="max-w-sm mx-auto space-y-1">
                           <p className="font-semibold text-crm-text text-sm">No leads found</p>
                           <p className="text-xs text-crm-muted">
@@ -461,7 +611,7 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                     </tr>
                   ) : filteredLeads.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-8 text-center text-crm-muted">
+                      <td colSpan={8} className="px-4 py-8 text-center text-crm-muted">
                         No leads found matching current filter criteria.
                       </td>
                     </tr>
@@ -477,14 +627,34 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                           }`}
                         >
                           <td className="px-4 py-2.5">
-                            <Link
-                              href={`/leads/${lead.id}`}
-                              onClick={(e) => e.stopPropagation()}
-                              className="font-bold text-crm-text hover:text-crm-primary hover:underline block"
-                            >
-                              {lead.name}
-                            </Link>
-                            <div className="text-[11px] text-crm-muted">{lead.primaryPhone}</div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <Link
+                                href={`/leads/${lead.id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="font-bold text-crm-text hover:text-crm-primary hover:underline block"
+                              >
+                                {lead.name}
+                              </Link>
+                              {lead.isDoNotContact && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                                  DNC
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-crm-muted flex items-center gap-1.5">
+                              <span>{lead.primaryPhone}</span>
+                              {lead.unreachableCount > 0 && (
+                                <span
+                                  className={`text-[10px] font-semibold px-1 rounded ${
+                                    lead.unreachableCount >= 3
+                                      ? "bg-rose-50 text-rose-700 border border-rose-200"
+                                      : "bg-stone-100 text-stone-600"
+                                  }`}
+                                >
+                                  {lead.unreachableCount} {lead.unreachableCount === 1 ? "attempt" : "attempts"}
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           <td className="px-3 py-2.5">
@@ -509,10 +679,42 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                           </td>
 
                           <td className="px-3 py-2.5">
+                            {lead.assignedTelecaller && lead.assignedTelecaller !== "Unassigned" ? (
+                              <div className="space-y-0.5">
+                                <span className="font-semibold text-crm-text block truncate max-w-[130px]">
+                                  👤 {lead.assignedTelecaller}
+                                </span>
+                                {lead.currentAssignment?.assignmentMethod && (
+                                  <span className="text-[10px] text-crm-muted block">
+                                    {lead.currentAssignment.assignmentMethod}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                ⚠️ Unassigned
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-3 py-2.5">
                             <StatusBadge status={lead.currentDisposition} />
                           </td>
 
                           <td className="px-4 py-2.5 text-right space-x-1.5 whitespace-nowrap">
+                            {canAssignTelecaller && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenAssignModal(lead);
+                                }}
+                                className="px-2 py-1 text-xs font-semibold rounded border border-crm-border bg-stone-50 hover:bg-stone-100 text-crm-text cursor-pointer"
+                                title={lead.assignedTelecaller && lead.assignedTelecaller !== "Unassigned" ? "Reassign telecaller" : "Assign to telecaller"}
+                              >
+                                {lead.assignedTelecaller && lead.assignedTelecaller !== "Unassigned" ? "Reassign" : "Assign"}
+                              </button>
+                            )}
                             <Link
                               href={`/matching/${lead.id}`}
                               onClick={(e) => e.stopPropagation()}
@@ -537,14 +739,23 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                             >
                               Edit
                             </Link>
-                            <Link
-                              href={`/leads/${lead.id}/qualify`}
-                              onClick={(e) => e.stopPropagation()}
-                              className="px-2.5 py-1 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs inline-block"
-                              title="Open Qualification Call Workspace"
-                            >
-                              Call
-                            </Link>
+                            {lead.isDoNotContact ? (
+                              <span
+                                className="px-2.5 py-1 text-xs font-semibold rounded bg-stone-100 text-stone-400 border border-stone-200 cursor-not-allowed inline-block"
+                                title="Calling blocked: Prospect marked Do Not Contact"
+                              >
+                                DNC
+                              </span>
+                            ) : (
+                              <Link
+                                href={`/leads/${lead.id}/qualify`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="px-2.5 py-1 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs inline-block"
+                                title="Open Qualification Call Workspace"
+                              >
+                                Call
+                              </Link>
+                            )}
                           </td>
                         </tr>
                       );
@@ -565,21 +776,29 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                     {selectedLead.name.charAt(0)}
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-base font-bold text-crm-text">
                         {selectedLead.name}
                       </h3>
                       <StatusBadge status={selectedLead.status} />
                       <StatusBadge status={selectedLead.requirements.preference} />
+                      {selectedLead.isDoNotContact && (
+                        <span className="px-2 py-0.5 rounded text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                          🛑 Do Not Contact
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-crm-muted">
                       Mobile: {selectedLead.primaryPhone} • Source: {selectedLead.originalSource} ({selectedLead.sourceCreatedAt})
+                      {selectedLead.unreachableCount > 0 && (
+                        <span> • Unreachable Attempts: <strong className={selectedLead.unreachableCount >= 3 ? "text-rose-700" : "text-crm-text"}>{selectedLead.unreachableCount}</strong></span>
+                      )}
                     </p>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap">
-                  {selectedLead.status === "Not Yet Validated" && (
+                  {selectedLead.status === "Not Yet Validated" && !selectedLead.isDoNotContact && (
                     <button
                       onClick={handleMarkLeadActive}
                       disabled={isStatusUpdating}
@@ -606,21 +825,59 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                   >
                     <span>✏️</span> Edit
                   </Link>
-                  <button
-                    onClick={handleOpenCallModal}
-                    className="px-2.5 py-1.5 text-xs font-semibold rounded border border-crm-border bg-stone-50 text-crm-text hover:bg-stone-100 shadow-2xs flex items-center gap-1 cursor-pointer"
-                    title="Quick log call directly without opening new page"
-                  >
-                    <span>⚡</span> Quick Call
-                  </button>
-                  <Link
-                    href={`/leads/${selectedLead.id}/qualify`}
-                    className="px-3.5 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs flex items-center gap-1.5"
-                  >
-                    <span>📞</span> Open Call Workspace
-                  </Link>
+                  {selectedLead.isDoNotContact ? (
+                    <span
+                      className="px-3 py-1.5 text-xs font-semibold rounded bg-stone-100 text-stone-400 border border-stone-200 cursor-not-allowed flex items-center gap-1.5"
+                      title="Calling blocked: Prospect marked Do Not Contact"
+                    >
+                      <span>🛑</span> DNC Calling Blocked
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        onClick={handleOpenCallModal}
+                        className="px-2.5 py-1.5 text-xs font-semibold rounded border border-crm-border bg-stone-50 text-crm-text hover:bg-stone-100 shadow-2xs flex items-center gap-1 cursor-pointer"
+                        title="Quick log call directly without opening new page"
+                      >
+                        <span>⚡</span> Quick Call
+                      </button>
+                      <Link
+                        href={`/leads/${selectedLead.id}/qualify`}
+                        className="px-3.5 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs flex items-center gap-1.5"
+                      >
+                        <span>📞</span> Open Call Workspace
+                      </Link>
+                    </>
+                  )}
                 </div>
               </div>
+
+              {/* DNC Alert Banner */}
+              {selectedLead.isDoNotContact && (
+                <div className="px-6 py-2.5 bg-rose-50 border-b border-rose-200 text-rose-900 text-xs font-semibold flex items-center gap-2">
+                  <span>🛑</span>
+                  <span>Do Not Contact (DNC): Prospect requested no further contact. Outgoing calling is strictly disabled.</span>
+                </div>
+              )}
+
+              {/* Unreachable Threshold Warning Banner (PRD §5.5) */}
+              {!selectedLead.isDoNotContact && selectedLead.unreachableCount >= 3 && selectedLead.status !== "Inactive" && (
+                <div className="px-6 py-2.5 bg-amber-50 border-b border-amber-200 text-amber-900 text-xs flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span>⚠️</span>
+                    <span>
+                      <strong>Unreachable Threshold Reached:</strong> {selectedLead.unreachableCount} unsuccessful attempts. Per PRD §5.5, the caller may mark this lead Inactive at discretion.
+                    </span>
+                  </div>
+                  <button
+                    onClick={handleMarkLeadInactive}
+                    disabled={isStatusUpdating}
+                    className="px-3 py-1 text-xs font-bold rounded bg-stone-700 text-white hover:bg-stone-800 shadow-2xs disabled:opacity-50 cursor-pointer shrink-0"
+                  >
+                    {isStatusUpdating ? "Updating..." : "Mark Lead Inactive"}
+                  </button>
+                </div>
+              )}
 
               {/* Three Columns Container */}
               <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-crm-border text-xs">
@@ -1165,6 +1422,104 @@ export function LeadValidationClient({ initialLeads }: LeadValidationClientProps
                   </button>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Assignment Modal (DV-08 / PRD §5.6) */}
+      <Modal
+        isOpen={assignModalOpen}
+        onClose={() => setAssignModalOpen(false)}
+        title={leadToAssign?.assignedTelecaller && leadToAssign.assignedTelecaller !== "Unassigned" ? "Reassign Telecaller" : "Assign Telecaller"}
+      >
+        <div className="space-y-4 text-xs">
+          {leadToAssign && (
+            <div className="p-3 rounded bg-stone-50 border border-crm-border space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-crm-text text-sm">{leadToAssign.name}</span>
+                <span className="text-crm-muted font-medium">+91 {leadToAssign.primaryPhone}</span>
+              </div>
+              <p className="text-[11px] text-crm-muted">
+                Current Assignee:{" "}
+                <strong className="text-crm-text">
+                  {leadToAssign.assignedTelecaller}
+                </strong>
+                {leadToAssign.currentAssignment?.assignmentMethod && (
+                  <span className="ml-1 text-[10px] text-crm-muted">
+                    ({leadToAssign.currentAssignment.assignmentMethod})
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
+
+          {assignModalError && (
+            <div className="p-2.5 rounded bg-rose-50 border border-rose-200 text-rose-800 text-xs">
+              {assignModalError}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold text-crm-text mb-1">
+              Select Eligible Telecaller
+            </label>
+            <select
+              value={selectedTelecallerId}
+              onChange={(e) => setSelectedTelecallerId(e.target.value)}
+              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+            >
+              {eligibleTelecallers.length === 0 ? (
+                <option value="">No active telecallers found</option>
+              ) : (
+                eligibleTelecallers.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.email})
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-crm-text mb-1">
+              Assignment Notes (Optional)
+            </label>
+            <textarea
+              rows={2}
+              placeholder="e.g. High intent buyer, priority lead from campaign..."
+              value={assignmentNotes}
+              onChange={(e) => setAssignmentNotes(e.target.value)}
+              className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+            />
+          </div>
+
+          <div className="pt-2 border-t border-crm-border flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => handleAssignRoundRobin()}
+              disabled={isAssigning}
+              className="px-3 py-2 text-xs font-bold rounded bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 cursor-pointer disabled:opacity-50"
+            >
+              🎲 Auto-Assign (Round Robin)
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAssignModalOpen(false)}
+                className="px-3 py-2 text-xs font-medium rounded border border-crm-border text-crm-muted hover:bg-stone-50 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAssignManual}
+                disabled={isAssigning || !selectedTelecallerId}
+                className="px-4 py-2 text-xs font-bold rounded bg-crm-primary hover:bg-crm-primary-hover text-white shadow-2xs cursor-pointer disabled:opacity-50"
+              >
+                {isAssigning ? "Assigning..." : "Assign Telecaller"}
+              </button>
             </div>
           </div>
         </div>

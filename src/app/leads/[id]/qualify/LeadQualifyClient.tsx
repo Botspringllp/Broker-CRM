@@ -6,7 +6,11 @@ import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Toast } from "@/components/ui/Toast";
 import { Lead } from "@/types/crm";
-import { logLeadCallAction, updateLeadStatusAction } from "../../actions";
+import {
+  logLeadCallAction,
+  updateLeadStatusAction,
+  markLeadDoNotContactAction,
+} from "../../actions";
 import { formatIndianCurrency } from "@/server/dal/mappers";
 
 interface LeadQualifyClientProps {
@@ -66,6 +70,21 @@ export function LeadQualifyClient({
   const [notes, setNotes] = useState("");
   const [confirmRequirements, setConfirmRequirements] = useState(false);
 
+  // Advertised Enquiry Verification State
+  const initialEnquiryId = lead.enquiries?.[0]?.id || "";
+  const [selectedEnquiryId, setSelectedEnquiryId] = useState(initialEnquiryId);
+  const [isEnquiryVerified, setIsEnquiryVerified] = useState(
+    lead.enquiries?.[0]?.isVerifiedByCaller ?? lead.advertisedPropertyVerified ?? false
+  );
+  const [enquiryVerificationNotes, setEnquiryVerificationNotes] = useState(
+    lead.enquiries?.[0]?.callerVerificationNotes ?? lead.advertisedPropertyNotes ?? ""
+  );
+
+  // DNC Modal State
+  const [isDncModalOpen, setIsDncModalOpen] = useState(false);
+  const [dncReason, setDncReason] = useState("");
+  const [isDncSubmitting, setIsDncSubmitting] = useState(false);
+
   // Status & Feedback
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isActivating, setIsActivating] = useState(false);
@@ -73,6 +92,34 @@ export function LeadQualifyClient({
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedPhone, setCopiedPhone] = useState(false);
+
+  // Calculate One Later Follow-up Status (PRD §5.5)
+  const notLookingCall = lead.callHistory.find((c) =>
+    c.disposition.toUpperCase().includes("NOT LOOKING")
+  );
+
+  let isFollowUpExhausted = false;
+  let canMakeFollowUp = false;
+
+  if (lead.status === "Inactive") {
+    if (notLookingCall) {
+      const notLookingDate = new Date(notLookingCall.calledAt).getTime();
+      const followUpCallsCount = lead.callHistory.filter((c) => {
+        const d = new Date(c.calledAt).getTime();
+        return !isNaN(d) && !isNaN(notLookingDate) ? d > notLookingDate : false;
+      }).length;
+
+      if (followUpCallsCount >= 1) {
+        isFollowUpExhausted = true;
+      } else {
+        canMakeFollowUp = true;
+      }
+    } else {
+      isFollowUpExhausted = true;
+    }
+  }
+
+  const isCallingBlocked = lead.isDoNotContact || isFollowUpExhausted;
 
   const hasUnsavedChanges = Boolean(notes.trim() || callbackDate || confirmRequirements);
 
@@ -92,10 +139,44 @@ export function LeadQualifyClient({
     setTimeout(() => setCopiedPhone(false), 2000);
   };
 
+  const handleMarkDnc = async () => {
+    if (isDncSubmitting || lead.isDoNotContact) return;
+    setIsDncSubmitting(true);
+    setErrorMessage(null);
+
+    try {
+      const res = await markLeadDoNotContactAction(lead.id, dncReason.trim() || undefined);
+      if (!res.success) {
+        setErrorMessage(res.error);
+        return;
+      }
+
+      setLead(res.lead);
+      setIsDncModalOpen(false);
+      setSuccessBanner(
+        "Prospect successfully marked as Do Not Contact (DNC). All calling is now permanently disabled."
+      );
+      setToastMessage("Marked as Do Not Contact.");
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to mark prospect as Do Not Contact.");
+    } finally {
+      setIsDncSubmitting(false);
+    }
+  };
+
   const handleLogCall = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessBanner(null);
+
+    if (isCallingBlocked) {
+      setErrorMessage(
+        lead.isDoNotContact
+          ? "Cannot call: this prospect is marked Do Not Contact (DNC)."
+          : "Cannot call: the single permitted follow-up call after 'Not Looking' has already been used."
+      );
+      return;
+    }
 
     if (disposition === "CALL_BACK" && !callbackDate.trim()) {
       setErrorMessage("Please select a mandatory callback date and time when disposition is 'Call Back Requested'.");
@@ -110,6 +191,9 @@ export function LeadQualifyClient({
         disposition,
         notes: notes.trim() || null,
         callbackScheduledAt: callbackDate.trim() || null,
+        enquiryId: selectedEnquiryId ? selectedEnquiryId : undefined,
+        isEnquiryVerified: Boolean(isEnquiryVerified),
+        enquiryVerificationNotes: enquiryVerificationNotes.trim() || null,
       });
 
       if (!res.success) {
@@ -120,8 +204,8 @@ export function LeadQualifyClient({
 
       let updatedLead = res.lead;
 
-      // If user checked confirmRequirements and canActivate, and lead is not active yet
-      if (confirmRequirements && canActivate && updatedLead.status !== "Active") {
+      // If user checked confirmRequirements and canActivate, and lead is not active yet (and not inactive follow-up)
+      if (confirmRequirements && canActivate && updatedLead.status !== "Active" && lead.status !== "Inactive") {
         const actRes = await updateLeadStatusAction({
           leadId: lead.id,
           status: "ACTIVE",
@@ -222,6 +306,11 @@ export function LeadQualifyClient({
                   </h1>
                   <StatusBadge status={lead.status} />
                   <StatusBadge status={lead.requirements.preference} />
+                  {lead.isDoNotContact && (
+                    <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                      🛑 Do Not Contact
+                    </span>
+                  )}
                   <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-stone-100 text-crm-muted border border-crm-border">
                     {lead.requirements.city}
                   </span>
@@ -229,20 +318,31 @@ export function LeadQualifyClient({
                 <div className="flex items-center gap-2 text-xs text-crm-muted mt-1">
                   <span>Source: {lead.originalSource} ({lead.sourceCreatedAt})</span>
                   <span>• Assigned: <strong>{lead.assignedTelecaller}</strong></span>
+                  {lead.unreachableCount > 0 && (
+                    <span>• Unreachable Attempts: <strong className={lead.unreachableCount >= 3 ? "text-rose-700" : "text-crm-text"}>{lead.unreachableCount}</strong></span>
+                  )}
                 </div>
               </div>
             </div>
 
-            {/* Quick Dial Action */}
-            <div className="flex items-center gap-2">
+            {/* Quick Actions & Dial */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {!lead.isDoNotContact && (
+                <button
+                  type="button"
+                  onClick={() => setIsDncModalOpen(true)}
+                  className="px-3 py-1.5 text-xs font-bold rounded-lg border border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100 shadow-2xs flex items-center gap-1 cursor-pointer"
+                  title="Mark prospect as Do Not Contact"
+                >
+                  <span>🛑</span> Mark DNC
+                </button>
+              )}
+
               <div className="flex items-center gap-1 bg-stone-50 border border-crm-border px-3 py-1.5 rounded-lg text-xs">
                 <span className="text-crm-muted font-medium">Mobile:</span>
-                <a
-                  href={`tel:${lead.primaryPhone}`}
-                  className="font-bold text-crm-primary hover:underline text-sm"
-                >
+                <span className="font-bold text-crm-text text-sm">
                   +91 {lead.primaryPhone}
-                </a>
+                </span>
                 <button
                   type="button"
                   onClick={handleCopyPhone}
@@ -253,15 +353,52 @@ export function LeadQualifyClient({
                 </button>
               </div>
 
-              <a
-                href={`tel:${lead.primaryPhone}`}
-                className="px-4 py-2 text-xs font-bold rounded-lg bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs flex items-center gap-1.5"
-              >
-                <span>📞</span> Dial Number
-              </a>
+              {isCallingBlocked ? (
+                <span
+                  className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-stone-100 text-stone-400 border border-stone-200 cursor-not-allowed flex items-center gap-1.5"
+                  title={lead.isDoNotContact ? "Do Not Contact" : "Follow-up exhausted"}
+                >
+                  <span>📞</span> Calling Blocked
+                </span>
+              ) : (
+                <a
+                  href={`tel:${lead.primaryPhone}`}
+                  className="px-4 py-2 text-xs font-bold rounded-lg bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs flex items-center gap-1.5"
+                >
+                  <span>📞</span> Dial Number
+                </a>
+              )}
             </div>
           </div>
         </div>
+
+        {/* DNC Alert Banner */}
+        {lead.isDoNotContact && (
+          <div className="p-3.5 rounded-lg bg-rose-100 border border-rose-300 text-rose-900 text-xs font-bold flex items-center gap-2">
+            <span>🛑</span>
+            <span>DO NOT CONTACT (DNC): This prospect has requested no further contact. Outgoing calling is strictly blocked.</span>
+          </div>
+        )}
+
+        {/* Follow-up Permitted Banner (PRD §5.5) */}
+        {!lead.isDoNotContact && canMakeFollowUp && (
+          <div className="p-3.5 rounded-lg bg-blue-50 border border-blue-200 text-blue-900 text-xs flex items-center gap-2">
+            <span>ℹ️</span>
+            <span>
+              <strong>One Later Follow-up Permitted:</strong> Lead is currently Inactive (Not Looking). PRD §5.5 allows exactly ONE follow-up call. Logging a call will consume this follow-up without silently reactivating the lead.
+            </span>
+          </div>
+        )}
+
+        {/* Follow-up Exhausted Banner (PRD §5.5) */}
+        {!lead.isDoNotContact && isFollowUpExhausted && (
+          <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-center gap-2">
+            <span>⚠️</span>
+            <span>
+              <strong>Follow-up Limit Reached:</strong> The single permitted follow-up call after &lsquo;Not Looking&rsquo; has already been used. Outgoing calling is blocked. Re-activate the lead to resume calling.
+            </span>
+          </div>
+        )}
 
         {/* Success Banner */}
         {successBanner && (
@@ -427,12 +564,87 @@ export function LeadQualifyClient({
                     Call Notes & Prospect Feedback
                   </label>
                   <textarea
-                    rows={4}
+                    rows={3}
                     placeholder="Enter discussion notes: purchase timeframe, specific floor preference, financing readiness, property matches shared..."
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
                   />
+                </div>
+
+                {/* Advertised Enquiry Verification (PRD §5.1) */}
+                <div className="p-3.5 rounded-lg bg-stone-50 border border-crm-border space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-xs text-crm-text flex items-center gap-1.5">
+                      <span>🔎</span> Advertised Enquiry Verification (PRD §5.1)
+                    </span>
+                    {lead.enquiries && lead.enquiries.length > 0 && (
+                      <span className="text-[10px] text-crm-muted">
+                        {lead.enquiries.length} {lead.enquiries.length === 1 ? "Enquiry" : "Enquiries"} recorded
+                      </span>
+                    )}
+                  </div>
+
+                  {lead.enquiries && lead.enquiries.length > 1 && (
+                    <div>
+                      <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                        Select Inquired Ad to Verify
+                      </label>
+                      <select
+                        value={selectedEnquiryId}
+                        onChange={(e) => {
+                          const eqId = e.target.value;
+                          setSelectedEnquiryId(eqId);
+                          const found = lead.enquiries?.find((enq) => enq.id === eqId);
+                          if (found) {
+                            setIsEnquiryVerified(found.isVerifiedByCaller);
+                            setEnquiryVerificationNotes(found.callerVerificationNotes || "");
+                          }
+                        }}
+                        className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-white"
+                      >
+                        {lead.enquiries.map((enq) => (
+                          <option key={enq.id} value={enq.id}>
+                            {enq.source} • Ref: {enq.advertisedPropertyRef || "Direct"} • {enq.enquiryDate}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {lead.enquiries && lead.enquiries.length === 1 && (
+                    <div className="text-[11px] text-crm-muted bg-white p-2 rounded border border-crm-border">
+                      Source: <strong className="text-crm-text">{lead.enquiries[0].source}</strong>
+                      {lead.enquiries[0].advertisedPropertyRef && (
+                        <span> • Ad Ref: <strong className="text-crm-text">{lead.enquiries[0].advertisedPropertyRef}</strong></span>
+                      )}
+                      <span> • Date: {lead.enquiries[0].enquiryDate}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isEnquiryVerified}
+                        onChange={(e) => setIsEnquiryVerified(e.target.checked)}
+                        className="rounded border-crm-border text-crm-primary focus:ring-crm-primary"
+                      />
+                      <span className="font-semibold text-xs text-crm-text">
+                        Verified by caller (prospect confirmed inquiring about this property ad)
+                      </span>
+                    </label>
+
+                    <div>
+                      <input
+                        type="text"
+                        placeholder="Caller verification notes (e.g. Buyer verified interest in 3BHK ad ref DLF-302)"
+                        value={enquiryVerificationNotes}
+                        onChange={(e) => setEnquiryVerificationNotes(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+                      />
+                    </div>
+                  </div>
                 </div>
 
                 {/* SECTION D: Requirements Confirmation & Activation Toggle */}
@@ -469,14 +681,16 @@ export function LeadQualifyClient({
 
                   <button
                     type="submit"
-                    disabled={isSubmitting}
-                    className="px-6 py-2.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs transition-all disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+                    disabled={isSubmitting || isCallingBlocked}
+                    className="px-6 py-2.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs transition-all disabled:opacity-50 flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
                   >
                     {isSubmitting ? (
                       <>
                         <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                         Saving Call Outcome...
                       </>
+                    ) : isCallingBlocked ? (
+                      <>Calling Blocked</>
                     ) : (
                       <>✓ Log Call & Save Outcome</>
                     )}
@@ -575,6 +789,62 @@ export function LeadQualifyClient({
           </div>
         </div>
       </div>
+
+      {/* DNC Confirmation Modal */}
+      {isDncModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-lg bg-crm-surface border border-crm-border p-5 shadow-lg space-y-4">
+            <div className="flex items-center justify-between border-b border-crm-border pb-2.5">
+              <h3 className="font-bold text-sm text-crm-text flex items-center gap-2">
+                <span>🛑</span> Mark Prospect as Do Not Contact (DNC)
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsDncModalOpen(false)}
+                className="text-crm-muted hover:text-crm-text text-sm font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-crm-text leading-relaxed">
+              Marking <strong>{lead.name}</strong> as Do Not Contact will immediately transition the lead to <strong>Inactive</strong> and permanently block all further calling. This action is permanently recorded in the audit change log.
+            </p>
+
+            <div className="space-y-1">
+              <label className="block text-[11px] font-semibold text-crm-muted">
+                Reason / Prospect Feedback (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Explicitly requested removal, not interested..."
+                value={dncReason}
+                onChange={(e) => setDncReason(e.target.value)}
+                className="w-full px-3 py-2 text-xs rounded border border-crm-border bg-stone-50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-crm-border">
+              <button
+                type="button"
+                onClick={() => setIsDncModalOpen(false)}
+                disabled={isDncSubmitting}
+                className="px-3 py-1.5 text-xs rounded border border-crm-border bg-stone-50 text-crm-text hover:bg-stone-100 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleMarkDnc}
+                disabled={isDncSubmitting}
+                className="px-4 py-1.5 text-xs font-bold rounded bg-rose-700 text-white hover:bg-rose-800 shadow-2xs disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+              >
+                {isDncSubmitting ? "Marking DNC..." : "Confirm Do Not Contact"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toastMessage && (
         <Toast message={toastMessage} onClose={() => setToastMessage(null)} />

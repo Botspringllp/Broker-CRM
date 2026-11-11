@@ -18,6 +18,34 @@ vi.mock("@/server/db", () => {
       update: vi.fn(),
       upsert: vi.fn(),
     },
+    locality: {
+      findMany: vi.fn().mockImplementation(async (args) => {
+        return [
+          {
+            id: "loc-1",
+            tenantId: args?.where?.tenantId || "tenant-apex-1",
+            name: "Sector 54",
+            city: args?.where?.city?.equals || "Gurugram",
+            latitude: null,
+            longitude: null,
+          },
+          {
+            id: "loc-2",
+            tenantId: args?.where?.tenantId || "tenant-apex-1",
+            name: "Golf Course Road",
+            city: args?.where?.city?.equals || "Gurugram",
+            latitude: null,
+            longitude: null,
+          },
+        ];
+      }),
+      findFirst: vi.fn(),
+    },
+    leadRequirementLocality: {
+      findMany: vi.fn().mockResolvedValue([]),
+      createMany: vi.fn().mockResolvedValue({ count: 2 }),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
     leadChangeLog: {
       createMany: vi.fn(),
       create: vi.fn(),
@@ -53,7 +81,9 @@ import {
   logLeadCall,
   createLead,
   updateLead,
+  getLeadChangeHistory,
 } from "@/server/dal/leads";
+import { mapPrismaLeadChangeLogToView } from "@/server/dal/mappers";
 
 describe("DV-05 Phase 2A: Lead Change History Audit Logging Engine", () => {
   const brokerContext: TenantContext = {
@@ -110,6 +140,26 @@ describe("DV-05 Phase 2A: Lead Change History Audit Logging Engine", () => {
     session: {
       id: "sess-tc",
       token: "tok-tc",
+      expiresAt: new Date(Date.now() + 86400000),
+    },
+  };
+
+  const fieldSalesAgentContext: TenantContext = {
+    tenantId: "tenant-apex-1",
+    userId: "agent-1",
+    role: UserRole.FIELD_SALES_AGENT,
+    user: {
+      id: "agent-1",
+      name: "Ajay FieldAgent",
+      email: "ajay@apexrealty.in",
+      role: UserRole.FIELD_SALES_AGENT,
+      tenantId: "tenant-apex-1",
+      isActive: true,
+      delegatedPermissions: [],
+    },
+    session: {
+      id: "sess-agent",
+      token: "tok-agent",
       expiresAt: new Date(Date.now() + 86400000),
     },
   };
@@ -549,23 +599,21 @@ describe("DV-05 Phase 2A: Lead Change History Audit Logging Engine", () => {
 
   // T12: SYSTEM change source on call disposition status transition
   it("T12: records changeSource as 'SYSTEM' when call logging triggers automatic status transition", async () => {
-    const leadTwoAttempts = {
+    const leadNotYetValidated = {
       ...sampleLead,
-      unreachableAttemptsCount: 2,
       status: LeadStatus.NOT_YET_VALIDATED,
     };
-    (prisma.lead.findFirst as any).mockResolvedValue(leadTwoAttempts);
+    (prisma.lead.findFirst as any).mockResolvedValue(leadNotYetValidated);
     (prisma.callLog.create as any).mockResolvedValue({ id: "call-1" });
     (prisma.lead.update as any).mockResolvedValue({
-      ...leadTwoAttempts,
+      ...leadNotYetValidated,
       status: LeadStatus.INACTIVE,
-      unreachableAttemptsCount: 3,
     });
 
     await logLeadCall(brokerContext, {
       leadId: "lead-100",
-      disposition: LeadCallingDisposition.RINGING_OR_NOT_ANSWERING,
-      notes: "3rd attempt - no answer",
+      disposition: LeadCallingDisposition.BUYER_SAYS_NOT_LOOKING,
+      notes: "Buyer explicitly states not looking",
     });
 
     expect(prisma.leadChangeLog.createMany).toHaveBeenCalledWith({
@@ -892,5 +940,260 @@ describe("DV-05 Phase 2A: Lead Change History Audit Logging Engine", () => {
     ).rejects.toThrow("Audit logging DB failure");
 
     expect(prisma.lead.update).not.toHaveBeenCalled();
+  });
+
+  // ==========================================
+  // DV-05 Phase 2B: Retrieval & View Model Tests
+  // ==========================================
+
+  // T25: getLeadChangeHistory validates leadId parameter
+  it("T25: getLeadChangeHistory throws ValidationError if leadId is empty or whitespace", async () => {
+    await expect(getLeadChangeHistory(brokerContext, "")).rejects.toThrow(
+      "Lead ID is required."
+    );
+    await expect(getLeadChangeHistory(brokerContext, "   ")).rejects.toThrow(
+      "Lead ID is required."
+    );
+  });
+
+  // T26: getLeadChangeHistory throws ForbiddenError for roles without demand:view_changelog
+  it("T26: getLeadChangeHistory throws ForbiddenError if caller lacks demand:view_changelog permission", async () => {
+    await expect(
+      getLeadChangeHistory(fieldSalesAgentContext, "lead-100")
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  // T27: getLeadChangeHistory rejects cross-tenant access with NotFoundError
+  it("T27: getLeadChangeHistory throws NotFoundError if lead belongs to another tenant or does not exist", async () => {
+    // Lead belongs to tenant-apex-1, caller is tenant-apex-2
+    (prisma.lead.findFirst as any).mockResolvedValue(null);
+
+    await expect(
+      getLeadChangeHistory(otherTenantContext, "lead-100")
+    ).rejects.toThrow(NotFoundError);
+
+    expect(prisma.leadChangeLog.findMany).not.toHaveBeenCalled();
+  });
+
+  // T28: getLeadChangeHistory throws NotFoundError for unassigned telecallers
+  it("T28: getLeadChangeHistory throws NotFoundError when a telecaller attempts to view changelog for an unassigned lead", async () => {
+    // prisma.lead.findFirst returns null because assignedTelecallerId !== telecaller-1
+    (prisma.lead.findFirst as any).mockResolvedValue(null);
+
+    await expect(
+      getLeadChangeHistory(telecallerContext, "lead-100")
+    ).rejects.toThrow(NotFoundError);
+
+    expect(prisma.leadChangeLog.findMany).not.toHaveBeenCalled();
+  });
+
+  // T29: getLeadChangeHistory succeeds for telecaller assigned to the lead
+  it("T29: getLeadChangeHistory succeeds for a telecaller when the lead is assigned to them", async () => {
+    const assignedLead = {
+      ...sampleLead,
+      assignedTelecallerId: "telecaller-1",
+    };
+    (prisma.lead.findFirst as any).mockResolvedValue(assignedLead);
+    (prisma.leadChangeLog.findMany as any).mockResolvedValue([]);
+
+    const result = await getLeadChangeHistory(telecallerContext, "lead-100");
+
+    expect(result).toEqual([]);
+    expect(prisma.leadChangeLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          tenantId: "tenant-apex-1",
+          leadId: "lead-100",
+        },
+      })
+    );
+  });
+
+  // T30: getLeadChangeHistory returns records ordered by changedAt descending and applies limits
+  it("T30: getLeadChangeHistory queries with tenantId, leadId, and orders by changedAt descending", async () => {
+    (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+    const mockLogs = [
+      {
+        id: "log-2",
+        tenantId: "tenant-apex-1",
+        leadId: "lead-100",
+        fieldName: "status",
+        previousValue: "NOT_YET_VALIDATED",
+        newValue: "ACTIVE",
+        changedByUserId: "broker-owner-1",
+        changeSource: "USER",
+        changedAt: new Date("2026-10-15T12:00:00Z"),
+        changedByUser: {
+          id: "broker-owner-1",
+          name: "Broker Vikram",
+          email: "vikram@apexrealty.in",
+          role: UserRole.BROKER_OWNER,
+        },
+      },
+      {
+        id: "log-1",
+        tenantId: "tenant-apex-1",
+        leadId: "lead-100",
+        fieldName: "minBudget",
+        previousValue: "5000000",
+        newValue: "6000000",
+        changedByUserId: "broker-owner-1",
+        changeSource: "USER",
+        changedAt: new Date("2026-10-10T09:00:00Z"),
+        changedByUser: {
+          id: "broker-owner-1",
+          name: "Broker Vikram",
+          email: "vikram@apexrealty.in",
+          role: UserRole.BROKER_OWNER,
+        },
+      },
+    ];
+
+    (prisma.leadChangeLog.findMany as any).mockResolvedValue(mockLogs);
+
+    const history = await getLeadChangeHistory(brokerContext, "lead-100", {
+      limit: 50,
+      offset: 0,
+    });
+
+    expect(prisma.leadChangeLog.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: "tenant-apex-1",
+        leadId: "lead-100",
+      },
+      include: {
+        changedByUser: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            role: true,
+          },
+        },
+      },
+      orderBy: {
+        changedAt: "desc",
+      },
+      take: 50,
+      skip: 0,
+    });
+
+    expect(history).toHaveLength(2);
+    expect(history[0].id).toBe("log-2");
+    expect(history[0].fieldName).toBe("status");
+    expect(history[0].actorName).toBe("Broker Vikram");
+    expect(history[1].id).toBe("log-1");
+  });
+
+  // T31: getLeadChangeHistory returns empty array when no changelog records exist
+  it("T31: getLeadChangeHistory returns empty array [] when lead has no change history", async () => {
+    (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+    (prisma.leadChangeLog.findMany as any).mockResolvedValue([]);
+
+    const history = await getLeadChangeHistory(brokerContext, "lead-100");
+
+    expect(history).toEqual([]);
+  });
+
+  // T32: mapPrismaLeadChangeLogToView formats actor names properly across user, system, and former user
+  it("T32: mapPrismaLeadChangeLogToView maps actor names accurately for active user, system, and former user", () => {
+    // 1. Active User
+    const userLog = {
+      id: "log-u",
+      tenantId: "tenant-apex-1",
+      leadId: "lead-100",
+      fieldName: "name",
+      previousValue: "Old Name",
+      newValue: "New Name",
+      changedByUserId: "user-1",
+      changeSource: "USER" as const,
+      changedAt: new Date("2026-10-15T10:00:00Z"),
+      changedByUser: {
+        id: "user-1",
+        name: "Vikram Malhotra",
+        email: "vikram@realty.in",
+        role: UserRole.BROKER_OWNER,
+      },
+    };
+    const userView = mapPrismaLeadChangeLogToView(userLog);
+    expect(userView.actorName).toBe("Vikram Malhotra");
+    expect(userView.changeSource).toBe("USER");
+
+    // 2. Automated System
+    const systemLog = {
+      id: "log-s",
+      tenantId: "tenant-apex-1",
+      leadId: "lead-100",
+      fieldName: "status",
+      previousValue: "NOT_YET_VALIDATED",
+      newValue: "INACTIVE",
+      changedByUserId: null,
+      changeSource: "SYSTEM" as const,
+      changedAt: new Date("2026-10-15T11:00:00Z"),
+      changedByUser: null,
+    };
+    const systemView = mapPrismaLeadChangeLogToView(systemLog);
+    expect(systemView.actorName).toBe("Automated System");
+    expect(systemView.changeSource).toBe("SYSTEM");
+
+    // 3. Former User (User deleted or removed from database)
+    const formerUserLog = {
+      id: "log-f",
+      tenantId: "tenant-apex-1",
+      leadId: "lead-100",
+      fieldName: "alternatePhone",
+      previousValue: null,
+      newValue: "9876543211",
+      changedByUserId: "deleted-user-999",
+      changeSource: "USER" as const,
+      changedAt: new Date("2026-10-15T12:00:00Z"),
+      changedByUser: null,
+    };
+    const formerUserView = mapPrismaLeadChangeLogToView(formerUserLog);
+    expect(formerUserView.actorName).toBe("Former User");
+  });
+
+  // T33: mapPrismaLeadChangeLogToView preserves change sources and handles edge dates gracefully
+  it("T33: mapPrismaLeadChangeLogToView supports API change source and gracefully handles invalid dates", () => {
+    const apiLog = {
+      id: "log-api",
+      tenantId: "tenant-apex-1",
+      leadId: "lead-100",
+      fieldName: "minBudget",
+      previousValue: "4000000",
+      newValue: "5000000",
+      changedByUserId: null,
+      changeSource: "API" as const,
+      changedAt: new Date("invalid date string"),
+      changedByUser: null,
+    };
+    const apiView = mapPrismaLeadChangeLogToView(apiLog);
+    expect(apiView.changeSource).toBe("API");
+    expect(apiView.changedAt).toBe("Recently");
+  });
+
+  // T34: mapPrismaLeadChangeLogToView preserves null and previous/new values accurately
+  it("T34: mapPrismaLeadChangeLogToView accurately retains field values including null representations", () => {
+    const nullLog = {
+      id: "log-null",
+      tenantId: "tenant-apex-1",
+      leadId: "lead-100",
+      fieldName: "alternatePhone",
+      previousValue: "9876543210",
+      newValue: null,
+      changedByUserId: "user-1",
+      changeSource: "USER" as const,
+      changedAt: new Date("2026-10-15T14:30:00Z"),
+      changedByUser: {
+        id: "user-1",
+        name: "Vikram",
+        email: "vikram@realty.in",
+        role: UserRole.BROKER_OWNER,
+      },
+    };
+    const view = mapPrismaLeadChangeLogToView(nullLog);
+    expect(view.fieldName).toBe("alternatePhone");
+    expect(view.previousValue).toBe("9876543210");
+    expect(view.newValue).toBeNull();
   });
 });
