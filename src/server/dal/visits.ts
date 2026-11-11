@@ -139,6 +139,30 @@ export async function listSiteVisits(context: TenantContext) {
 }
 
 /**
+ * Retrieves site visits for a specific lead strictly scoped to the tenant.
+ */
+export async function getSiteVisitsForLead(context: TenantContext, leadId: string) {
+  assertPermission(context, "visits:view_assigned");
+
+  const where: Prisma.SiteVisitWhereInput = {
+    tenantId: context.tenantId, // STRICT TENANT ENFORCEMENT
+    leadId,
+  };
+
+  // Field sales agent scoped strictly to assigned visits
+  if (context.role === UserRole.FIELD_SALES_AGENT) {
+    where.assignedSalesAgentId = context.userId;
+  }
+
+  return prisma.siteVisit.findMany({
+    where,
+    orderBy: { scheduledDate: "desc" },
+    include: FULL_SITE_VISIT_INCLUDE,
+    take: 10,
+  });
+}
+
+/**
  * Retrieves a site visit by ID strictly scoped to the authenticated tenant.
  * Denies access if not found or if a Field Sales Agent requests an unassigned visit.
  */
