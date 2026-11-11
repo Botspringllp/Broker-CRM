@@ -41,6 +41,9 @@ export function LeadValidationClient({
   const [preferenceFilter, setPreferenceFilter] = useState("All");
   const [bhkFilter, setBhkFilter] = useState("All");
   const [budgetFilter, setBudgetFilter] = useState("All");
+  const [propertyTypeFilter, setPropertyTypeFilter] = useState("All");
+  const [cityFilter, setCityFilter] = useState("All");
+  const [localityFilter, setLocalityFilter] = useState("All");
   const [telecallerFilter, setTelecallerFilter] = useState("All");
   const [callbackFilter, setCallbackFilter] = useState("All");
 
@@ -96,7 +99,29 @@ export function LeadValidationClient({
     return Array.from(set).sort();
   }, [leads]);
 
-  // Filtered Leads
+  // Extract distinct localities across leads
+  const distinctLocalities = useMemo(() => {
+    const set = new Set<string>();
+    leads.forEach((l) => {
+      l.requirements?.localities?.forEach((loc) => {
+        if (loc && loc.trim()) set.add(loc.trim());
+      });
+    });
+    return Array.from(set).sort();
+  }, [leads]);
+
+  // Extract distinct cities across leads
+  const distinctCities = useMemo(() => {
+    const set = new Set<string>();
+    leads.forEach((l) => {
+      if (l.requirements?.city?.trim()) {
+        set.add(l.requirements.city.trim());
+      }
+    });
+    return Array.from(set).sort();
+  }, [leads]);
+
+  // Filtered Leads (PRD §5.6 - All 7 Filters)
   const filteredLeads = useMemo(() => {
     return leads.filter((lead) => {
       // Search
@@ -110,17 +135,17 @@ export function LeadValidationClient({
 
       if (!searchMatch) return false;
 
-      // Status
+      // Filter 1: Status
       if (statusFilter !== "All" && lead.status !== statusFilter) {
         return false;
       }
 
-      // Preference
+      // Filter 2: Preference
       if (preferenceFilter !== "All" && lead.requirements.preference !== preferenceFilter) {
         return false;
       }
 
-      // BHK
+      // Filter 3: BHK
       if (bhkFilter !== "All") {
         const matchesBhk = lead.requirements.bedroomConfigurations.some((b) =>
           b.includes(bhkFilter)
@@ -128,13 +153,36 @@ export function LeadValidationClient({
         if (!matchesBhk) return false;
       }
 
-      // Budget Filter
+      // Filter 4: Budget Scope
       if (budgetFilter !== "All") {
         const maxB = lead.requirements.maxBudget;
         if (budgetFilter === "<50L" && maxB > 5000000) return false;
         if (budgetFilter === "50L-1.5Cr" && (maxB < 5000000 || maxB > 15000000)) return false;
         if (budgetFilter === "1.5Cr-3Cr" && (maxB < 15000000 || maxB > 30000000)) return false;
         if (budgetFilter === ">3Cr" && maxB <= 30000000) return false;
+      }
+
+      // Filter 5: Property Type
+      if (propertyTypeFilter !== "All") {
+        const matchesType = lead.requirements.propertyTypes.some(
+          (pt) => pt === propertyTypeFilter
+        );
+        if (!matchesType) return false;
+      }
+
+      // Filter 6: City
+      if (cityFilter !== "All") {
+        if (lead.requirements.city.toLowerCase() !== cityFilter.toLowerCase()) {
+          return false;
+        }
+      }
+
+      // Filter 7: Locality
+      if (localityFilter !== "All") {
+        const matchesLoc = lead.requirements.localities.some(
+          (loc) => loc.toLowerCase() === localityFilter.toLowerCase()
+        );
+        if (!matchesLoc) return false;
       }
 
       // Telecaller Filter
@@ -154,7 +202,19 @@ export function LeadValidationClient({
 
       return true;
     });
-  }, [leads, searchTerm, statusFilter, preferenceFilter, bhkFilter, budgetFilter, telecallerFilter, callbackFilter]);
+  }, [
+    leads,
+    searchTerm,
+    statusFilter,
+    preferenceFilter,
+    bhkFilter,
+    budgetFilter,
+    propertyTypeFilter,
+    cityFilter,
+    localityFilter,
+    telecallerFilter,
+    callbackFilter,
+  ]);
 
   const handleOpenAssignModal = (lead: Lead) => {
     setLeadToAssign(lead);
@@ -443,24 +503,24 @@ export function LeadValidationClient({
           </div>
         </div>
 
-        {/* Filter Controls Bar */}
+        {/* Filter Controls Bar (PRD §5.6 - All 7 Filters) */}
         <div className="p-4 rounded-lg bg-crm-surface border border-crm-border shadow-2xs space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-2.5">
             {/* Search Input */}
             <div className="sm:col-span-2">
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
-                Search Name, Phone, Locality
+                Search Name, Phone
               </label>
               <input
                 type="text"
-                placeholder="e.g. Amit, 9810, Gurgaon, Golf Course..."
+                placeholder="e.g. Amit, 9810..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full px-3 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden focus:border-crm-primary"
               />
             </div>
 
-            {/* Status Filter */}
+            {/* Filter 1: Status */}
             <div>
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
                 Lead Status
@@ -477,7 +537,7 @@ export function LeadValidationClient({
               </select>
             </div>
 
-            {/* Preference */}
+            {/* Filter 2: Preference */}
             <div>
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
                 Preference
@@ -487,13 +547,13 @@ export function LeadValidationClient({
                 onChange={(e) => setPreferenceFilter(e.target.value)}
                 className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
               >
-                <option value="All">Buy & Rent</option>
+                <option value="All">Buy &amp; Rent</option>
                 <option value="Sale">Buy (Sale Only)</option>
                 <option value="Rent">Rent Only</option>
               </select>
             </div>
 
-            {/* BHK Filter */}
+            {/* Filter 3: BHK Required */}
             <div>
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
                 BHK Required
@@ -511,10 +571,10 @@ export function LeadValidationClient({
               </select>
             </div>
 
-            {/* Budget Range Filter */}
+            {/* Filter 4: Budget Scope */}
             <div>
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
-                Max Budget Scope
+                Budget Scope
               </label>
               <select
                 value={budgetFilter}
@@ -529,10 +589,67 @@ export function LeadValidationClient({
               </select>
             </div>
 
+            {/* Filter 5: Property Type */}
+            <div>
+              <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                Property Type
+              </label>
+              <select
+                value={propertyTypeFilter}
+                onChange={(e) => setPropertyTypeFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              >
+                <option value="All">All Types</option>
+                <option value="APARTMENT">Apartment</option>
+                <option value="INDEPENDENT_HOUSE">Independent House</option>
+                <option value="VILLA">Villa</option>
+                <option value="BUILDER_FLOOR">Builder Floor</option>
+                <option value="PLOT">Plot</option>
+              </select>
+            </div>
+
+            {/* Filter 6: City */}
+            <div>
+              <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                City
+              </label>
+              <select
+                value={cityFilter}
+                onChange={(e) => setCityFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              >
+                <option value="All">All Cities</option>
+                {distinctCities.map((city) => (
+                  <option key={city} value={city}>
+                    {city}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Filter 7: Locality */}
+            <div>
+              <label className="block text-[11px] font-semibold text-crm-muted mb-1">
+                Locality
+              </label>
+              <select
+                value={localityFilter}
+                onChange={(e) => setLocalityFilter(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+              >
+                <option value="All">All Localities</option>
+                {distinctLocalities.map((loc) => (
+                  <option key={loc} value={loc}>
+                    {loc}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Telecaller Filter */}
             <div>
               <label className="block text-[11px] font-semibold text-crm-muted mb-1">
-                Assigned Telecaller
+                Telecaller
               </label>
               <select
                 value={telecallerFilter}
@@ -570,6 +687,7 @@ export function LeadValidationClient({
         <div className="space-y-6">
           {/* Pending Callbacks Compact Queue */}
           <PendingCallbacksCompact
+            defaultOpen={leads.some((l) => l.callHistory.some((c) => Boolean(c.callbackDate)))}
             onSelectLeadId={(leadId) => {
               const match = leads.find((l) => l.id === leadId);
               if (match) setSelectedLead(match);

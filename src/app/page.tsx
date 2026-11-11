@@ -1,16 +1,27 @@
 import { Suspense } from "react";
 import { requireTenantContext } from "@/server/tenant-context";
 import { listProperties } from "@/server/dal/properties";
-import { listLeads } from "@/server/dal/leads";
+import {
+  listLeads,
+  getCallerDashboardMetrics,
+  getManagerDemandMetrics,
+} from "@/server/dal/leads";
 import { listSiteVisits } from "@/server/dal/visits";
 import {
   mapPrismaPropertyToView,
   mapPrismaLeadToView,
   mapPrismaSiteVisitToView,
 } from "@/server/dal/mappers";
-import { Property, Lead, SiteVisit } from "@/types/crm";
+import {
+  Property,
+  Lead,
+  SiteVisit,
+  CallerDashboardMetrics,
+  ManagerDemandMetrics,
+} from "@/types/crm";
 import { OverviewClient } from "./OverviewClient";
 import { UserRole } from "@prisma/client";
+import { hasPermission } from "@/server/permissions";
 import { redirect } from "next/navigation";
 
 async function OverviewData() {
@@ -42,7 +53,35 @@ async function OverviewData() {
     redirect("/verifier");
   }
 
-  // 3. For authenticated tenant users, load operational data
+  const isTelecaller = context.role === UserRole.TELECALLER;
+  const isManager =
+    context.role === UserRole.BROKER_OWNER ||
+    context.role === UserRole.TEAM_LEADER ||
+    hasPermission(
+      context.role,
+      "overview:view_brokerage_metrics",
+      context.user?.delegatedPermissions || context.delegatedPermissions
+    );
+
+  let callerMetrics: CallerDashboardMetrics | null = null;
+  let managerMetrics: ManagerDemandMetrics | null = null;
+
+  // 5. Load role-appropriate metrics
+  if (isTelecaller) {
+    try {
+      callerMetrics = await getCallerDashboardMetrics(context);
+    } catch {
+      callerMetrics = null;
+    }
+  } else if (isManager) {
+    try {
+      managerMetrics = await getManagerDemandMetrics(context);
+    } catch {
+      managerMetrics = null;
+    }
+  }
+
+  // 6. For authenticated tenant users, load operational data
   let properties: Property[] = [];
   let leads: Lead[] = [];
   let visits: SiteVisit[] = [];
@@ -70,6 +109,9 @@ async function OverviewData() {
       initialVisits={visits}
       userName={context.user.name}
       userRole={context.user.role.replace("_", " ")}
+      rawRole={context.role}
+      callerMetrics={callerMetrics}
+      managerMetrics={managerMetrics}
       isAuthenticated={true}
     />
   );

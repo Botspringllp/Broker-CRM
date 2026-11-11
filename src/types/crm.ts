@@ -287,4 +287,42 @@ export interface PendingCallbackItem {
   city: string;
 }
 
+// ---------------------------------------------------------
+// 12. CALLER & MANAGER DASHBOARD METRICS (DV-09 / PRD §5.6)
+// ---------------------------------------------------------
+
+export interface CallerDashboardMetrics {
+  assignedTotal: number;
+  pendingValidation: number;
+  activeLeads: number;
+  inactiveLeads: number;
+  callsLoggedToday: number;
+  connectedToday: number;
+  callbacksDueToday: number;
+  callbacksOverdue: number;
+  unreachableNearLimit: number;
+}
+
+export interface TelecallerWorkloadItem {
+  telecallerId: string;
+  telecallerName: string;
+  telecallerEmail: string;
+  activeLeadCount: number;
+  pendingValidationCount: number;
+  callbacksDueTodayCount: number;
+}
+
+export interface ManagerDemandMetrics {
+  totalLeads: number;
+  pendingValidation: number;
+  activeLeads: number;
+  inactiveLeads: number;
+  unassignedLeads: number;
+  callsLoggedToday: number;
+  connectedToday: number;
+  callbacksDueToday: number;
+  callbacksOverdue: number;
+  telecallerWorkloads: TelecallerWorkloadItem[];
+}
+
 

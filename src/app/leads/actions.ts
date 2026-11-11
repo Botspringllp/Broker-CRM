@@ -11,6 +11,8 @@ import {
   getVerifiedLocalities,
   markLeadDoNotContact,
   listPendingCallbacks,
+  getCallerDashboardMetrics,
+  getManagerDemandMetrics,
   CreateLeadData,
   EditLeadData,
   LogLeadCallInput,
@@ -346,6 +348,42 @@ export async function getLeadAssignmentHistoryAction(leadId: string) {
       success: false as const,
       error: message,
       history: [],
+    };
+  }
+}
+
+export async function getCallerDashboardMetricsAction() {
+  try {
+    const context = await requireTenantContext();
+    const metrics = await getCallerDashboardMetrics(context);
+    return {
+      success: true as const,
+      metrics,
+    };
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "Failed to fetch caller dashboard metrics.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
+export async function getManagerDemandMetricsAction() {
+  try {
+    const context = await requireTenantContext();
+    const metrics = await getManagerDemandMetrics(context);
+    return {
+      success: true as const,
+      metrics,
+    };
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "Failed to fetch manager demand metrics.";
+    return {
+      success: false as const,
+      error: message,
     };
   }
 }

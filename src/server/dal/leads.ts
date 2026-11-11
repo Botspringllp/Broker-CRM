@@ -5,13 +5,21 @@ import { ValidationError } from "../errors";
 import { normalizeIndianMobile } from "../utils/phone";
 import { recordLeadFieldChanges, FieldComparison } from "./lead-changelog";
 import { mapPrismaLeadChangeLogToView, formatIndianCurrency, formatIndianDateTime } from "./mappers";
-import { LeadChangeLogItem, PendingCallbackItem } from "@/types/crm";
+import {
+  LeadChangeLogItem,
+  PendingCallbackItem,
+  CallerDashboardMetrics,
+  ManagerDemandMetrics,
+  TelecallerWorkloadItem,
+} from "@/types/crm";
 import {
   Prisma,
   UserRole,
   LeadStatus,
   LeadCallingDisposition,
   CallTargetType,
+  PropertyType,
+  TransactionType,
   Enquiry as PrismaEnquiry,
   AssignmentMethod,
   AssignmentStatus,
@@ -410,6 +418,22 @@ async function handleExistingBuyer(
   };
 }
 
+export interface ListLeadsFilters {
+  status?: LeadStatus | Prisma.EnumLeadStatusFilter;
+  preference?: TransactionType | Prisma.EnumTransactionTypeFilter;
+  city?: string;
+  searchTerm?: string;
+  minBudget?: number;
+  maxBudget?: number;
+  locality?: string;
+  localityId?: string;
+  bedroomConfigurations?: string[];
+  bedroomConfiguration?: string;
+  propertyTypes?: PropertyType[];
+  propertyType?: PropertyType;
+  assignedTelecallerId?: string | null;
+}
+
 /**
  * Lists leads strictly scoped to the authenticated tenant.
  * - Telecallers are strictly restricted to their assigned leads.
@@ -417,12 +441,7 @@ async function handleExistingBuyer(
  */
 export async function listLeads(
   context: TenantContext,
-  filters?: {
-    status?: Prisma.EnumLeadStatusFilter;
-    preference?: Prisma.EnumTransactionTypeFilter;
-    city?: string;
-    searchTerm?: string;
-  }
+  filters?: ListLeadsFilters
 ) {
   assertPermission(context, "demand:view_assigned");
 
@@ -430,27 +449,106 @@ export async function listLeads(
     tenantId: context.tenantId, // STRICT TENANT ENFORCEMENT
   };
 
+  const canViewAll = hasPermission(
+    context.role,
+    "demand:view_all",
+    context.user?.delegatedPermissions || context.delegatedPermissions
+  );
+
   // Telecaller scoping: only assigned leads (unless granted demand:view_all)
-  if (context.role === UserRole.TELECALLER) {
-    const canViewAll = hasPermission(
-      context.role,
-      "demand:view_all",
-      context.user?.delegatedPermissions || context.delegatedPermissions
-    );
-    if (!canViewAll) {
-      where.assignedTelecallerId = context.userId;
+  if (context.role === UserRole.TELECALLER && !canViewAll) {
+    where.assignedTelecallerId = context.userId;
+  } else if (filters?.assignedTelecallerId !== undefined) {
+    if (
+      filters.assignedTelecallerId === "UNASSIGNED" ||
+      filters.assignedTelecallerId === "Unassigned" ||
+      filters.assignedTelecallerId === null
+    ) {
+      where.assignedTelecallerId = null;
+    } else if (filters.assignedTelecallerId !== "All") {
+      where.assignedTelecallerId = filters.assignedTelecallerId;
     }
   }
 
   if (filters?.status) where.status = filters.status;
-  if (filters?.city) {
-    where.requirement = { city: filters.city };
+
+  const requirementWhere: Prisma.LeadRequirementWhereInput = {};
+
+  if (filters?.preference) {
+    requirementWhere.preference = filters.preference;
   }
 
-  if (filters?.searchTerm) {
+  if (filters?.city && filters.city !== "All") {
+    requirementWhere.city = filters.city.trim();
+  }
+
+  // PRD §5.6 Filter 1: Budget Range
+  if (
+    filters?.minBudget !== undefined &&
+    filters.minBudget !== null &&
+    filters?.maxBudget !== undefined &&
+    filters.maxBudget !== null
+  ) {
+    requirementWhere.AND = [
+      { maxBudget: { gte: new Prisma.Decimal(filters.minBudget) } },
+      { minBudget: { lte: new Prisma.Decimal(filters.maxBudget) } },
+    ];
+  } else if (filters?.minBudget !== undefined && filters.minBudget !== null) {
+    requirementWhere.maxBudget = { gte: new Prisma.Decimal(filters.minBudget) };
+  } else if (filters?.maxBudget !== undefined && filters.maxBudget !== null) {
+    requirementWhere.minBudget = { lte: new Prisma.Decimal(filters.maxBudget) };
+  }
+
+  // PRD §5.6 Filter 2: Locality (verified relational link or locality name)
+  if (filters?.localityId && filters.localityId !== "All") {
+    requirementWhere.localities = {
+      some: { localityId: filters.localityId },
+    };
+  } else if (filters?.locality && filters.locality !== "All") {
+    requirementWhere.localities = {
+      some: {
+        locality: {
+          name: { equals: filters.locality.trim(), mode: "insensitive" },
+        },
+      },
+    };
+  }
+
+  // PRD §5.6 Filter 6: Bedroom Configuration (BHK)
+  const bhkList = filters?.bedroomConfigurations?.length
+    ? filters.bedroomConfigurations
+    : filters?.bedroomConfiguration && filters.bedroomConfiguration !== "All"
+    ? [filters.bedroomConfiguration]
+    : undefined;
+
+  if (bhkList && bhkList.length > 0) {
+    requirementWhere.bedroomConfigurations = {
+      hasSome: bhkList,
+    };
+  }
+
+  // PRD §5.6 Filter 7: Property Type
+  const typeList = filters?.propertyTypes?.length
+    ? filters.propertyTypes
+    : filters?.propertyType
+    ? [filters.propertyType]
+    : undefined;
+
+  if (typeList && typeList.length > 0) {
+    requirementWhere.propertyTypes = {
+      hasSome: typeList,
+    };
+  }
+
+  if (Object.keys(requirementWhere).length > 0) {
+    where.requirement = requirementWhere;
+  }
+
+  if (filters?.searchTerm?.trim()) {
+    const term = filters.searchTerm.trim();
     where.OR = [
-      { name: { contains: filters.searchTerm, mode: "insensitive" } },
-      { primaryPhone: { contains: filters.searchTerm } },
+      { name: { contains: term, mode: "insensitive" } },
+      { primaryPhone: { contains: term } },
     ];
   }
 
@@ -1974,4 +2072,236 @@ export async function listPendingCallbacks(
   }
 
   return results;
+}
+
+/**
+ * Retrieves caller dashboard metrics scoped to the authenticated caller in their tenant.
+ * - Uses targeted database-level count queries (avoids fetching full lead trees).
+ * - Enforces strict tenant and caller scoping.
+ * - Excludes DNC leads from actionable callback counts.
+ */
+export async function getCallerDashboardMetrics(
+  context: TenantContext
+): Promise<CallerDashboardMetrics> {
+  assertPermission(context, "demand:view_assigned");
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+  // Scoped strictly to telecaller's assigned leads in tenant
+  const leadBaseWhere: Prisma.LeadWhereInput = {
+    tenantId: context.tenantId,
+    assignedTelecallerId: context.userId,
+  };
+
+  const [
+    assignedTotal,
+    pendingValidation,
+    activeLeads,
+    inactiveLeads,
+    unreachableNearLimit,
+  ] = await Promise.all([
+    prisma.lead.count({ where: leadBaseWhere }),
+    prisma.lead.count({
+      where: {
+        ...leadBaseWhere,
+        status: LeadStatus.NOT_YET_VALIDATED,
+      },
+    }),
+    prisma.lead.count({
+      where: {
+        ...leadBaseWhere,
+        status: LeadStatus.ACTIVE,
+      },
+    }),
+    prisma.lead.count({
+      where: {
+        ...leadBaseWhere,
+        status: LeadStatus.INACTIVE,
+      },
+    }),
+    prisma.lead.count({
+      where: {
+        ...leadBaseWhere,
+        unreachableAttemptsCount: 2,
+        status: { not: LeadStatus.INACTIVE },
+        isDoNotContact: false,
+      },
+    }),
+  ]);
+
+  // Daily calls made by this caller in tenant today
+  const callBaseWhere: Prisma.CallLogWhereInput = {
+    tenantId: context.tenantId,
+    callerId: context.userId,
+    calledAt: { gte: startOfToday, lte: endOfToday },
+  };
+
+  const [callsLoggedToday, connectedToday] = await Promise.all([
+    prisma.callLog.count({ where: callBaseWhere }),
+    prisma.callLog.count({
+      where: {
+        ...callBaseWhere,
+        leadDisposition: LeadCallingDisposition.CONNECTED,
+      },
+    }),
+  ]);
+
+  // Scheduled callbacks for this telecaller (excludes DNC & resolved)
+  const callbacks = await listPendingCallbacks(context, { timeframe: "all" });
+  const callbacksDueToday = callbacks.filter((c) => c.isDueToday).length;
+  const callbacksOverdue = callbacks.filter((c) => c.isOverdue).length;
+
+  return {
+    assignedTotal,
+    pendingValidation,
+    activeLeads,
+    inactiveLeads,
+    callsLoggedToday,
+    connectedToday,
+    callbacksDueToday,
+    callbacksOverdue,
+    unreachableNearLimit,
+  };
+}
+
+/**
+ * Retrieves manager demand metrics across the entire tenant.
+ * - Restricted to managers with overview:view_brokerage_metrics or demand:view_all.
+ * - Enforces strict tenant isolation.
+ * - Reports overall lead counts, unassigned leads, and per-telecaller workloads.
+ */
+export async function getManagerDemandMetrics(
+  context: TenantContext
+): Promise<ManagerDemandMetrics> {
+  const isManager =
+    context.role === UserRole.BROKER_OWNER ||
+    context.role === UserRole.TEAM_LEADER ||
+    hasPermission(
+      context.role,
+      "overview:view_brokerage_metrics",
+      context.user?.delegatedPermissions || context.delegatedPermissions
+    ) ||
+    hasPermission(
+      context.role,
+      "demand:view_all",
+      context.user?.delegatedPermissions || context.delegatedPermissions
+    );
+
+  if (!isManager) {
+    throw new ForbiddenError(
+      "You do not have permission to view brokerage manager metrics."
+    );
+  }
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+  const tenantWhere: Prisma.LeadWhereInput = {
+    tenantId: context.tenantId,
+  };
+
+  const [
+    totalLeads,
+    pendingValidation,
+    activeLeads,
+    inactiveLeads,
+    unassignedLeads,
+  ] = await Promise.all([
+    prisma.lead.count({ where: tenantWhere }),
+    prisma.lead.count({
+      where: { ...tenantWhere, status: LeadStatus.NOT_YET_VALIDATED },
+    }),
+    prisma.lead.count({
+      where: { ...tenantWhere, status: LeadStatus.ACTIVE },
+    }),
+    prisma.lead.count({
+      where: { ...tenantWhere, status: LeadStatus.INACTIVE },
+    }),
+    prisma.lead.count({
+      where: { ...tenantWhere, assignedTelecallerId: null },
+    }),
+  ]);
+
+  // Tenant-wide calls logged today
+  const [callsLoggedToday, connectedToday] = await Promise.all([
+    prisma.callLog.count({
+      where: {
+        tenantId: context.tenantId,
+        calledAt: { gte: startOfToday, lte: endOfToday },
+      },
+    }),
+    prisma.callLog.count({
+      where: {
+        tenantId: context.tenantId,
+        leadDisposition: LeadCallingDisposition.CONNECTED,
+        calledAt: { gte: startOfToday, lte: endOfToday },
+      },
+    }),
+  ]);
+
+  // Tenant-wide pending callbacks
+  const allCallbacks = await listPendingCallbacks(context, { timeframe: "all" });
+  const callbacksDueToday = allCallbacks.filter((c) => c.isDueToday).length;
+  const callbacksOverdue = allCallbacks.filter((c) => c.isOverdue).length;
+
+  // Active telecallers in tenant
+  const eligibleTelecallers = await prisma.user.findMany({
+    where: {
+      tenantId: context.tenantId,
+      role: UserRole.TELECALLER,
+      isActive: true,
+    },
+    select: { id: true, name: true, email: true },
+    orderBy: { name: "asc" },
+  });
+
+  const telecallerWorkloads: TelecallerWorkloadItem[] = await Promise.all(
+    eligibleTelecallers.map(async (t) => {
+      const [activeLeadCount, pendingValidationCount] = await Promise.all([
+        prisma.lead.count({
+          where: {
+            tenantId: context.tenantId,
+            assignedTelecallerId: t.id,
+            status: LeadStatus.ACTIVE,
+          },
+        }),
+        prisma.lead.count({
+          where: {
+            tenantId: context.tenantId,
+            assignedTelecallerId: t.id,
+            status: LeadStatus.NOT_YET_VALIDATED,
+          },
+        }),
+      ]);
+
+      const telecallerCallbacks = allCallbacks.filter(
+        (c) => c.assignedTelecallerId === t.id && c.isDueToday
+      ).length;
+
+      return {
+        telecallerId: t.id,
+        telecallerName: t.name,
+        telecallerEmail: t.email,
+        activeLeadCount,
+        pendingValidationCount,
+        callbacksDueTodayCount: telecallerCallbacks,
+      };
+    })
+  );
+
+  return {
+    totalLeads,
+    pendingValidation,
+    activeLeads,
+    inactiveLeads,
+    unassignedLeads,
+    callsLoggedToday,
+    connectedToday,
+    callbacksDueToday,
+    callbacksOverdue,
+    telecallerWorkloads,
+  };
 }
