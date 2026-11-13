@@ -625,11 +625,20 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       expect(sorted[1].property.id).toBe("prop-older");
     });
 
-    // Scenario 14: Latest validation date tie-break (same score and price, more recent updatedAt ranks higher)
-    it("Scenario 14: Breaks score and price ties by most recent validation / updatedAt date descending", () => {
+    // Scenario 14: Latest validation date tie-break (validatedAt DESC takes precedence over subsequent edits)
+    it("Scenario 14: Breaks score and price ties by most recent validatedAt date descending, ignoring subsequent edits", () => {
+      // Property A: validated Jan 1, 2026. Edited on June 1, 2026 (updatedAt is newer)
+      // Property B: validated May 1, 2026. Not edited (updatedAt is May 1)
+      // Rule: Property B was validated later, so Property B must rank before Property A despite Property A's newer updatedAt!
       const mockMatches: EvaluatedPropertyMatch[] = [
         {
-          property: { id: "prop-older", price: 18000000, updatedAt: new Date("2026-01-01") } as any,
+          property: {
+            id: "prop-a-edited-later",
+            price: 18000000,
+            validatedAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z", // Edited later!
+            createdAt: "2025-12-01T00:00:00.000Z",
+          } as any,
           score: 80,
           isEligible: true,
           criteriaMatchedCount: 4,
@@ -638,7 +647,13 @@ describe("Property Matching Engine & Active Supply Pool", () => {
           unspecifiedCriteria: [],
         },
         {
-          property: { id: "prop-newer", price: 18000000, updatedAt: new Date("2026-05-01") } as any,
+          property: {
+            id: "prop-b-validated-later",
+            price: 18000000,
+            validatedAt: "2026-05-01T00:00:00.000Z", // Validated later!
+            updatedAt: "2026-05-01T00:00:00.000Z",
+            createdAt: "2026-04-01T00:00:00.000Z",
+          } as any,
           score: 80,
           isEligible: true,
           criteriaMatchedCount: 4,
@@ -649,8 +664,45 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       ];
 
       const sorted = sortPropertyMatches(mockMatches, { minBudget: 15000000, maxBudget: 20000000 });
-      expect(sorted[0].property.id).toBe("prop-newer");
-      expect(sorted[1].property.id).toBe("prop-older");
+      expect(sorted[0].property.id).toBe("prop-b-validated-later");
+      expect(sorted[1].property.id).toBe("prop-a-edited-later");
+    });
+
+    it("Scenario 14b: Falls back to createdAt DESC when validatedAt is null", () => {
+      const mockMatches: EvaluatedPropertyMatch[] = [
+        {
+          property: {
+            id: "prop-older-created",
+            price: 18000000,
+            validatedAt: null,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+        {
+          property: {
+            id: "prop-newer-created",
+            price: 18000000,
+            validatedAt: null,
+            createdAt: "2026-05-01T00:00:00.000Z",
+          } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+      ];
+
+      const sorted = sortPropertyMatches(mockMatches, { minBudget: 15000000, maxBudget: 20000000 });
+      expect(sorted[0].property.id).toBe("prop-newer-created");
+      expect(sorted[1].property.id).toBe("prop-older-created");
     });
 
     // Scenario 15: Stable property ID tie-break (same score, price, date, sorted by id ASC)
@@ -709,15 +761,12 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       })).toBe(false);
     });
 
-    // Scenario 17: Symmetrical buyer/property matching
-    it("Scenario 17: Property-to-buyer matching (sortLeadMatches) enforces symmetrical matching logic and tie-breaking", () => {
-      const mockLeadMatches: EvaluatedLeadMatch[] = [
+    // Scenario 17: Property-to-buyer matching (sortLeadMatches) tie-breaking & missing budget handling
+    it("Scenario 17: Property-to-buyer matching (sortLeadMatches) does not penalize missing budget and enforces multi-tier tie-breaking", () => {
+      // 17.1 Score descending tier
+      const mockLeadMatchesScore: EvaluatedLeadMatch[] = [
         {
-          lead: {
-            id: "lead-lower",
-            requirements: { minBudget: 15000000, maxBudget: 20000000 },
-            updatedAt: new Date("2026-05-01"),
-          } as any,
+          lead: { id: "lead-lower", requirements: { minBudget: 15000000, maxBudget: 20000000 }, createdAt: new Date("2026-05-01") } as any,
           score: 75,
           isEligible: true,
           criteriaMatchedCount: 3,
@@ -727,11 +776,7 @@ describe("Property Matching Engine & Active Supply Pool", () => {
           visitStatus: "No Visits Yet",
         },
         {
-          lead: {
-            id: "lead-higher",
-            requirements: { minBudget: 15000000, maxBudget: 20000000 },
-            updatedAt: new Date("2026-05-01"),
-          } as any,
+          lead: { id: "lead-higher", requirements: { minBudget: 15000000, maxBudget: 20000000 }, createdAt: new Date("2026-05-01") } as any,
           score: 100,
           isEligible: true,
           criteriaMatchedCount: 4,
@@ -741,10 +786,91 @@ describe("Property Matching Engine & Active Supply Pool", () => {
           visitStatus: "No Visits Yet",
         },
       ];
+      expect(sortLeadMatches(mockLeadMatchesScore, 18000000)[0].lead.id).toBe("lead-higher");
 
-      const sortedLeads = sortLeadMatches(mockLeadMatches, 18000000);
-      expect(sortedLeads[0].lead.id).toBe("lead-higher");
-      expect(sortedLeads[1].lead.id).toBe("lead-lower");
+      // 17.2 Budget midpoint tie-break when both leads have budgets
+      // Property price: 1.8 Cr. Lead closer midpoint: 1.85 Cr (diff 5L). Lead farther midpoint: 1.6 Cr (diff 20L)
+      const mockLeadMatchesBudget: EvaluatedLeadMatch[] = [
+        {
+          lead: { id: "lead-farther", requirements: { minBudget: 15000000, maxBudget: 17000000 }, createdAt: new Date("2026-05-01") } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+        {
+          lead: { id: "lead-closer", requirements: { minBudget: 17000000, maxBudget: 20000000 }, createdAt: new Date("2026-05-01") } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+      ];
+      expect(sortLeadMatches(mockLeadMatchesBudget, 18000000)[0].lead.id).toBe("lead-closer");
+
+      // 17.3 Missing budget does NOT penalize or rank lower: skips Tier 2 and compares via Tier 3 (intake timestamp)
+      // Lead A has budget, created Jan 1 (older).
+      // Lead B has NO budget, created May 1 (newer).
+      // Both score 100%. Since Lead B has no budget, Tier 2 midpoint is skipped.
+      // Lead B (newer createdAt) must rank FIRST, not penalized for lacking a budget!
+      const mockLeadMatchesMissingBudget: EvaluatedLeadMatch[] = [
+        {
+          lead: { id: "lead-with-budget-older", requirements: { minBudget: 15000000, maxBudget: 20000000 }, createdAt: new Date("2026-01-01") } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+        {
+          lead: { id: "lead-no-budget-newer", requirements: { minBudget: 0, maxBudget: 0 }, createdAt: new Date("2026-05-01") } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 3,
+          criteriaEvaluatedCount: 3,
+          breakdown: {} as any,
+          unspecifiedCriteria: ["Budget"],
+          visitStatus: "No Visits Yet",
+        },
+      ];
+      const sortedNoBudget = sortLeadMatches(mockLeadMatchesMissingBudget, 18000000);
+      expect(sortedNoBudget[0].lead.id).toBe("lead-no-budget-newer");
+      expect(sortedNoBudget[1].lead.id).toBe("lead-with-budget-older");
+
+      // 17.4 Stable Lead ID tie-break when scores, budgets, and dates are identical
+      const sameDate = new Date("2026-05-01");
+      const mockLeadMatchesId: EvaluatedLeadMatch[] = [
+        {
+          lead: { id: "lead-zzz", requirements: { minBudget: 15000000, maxBudget: 20000000 }, createdAt: sameDate } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+        {
+          lead: { id: "lead-aaa", requirements: { minBudget: 15000000, maxBudget: 20000000 }, createdAt: sameDate } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+      ];
+      expect(sortLeadMatches(mockLeadMatchesId, 18000000)[0].lead.id).toBe("lead-aaa");
+      expect(sortLeadMatches(mockLeadMatchesId, 18000000)[1].lead.id).toBe("lead-zzz");
     });
 
     // Scenario 18: Top-3 consistency between lead detail and matching workspace
@@ -998,6 +1124,7 @@ describe("Property Matching Engine & Active Supply Pool", () => {
         callLogs: [],
         assignments: [],
         siteVisitItems: [],
+        validatedAt: new Date("2026-05-01"),
         createdAt: new Date(),
         updatedAt: new Date(),
       },
@@ -1036,6 +1163,7 @@ describe("Property Matching Engine & Active Supply Pool", () => {
         callLogs: [],
         assignments: [],
         siteVisitItems: [],
+        validatedAt: new Date("2026-04-01"),
         createdAt: new Date(),
         updatedAt: new Date(),
       },
@@ -1116,6 +1244,84 @@ describe("Property Matching Engine & Active Supply Pool", () => {
         getMatchingPropertiesForLead(telecallerContext, "lead-unassigned")
       ).rejects.toThrow(NotFoundError);
     });
+
+    it("evaluates cross-city properties within 3km and rejects those beyond 3km without SQL city pre-filter", async () => {
+      // Lead is in Gurugram (DLF Phase 3: 28.4950, 77.0895)
+      const gurugramLead = {
+        ...mockDbLead,
+        requirement: {
+          ...mockDbLead.requirement,
+          city: "Gurugram",
+          localities: [
+            {
+              id: "rl-dlf",
+              requirementId: "req-1",
+              localityId: "loc-dlf",
+              locality: {
+                id: "loc-dlf",
+                name: "DLF Phase 3",
+                city: "Gurugram",
+                state: "Haryana",
+                latitude: 28.4950,
+                longitude: 77.0895,
+              },
+            },
+          ],
+        },
+      };
+
+      // Property 1: New Delhi (Rajokri: 28.5020, 77.0950) -> ~0.95 km away (<= 3 km)
+      const propDelhiNear = {
+        ...mockDbProperties[0],
+        id: "prop-delhi-near",
+        city: "New Delhi",
+        localityName: "Rajokri",
+        locality: {
+          id: "loc-rajokri",
+          name: "Rajokri",
+          latitude: 28.5020,
+          longitude: 77.0950,
+        },
+      };
+
+      // Property 2: New Delhi (Connaught Place: 28.6304, 77.2177) -> ~19 km away (> 3 km)
+      const propDelhiFar = {
+        ...mockDbProperties[0],
+        id: "prop-delhi-far",
+        city: "New Delhi",
+        localityName: "Connaught Place",
+        locality: {
+          id: "loc-cp",
+          name: "Connaught Place",
+          latitude: 28.6304,
+          longitude: 77.2177,
+        },
+      };
+
+      (prisma.lead.findFirst as any).mockResolvedValue(gurugramLead);
+      (prisma.property.count as any).mockResolvedValue(2);
+      (prisma.property.findMany as any).mockResolvedValue([propDelhiNear, propDelhiFar]);
+
+      const result = await getMatchingPropertiesForLead(brokerContext, "lead-1");
+
+      // Verify prisma.property.findMany was called without city filter
+      const findManyCall = (prisma.property.findMany as any).mock.calls.at(-1)[0];
+      expect(findManyCall.where.city).toBeUndefined();
+
+      // Find evaluated matches
+      const nearMatch = result.matches.find((m) => m.property.id === "prop-delhi-near");
+      const farMatch = result.matches.find((m) => m.property.id === "prop-delhi-far");
+
+      expect(nearMatch).toBeDefined();
+      expect(nearMatch!.breakdown.locality.matched).toBe(true);
+      expect(nearMatch!.breakdown.locality.details).toContain("≤ 3 km threshold");
+      expect(nearMatch!.score).toBe(100);
+
+      expect(farMatch).toBeDefined();
+      expect(farMatch!.breakdown.locality.matched).toBe(false);
+      expect(farMatch!.breakdown.locality.details).toContain("does not match");
+      expect(farMatch!.score).toBeLessThan(100);
+    });
   });
 
   describe("6. Matching DAL: getMatchingLeadsForProperty", () => {
@@ -1173,6 +1379,7 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       callLogs: [],
       assignments: [],
       siteVisitItems: [],
+      validatedAt: new Date("2026-05-01"),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -1253,6 +1460,62 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       expect(result.matches[0].lead.id).toBe("lead-1");
       expect(result.matches[0].score).toBe(100);
       expect(result.matches[0].visitStatus).toBe("No Visits Yet");
+    });
+
+    it("evaluates cross-city buyer leads without SQL city pre-filter", async () => {
+      // Property is in New Delhi (Rajokri: 28.5020, 77.0950)
+      const delhiProperty = {
+        ...mockProperty,
+        id: "prop-delhi",
+        city: "New Delhi",
+        localityName: "Rajokri",
+        locality: {
+          id: "loc-rajokri",
+          name: "Rajokri",
+          latitude: 28.5020,
+          longitude: 77.0950,
+        },
+      };
+
+      // Lead 1 is in Gurugram (DLF Phase 3: 28.4950, 77.0895) -> ~0.95 km away
+      const gurugramLead = {
+        ...mockActiveLeads[0],
+        id: "lead-gurugram",
+        requirement: {
+          ...mockActiveLeads[0].requirement,
+          city: "Gurugram",
+          localities: [
+            {
+              id: "rl-dlf",
+              requirementId: "req-1",
+              localityId: "loc-dlf",
+              locality: {
+                id: "loc-dlf",
+                name: "DLF Phase 3",
+                city: "Gurugram",
+                state: "Haryana",
+                latitude: 28.4950,
+                longitude: 77.0895,
+              },
+            },
+          ],
+        },
+      };
+
+      (prisma.property.findFirst as any).mockResolvedValue(delhiProperty);
+      (prisma.lead.count as any).mockResolvedValue(1);
+      (prisma.lead.findMany as any).mockResolvedValue([gurugramLead]);
+
+      const result = await getMatchingLeadsForProperty(brokerContext, "prop-delhi");
+
+      // Verify prisma.lead.findMany where clause does NOT filter by requirement.city
+      const findManyCall = (prisma.lead.findMany as any).mock.calls.at(-1)[0];
+      expect(findManyCall.where.requirement.city).toBeUndefined();
+
+      expect(result.matches.length).toBe(1);
+      expect(result.matches[0].lead.id).toBe("lead-gurugram");
+      expect(result.matches[0].breakdown.locality.matched).toBe(true);
+      expect(result.matches[0].score).toBe(100);
     });
   });
 });

@@ -88,6 +88,7 @@ export interface Property {
   assignmentHistory?: PropertyAssignment[];
   isFieldVerified?: boolean;
   fieldVerifiedAt?: string | null;
+  validatedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

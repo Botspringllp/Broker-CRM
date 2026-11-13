@@ -429,6 +429,7 @@ model Property {
   validationStatus   SupplyValidationStatus     @default(NOT_VALIDATED)
   availabilityStatus PropertyAvailabilityStatus @default(AVAILABLE)
   isActiveSupply     Boolean                    @default(false) // True only when Validated + Available
+  validatedAt        DateTime?
   isFieldVerified    Boolean                    @default(false)
   fieldVerifiedAt    DateTime?
 
@@ -458,6 +459,7 @@ model Property {
 
   @@unique([id, tenantId])
   @@index([tenantId, validationStatus])
+  @@index([tenantId, validatedAt])
   @@index([tenantId, availabilityStatus])
   @@index([tenantId, isActiveSupply])
   @@index([tenantId, isFieldVerified])

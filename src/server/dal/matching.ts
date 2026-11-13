@@ -112,9 +112,17 @@ export function sortPropertyMatches(
       }
     }
 
-    // 3. Most recently validated eligible property
-    const timeA = a.property.updatedAt ? new Date(a.property.updatedAt).getTime() : 0;
-    const timeB = b.property.updatedAt ? new Date(b.property.updatedAt).getTime() : 0;
+    // 3. Most recently validated eligible property (validatedAt DESC; deterministic fallback createdAt DESC)
+    const timeA = a.property.validatedAt
+      ? new Date(a.property.validatedAt).getTime()
+      : a.property.createdAt
+      ? new Date(a.property.createdAt).getTime()
+      : 0;
+    const timeB = b.property.validatedAt
+      ? new Date(b.property.validatedAt).getTime()
+      : b.property.createdAt
+      ? new Date(b.property.createdAt).getTime()
+      : 0;
     if (timeB !== timeA) {
       return timeB - timeA;
     }
@@ -127,8 +135,8 @@ export function sortPropertyMatches(
 /**
  * Deterministic multi-level tie-breaking for matching leads (symmetrical to M6):
  * 1. Matching score descending
- * 2. If buyer budget exists, price closest to the property price
- * 3. Most recently created/updated lead
+ * 2. If buyer budget exists, price closest to the property price (evaluated only when BOTH candidates have a budget)
+ * 3. Intake / creation timestamp descending (deterministic fallback)
  * 4. Stable lead ID ascending
  */
 export function sortLeadMatches(
@@ -141,7 +149,7 @@ export function sortLeadMatches(
       return b.score - a.score;
     }
 
-    // 2. Buyer budget midpoint closest to property price (if buyer budget exists)
+    // 2. Buyer budget midpoint closest to property price (only when BOTH candidates have a budget)
     const reqA = a.lead.requirements;
     const reqB = b.lead.requirements;
 
@@ -169,13 +177,11 @@ export function sortLeadMatches(
       if (diffA !== diffB) {
         return diffA - diffB;
       }
-    } else if (midA !== null && midB === null) {
-      return -1;
-    } else if (midA === null && midB !== null) {
-      return 1;
     }
+    // Note: When either midA or midB is null, Tier 2 is skipped so buyers are not
+    // penalized for unspecified budgets. Evaluation proceeds to Tier 3.
 
-    // 3. Most recently updated/created lead
+    // 3. Intake / creation timestamp descending (deterministic fallback)
     const timeA = a.lead.createdAt ? new Date(a.lead.createdAt).getTime() : 0;
     const timeB = b.lead.createdAt ? new Date(b.lead.createdAt).getTime() : 0;
     if (timeB !== timeA) {
@@ -236,11 +242,6 @@ export async function getMatchingPropertiesForLead(
     ownerWillingnessConfirmed: true,
     preference: lead.requirement.preference, // HARD GATE IN DATABASE
   };
-
-  // Safe city candidate filter where requirement city is specified
-  if (lead.requirement.city?.trim()) {
-    propertyWhere.city = { equals: lead.requirement.city.trim(), mode: "insensitive" };
-  }
 
   // Query eligible active supply properties (lean includes: avoid heavy media/callLogs/assignments/siteVisitItems)
   const eligibleProperties = await prisma.property.findMany({
@@ -305,7 +306,7 @@ export async function getMatchingPropertiesForLead(
       availabilityStatus: prop.availabilityStatus,
       ownerWillingnessConfirmed: prop.ownerWillingnessConfirmed,
       isActiveSupply: prop.isActiveSupply,
-      validatedAt: prop.updatedAt,
+      validatedAt: prop.validatedAt,
       updatedAt: prop.updatedAt,
     };
 
@@ -396,7 +397,6 @@ export async function getMatchingLeadsForProperty(
     status: LeadStatus.ACTIVE,
     requirement: {
       preference: property.preference, // HARD GATE
-      ...(property.city?.trim() ? { city: { equals: property.city.trim(), mode: "insensitive" } } : {}),
     },
   };
 
@@ -457,7 +457,7 @@ export async function getMatchingLeadsForProperty(
     availabilityStatus: property.availabilityStatus,
     ownerWillingnessConfirmed: property.ownerWillingnessConfirmed,
     isActiveSupply: property.isActiveSupply,
-    validatedAt: property.updatedAt,
+    validatedAt: property.validatedAt,
     updatedAt: property.updatedAt,
   };
 

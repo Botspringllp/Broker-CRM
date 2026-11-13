@@ -466,6 +466,11 @@ export async function updateProperty(
 
   const safeData: Prisma.PropertyUpdateInput = { ...data };
 
+  // Set validatedAt timestamp when transitioning to VALIDATED
+  if (isSettingValidated && (!existing.validatedAt || existing.validationStatus !== "VALIDATED")) {
+    safeData.validatedAt = new Date();
+  }
+
   // Only recompute isActiveSupply when lifecycle or willingness statuses are being updated
   if (
     data.validationStatus !== undefined ||
@@ -894,6 +899,7 @@ export async function logPropertyCall(context: TenantContext, input: LogProperty
         availabilityStatus: nextAvailabilityStatus,
         ownerWillingnessConfirmed: nextOwnerWillingness,
         isActiveSupply: computedIsActiveSupply,
+        ...(nextValidationStatus === SupplyValidationStatus.VALIDATED ? { validatedAt: new Date() } : {}),
       },
       include: {
         keyHolders: true,

@@ -281,6 +281,7 @@ export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
       }) || [],
     isFieldVerified: p.isFieldVerified ?? false,
     fieldVerifiedAt: p.fieldVerifiedAt ? p.fieldVerifiedAt.toISOString() : null,
+    validatedAt: p.validatedAt ? p.validatedAt.toISOString() : null,
     createdAt: p.createdAt ? p.createdAt.toISOString() : undefined,
     updatedAt: p.updatedAt ? p.updatedAt.toISOString() : undefined,
   };

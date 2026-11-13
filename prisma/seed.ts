@@ -142,6 +142,7 @@ export async function seedDevData() {
       validationStatus: SupplyValidationStatus.VALIDATED,
       availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
       isActiveSupply: true,
+      validatedAt: new Date(),
     },
   });
 
@@ -170,6 +171,7 @@ export async function seedDevData() {
       validationStatus: SupplyValidationStatus.VALIDATED,
       availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
       isActiveSupply: true,
+      validatedAt: new Date(),
     },
   });
 
