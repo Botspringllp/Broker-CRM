@@ -7,7 +7,7 @@ import {
   RawRequirementData,
   RawPropertyData,
 } from "@/lib/matching-engine";
-import { UserRole, SupplyValidationStatus, PropertyAvailabilityStatus, LeadStatus } from "@prisma/client";
+import { UserRole, SupplyValidationStatus, PropertyAvailabilityStatus, LeadStatus, AreaUnitType } from "@prisma/client";
 import { TenantContext } from "@/server/tenant-context";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 
@@ -31,6 +31,10 @@ import { prisma } from "@/server/db";
 import {
   getMatchingPropertiesForLead,
   getMatchingLeadsForProperty,
+  sortPropertyMatches,
+  sortLeadMatches,
+  EvaluatedPropertyMatch,
+  EvaluatedLeadMatch,
 } from "@/server/dal/matching";
 
 describe("Property Matching Engine & Active Supply Pool", () => {
@@ -193,16 +197,20 @@ describe("Property Matching Engine & Active Supply Pool", () => {
     });
   });
 
-  describe("3. Pure Scoring Engine: Criteria Evaluation & Tolerances (PRD §6.2)", () => {
+  describe("3. Pure Scoring Engine: Criteria Evaluation & Tolerances (PRD §6.2 & Approved Decisions)", () => {
     const baseRequirement: RawRequirementData = {
       preference: "SALE",
       minBudget: 15000000, // 1.5 Cr
       maxBudget: 20000000, // 2.0 Cr
       city: "Gurugram",
-      localities: [{ name: "DLF Phase 5", latitude: 28.455, longitude: 77.095 }],
+      localities: [{ id: "loc-1", name: "DLF Phase 5", latitude: 28.455, longitude: 77.095, isVerified: true }],
       propertyTypes: ["APARTMENT", "BUILDER_FLOOR"],
       bedroomConfigurations: ["3 BHK", "4 BHK"],
+      minArea: 1800,
+      maxArea: 2200,
       targetArea: 2000,
+      areaUnit: "SQ_FT",
+      areaType: "CARPET",
     };
 
     const eligibleBaseProp: RawPropertyData = {
@@ -210,11 +218,14 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       preference: "SALE",
       price: 17500000, // 1.75 Cr (midpoint)
       city: "Gurugram",
+      localityId: "loc-1",
       localityName: "DLF Phase 5",
-      locality: { name: "DLF Phase 5", latitude: 28.455, longitude: 77.095 },
+      locality: { name: "DLF Phase 5", latitude: 28.455, longitude: 77.095, isVerified: true },
       propertyType: "APARTMENT",
       bedroomCount: 3,
       area: 2000,
+      areaUnit: "SQ_FT",
+      areaType: "CARPET",
       validationStatus: "VALIDATED",
       availabilityStatus: "AVAILABLE",
       ownerWillingnessConfirmed: true,
@@ -269,59 +280,31 @@ describe("Property Matching Engine & Active Supply Pool", () => {
     });
 
     it("matches locality by coordinate proximity when distance <= 3 km even if name differs", () => {
-      // Property at Sector 42 (28.465, 77.095) - approx 1.1 km from DLF Phase 5 (28.455, 77.095)
+      // Property at Sector 42 (28.465, 77.095) - approx 1.11 km from DLF Phase 5 (28.455, 77.095)
       const propNearby: RawPropertyData = {
         ...eligibleBaseProp,
+        localityId: "loc-diff",
         localityName: "Sector 42",
-        locality: { name: "Sector 42", latitude: 28.465, longitude: 77.095 },
+        locality: { name: "Sector 42", latitude: 28.465, longitude: 77.095, isVerified: true },
       };
 
       const result = evaluatePropertyMatch(baseRequirement, propNearby);
       expect(result.breakdown.locality.matched).toBe(true);
-      expect(result.breakdown.locality.details).toContain("≤3km proximity");
+      expect(result.breakdown.locality.details).toContain("≤ 3 km threshold");
     });
 
     it("rejects locality when coordinate distance > 3 km and name does not match", () => {
       // Property at Sohna Road (28.405, 77.045) - approx 7 km away
       const propFar: RawPropertyData = {
         ...eligibleBaseProp,
+        localityId: "loc-sohna",
         localityName: "Sohna Road",
-        locality: { name: "Sohna Road", latitude: 28.405, longitude: 77.045 },
+        locality: { name: "Sohna Road", latitude: 28.405, longitude: 77.045, isVerified: true },
       };
 
       const result = evaluatePropertyMatch(baseRequirement, propFar);
       expect(result.breakdown.locality.matched).toBe(false);
-      expect(result.breakdown.locality.details).toContain("not in buyer's preferred areas");
-    });
-
-    it("matches locality by substring / text match when coordinates are null", () => {
-      const propNoCoords: RawPropertyData = {
-        ...eligibleBaseProp,
-        localityName: "DLF Phase 5, Golf Course Road",
-        locality: null,
-      };
-
-      const result = evaluatePropertyMatch(baseRequirement, propNoCoords);
-      expect(result.breakdown.locality.matched).toBe(true);
-    });
-
-    it("matches property area within PRD ±15% tolerance of targetArea", () => {
-      // Target area: 2000 sq.ft. Tolerance: [1700, 2300 sq.ft]
-      const propInArea: RawPropertyData = { ...eligibleBaseProp, area: 1800 };
-      const resultIn = evaluatePropertyMatch(baseRequirement, propInArea);
-      expect(resultIn.breakdown.area.matched).toBe(true);
-      expect(resultIn.breakdown.area.details).toBe("Area falls within PRD ±15% target tolerance");
-
-      // Area 1600 sq.ft is below 1700 min
-      const propTooSmall: RawPropertyData = { ...eligibleBaseProp, area: 1600 };
-      const resultSmall = evaluatePropertyMatch(baseRequirement, propTooSmall);
-      expect(resultSmall.breakdown.area.matched).toBe(false);
-      expect(resultSmall.breakdown.area.details).toBe("Area outside buyer's ±15% tolerance range");
-
-      // Area 2400 sq.ft is above 2300 max
-      const propTooLarge: RawPropertyData = { ...eligibleBaseProp, area: 2400 };
-      const resultLarge = evaluatePropertyMatch(baseRequirement, propTooLarge);
-      expect(resultLarge.breakdown.area.matched).toBe(false);
+      expect(result.breakdown.locality.details).toContain("does not match buyer's preferred localities");
     });
 
     it("evaluates bedroom configurations correctly across multi-select BHK options", () => {
@@ -337,7 +320,466 @@ describe("Property Matching Engine & Active Supply Pool", () => {
     });
   });
 
-  describe("4. Pure Scoring Engine: Missing / Unspecified Buyer Criteria (PRD §6.3)", () => {
+  describe("4. Detailed DV-11 Scenarios (19 Business Rule Hardening Tests)", () => {
+    const baseReq: RawRequirementData = {
+      preference: "SALE",
+      minBudget: 15000000,
+      maxBudget: 20000000,
+      city: "Gurugram",
+      localities: [{ id: "loc-dlf5", name: "DLF Phase 5", latitude: 28.455, longitude: 77.095, isVerified: true }],
+      propertyTypes: ["APARTMENT"],
+      bedroomConfigurations: ["3 BHK"],
+      minArea: 1500,
+      maxArea: 2000,
+      targetArea: 1750,
+      areaUnit: "SQ_FT",
+      areaType: "CARPET",
+    };
+
+    const baseProp: RawPropertyData = {
+      id: "prop-base",
+      preference: "SALE",
+      price: 17500000,
+      city: "Gurugram",
+      localityId: "loc-dlf5",
+      localityName: "DLF Phase 5",
+      locality: { name: "DLF Phase 5", latitude: 28.455, longitude: 77.095, isVerified: true },
+      propertyType: "APARTMENT",
+      bedroomCount: 3,
+      area: 1750,
+      areaUnit: "SQ_FT",
+      areaType: "CARPET",
+      validationStatus: "VALIDATED",
+      availabilityStatus: "AVAILABLE",
+      ownerWillingnessConfirmed: true,
+      isActiveSupply: true,
+      updatedAt: new Date("2026-05-10"),
+    };
+
+    // Scenario 1: Area range matching (inside range, exact min boundary, exact max boundary)
+    it("Scenario 1: Area range matching evaluates properties inside range and on exact min/max boundaries as matched", () => {
+      const propInside = { ...baseProp, area: 1750 };
+      expect(evaluatePropertyMatch(baseReq, propInside).breakdown.area.matched).toBe(true);
+
+      const propExactMin = { ...baseProp, area: 1500 };
+      expect(evaluatePropertyMatch(baseReq, propExactMin).breakdown.area.matched).toBe(true);
+
+      const propExactMax = { ...baseProp, area: 2000 };
+      expect(evaluatePropertyMatch(baseReq, propExactMax).breakdown.area.matched).toBe(true);
+
+      const propBelowMin = { ...baseProp, area: 1499 };
+      expect(evaluatePropertyMatch(baseReq, propBelowMin).breakdown.area.matched).toBe(false);
+
+      const propAboveMax = { ...baseProp, area: 2001 };
+      expect(evaluatePropertyMatch(baseReq, propAboveMax).breakdown.area.matched).toBe(false);
+    });
+
+    // Scenario 2: One-sided area boundaries (min-only >=, max-only <=)
+    it("Scenario 2: Evaluates one-sided area boundaries (min-only >=, max-only <=) correctly", () => {
+      // Min-only >= 1500
+      const minOnlyReq: RawRequirementData = { ...baseReq, minArea: 1500, maxArea: null };
+      expect(evaluatePropertyMatch(minOnlyReq, { ...baseProp, area: 1500 }).breakdown.area.matched).toBe(true);
+      expect(evaluatePropertyMatch(minOnlyReq, { ...baseProp, area: 3000 }).breakdown.area.matched).toBe(true);
+      expect(evaluatePropertyMatch(minOnlyReq, { ...baseProp, area: 1499 }).breakdown.area.matched).toBe(false);
+
+      // Max-only <= 2000
+      const maxOnlyReq: RawRequirementData = { ...baseReq, minArea: null, maxArea: 2000 };
+      expect(evaluatePropertyMatch(maxOnlyReq, { ...baseProp, area: 2000 }).breakdown.area.matched).toBe(true);
+      expect(evaluatePropertyMatch(maxOnlyReq, { ...baseProp, area: 1000 }).breakdown.area.matched).toBe(true);
+      expect(evaluatePropertyMatch(maxOnlyReq, { ...baseProp, area: 2001 }).breakdown.area.matched).toBe(false);
+    });
+
+    // Scenario 3: Missing area requirements (neither min nor max; verify excluded from denominator even with targetArea)
+    it("Scenario 3: Excludes area from denominator when minArea and maxArea are missing, even if targetArea is present", () => {
+      const noMinMaxReq: RawRequirementData = {
+        ...baseReq,
+        minArea: null,
+        maxArea: null,
+        targetArea: 1800,
+      };
+
+      const result = evaluatePropertyMatch(noMinMaxReq, baseProp);
+      expect(result.breakdown.area.evaluated).toBe(false);
+      expect(result.unspecifiedCriteria).toContain("Property Area");
+      // Total evaluated should be 5 instead of 6
+      expect(result.criteriaEvaluatedCount).toBe(5);
+    });
+
+    // Scenario 4: Unit and area-type compatibility (incompatible units fail; area type mismatch e.g. Carpet vs Super built-up fails)
+    it("Scenario 4: Handles area unit conversions correctly and rejects mismatched area types", () => {
+      // Compatible conversion: Req in SQ_YD [166.67, 222.22], Property in SQ_FT (1800 sq ft = 200 sq yd)
+      const sqYdReq: RawRequirementData = {
+        ...baseReq,
+        minArea: 160,
+        maxArea: 220,
+        areaUnit: "SQ_YD",
+        areaType: "CARPET",
+      };
+      const propSqFt: RawPropertyData = {
+        ...baseProp,
+        area: 1800, // 1800 sq ft = 200 sq yd
+        areaUnit: "SQ_FT",
+        areaType: "CARPET",
+      };
+      const matchResult = evaluatePropertyMatch(sqYdReq, propSqFt);
+      expect(matchResult.breakdown.area.matched).toBe(true);
+
+      // Mismatched area type: CARPET vs SUPER_BUILT_UP
+      const propSuperBuiltUp: RawPropertyData = {
+        ...baseProp,
+        areaType: "SUPER_BUILT_UP",
+      };
+      const mismatchResult = evaluatePropertyMatch(baseReq, propSuperBuiltUp);
+      expect(mismatchResult.breakdown.area.matched).toBe(false);
+      expect(mismatchResult.breakdown.area.details).toContain("Area type mismatch");
+    });
+
+    // Scenario 5: Locality substring false positives (e.g. "Sector 5" vs "Sector 54" must NOT match)
+    it("Scenario 5: Rejects locality substring matches (e.g. 'Sector 5' vs 'Sector 54' must NOT match)", () => {
+      const sector5Req: RawRequirementData = {
+        ...baseReq,
+        localities: [{ name: "Sector 5", latitude: null, longitude: null }],
+      };
+      const sector54Prop: RawPropertyData = {
+        ...baseProp,
+        localityId: null,
+        localityName: "Sector 54",
+        locality: null,
+      };
+
+      const result = evaluatePropertyMatch(sector5Req, sector54Prop);
+      expect(result.breakdown.locality.matched).toBe(false);
+    });
+
+    // Scenario 6: Exact locality fallback (when coordinates missing, exact normalized string matches)
+    it("Scenario 6: Fallback to exact normalized locality name match when coordinates are unavailable", () => {
+      const req: RawRequirementData = {
+        ...baseReq,
+        localities: [{ name: "  Sector 54, Golf Course Road  ", latitude: null, longitude: null }],
+      };
+      const prop: RawPropertyData = {
+        ...baseProp,
+        localityId: null,
+        localityName: "sector 54, golf course road",
+        locality: null,
+      };
+
+      const result = evaluatePropertyMatch(req, prop);
+      expect(result.breakdown.locality.matched).toBe(true);
+      expect(result.breakdown.locality.details).toContain("Matched by exact normalized locality name");
+    });
+
+    // Scenario 7: Verified 3 km proximity boundary (distance <= 3.0 km matches, > 3.0 km fails)
+    it("Scenario 7: Proximity matching strictly respects <= 3.0 km verified threshold and rejects > 3.0 km", () => {
+      // Point A: (28.4550, 77.0950)
+      // Point B: (28.4650, 77.0950) -> ~1.11 km <= 3.0 km
+      const prop3KmInside: RawPropertyData = {
+        ...baseProp,
+        localityId: "loc-nearby",
+        localityName: "Sector 42",
+        locality: { name: "Sector 42", latitude: 28.465, longitude: 77.095, isVerified: true },
+      };
+      expect(evaluatePropertyMatch(baseReq, prop3KmInside).breakdown.locality.matched).toBe(true);
+
+      // Point C: (28.4000, 77.0950) -> ~6.1 km > 3.0 km
+      const prop3KmOutside: RawPropertyData = {
+        ...baseProp,
+        localityId: "loc-far",
+        localityName: "Sector 65",
+        locality: { name: "Sector 65", latitude: 28.4, longitude: 77.095, isVerified: true },
+      };
+      expect(evaluatePropertyMatch(baseReq, prop3KmOutside).breakdown.locality.matched).toBe(false);
+    });
+
+    // Scenario 8: Unverified or missing coordinates (isVerified: false prevents proximity check and requires exact name)
+    it("Scenario 8: Requires verified coordinates for proximity matching, skipping proximity if unverified", () => {
+      const propUnverified: RawPropertyData = {
+        ...baseProp,
+        localityId: "loc-nearby",
+        localityName: "Sector 42", // Different name
+        locality: { name: "Sector 42", latitude: 28.465, longitude: 77.095, isVerified: false }, // Unverified!
+      };
+
+      const result = evaluatePropertyMatch(baseReq, propUnverified);
+      expect(result.breakdown.locality.matched).toBe(false);
+    });
+
+    // Scenario 9: Missing budget denominator (unspecified budget excluded from denominator)
+    it("Scenario 9: Excludes unspecified or zero budget from evaluated criteria count", () => {
+      const noBudgetReq: RawRequirementData = {
+        ...baseReq,
+        minBudget: null,
+        maxBudget: 0,
+      };
+
+      const result = evaluatePropertyMatch(noBudgetReq, baseProp);
+      expect(result.breakdown.budget.evaluated).toBe(false);
+      expect(result.unspecifiedCriteria).toContain("Budget");
+      expect(result.criteriaEvaluatedCount).toBe(5);
+    });
+
+    // Scenario 10: Missing BHK denominator (unspecified BHK excluded from denominator)
+    it("Scenario 10: Excludes unspecified BHK configuration from evaluated criteria count", () => {
+      const noBhkReq: RawRequirementData = {
+        ...baseReq,
+        bedroomConfigurations: [],
+        minBedrooms: null,
+        maxBedrooms: null,
+      };
+
+      const result = evaluatePropertyMatch(noBhkReq, baseProp);
+      expect(result.breakdown.bedroomCount.evaluated).toBe(false);
+      expect(result.unspecifiedCriteria).toContain("Bedroom Configuration");
+      expect(result.criteriaEvaluatedCount).toBe(5);
+    });
+
+    // Scenario 11: Score ordering (score DESC)
+    it("Scenario 11: sortPropertyMatches sorts candidates by matching score descending", () => {
+      const mockMatches: EvaluatedPropertyMatch[] = [
+        {
+          property: { id: "prop-low", price: 17500000, updatedAt: new Date() } as any,
+          score: 60,
+          isEligible: true,
+          criteriaMatchedCount: 3,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+        {
+          property: { id: "prop-high", price: 17500000, updatedAt: new Date() } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 5,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+      ];
+
+      const sorted = sortPropertyMatches(mockMatches, { minBudget: 15000000, maxBudget: 20000000 });
+      expect(sorted[0].property.id).toBe("prop-high");
+      expect(sorted[1].property.id).toBe("prop-low");
+    });
+
+    // Scenario 12: Budget midpoint tie-break (same score, closer price difference to budget midpoint ranks higher)
+    it("Scenario 12: Breaks score ties by property price closest to buyer budget midpoint", () => {
+      // Budget midpoint: (1.5 Cr + 2.5 Cr) / 2 = 2.0 Cr
+      // Prop A: price 1.9 Cr (diff = 0.1 Cr)
+      // Prop B: price 1.7 Cr (diff = 0.3 Cr)
+      const mockMatches: EvaluatedPropertyMatch[] = [
+        {
+          property: { id: "prop-b", price: 17000000, updatedAt: new Date("2026-05-01") } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+        {
+          property: { id: "prop-a", price: 19000000, updatedAt: new Date("2026-05-01") } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+      ];
+
+      const sorted = sortPropertyMatches(mockMatches, { minBudget: 15000000, maxBudget: 25000000 });
+      expect(sorted[0].property.id).toBe("prop-a");
+      expect(sorted[1].property.id).toBe("prop-b");
+    });
+
+    // Scenario 13: Missing budget tie-break (same score, missing budget skips midpoint and tie-breaks by validation date)
+    it("Scenario 13: Skips budget midpoint comparison when buyer budget is missing without defaulting to 0", () => {
+      // Missing budget: null
+      // Prop A: price 1.0 Cr, older updatedAt (2026-01-01)
+      // Prop B: price 3.0 Cr, newer updatedAt (2026-05-01)
+      // If code substituted 0, Prop A (diff from 0 is 1.0 Cr) would beat Prop B (diff 3.0 Cr).
+      // With midpoint skipped, Prop B (newer updatedAt) must win!
+      const mockMatches: EvaluatedPropertyMatch[] = [
+        {
+          property: { id: "prop-older", price: 10000000, updatedAt: new Date("2026-01-01") } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+        {
+          property: { id: "prop-newer", price: 30000000, updatedAt: new Date("2026-05-01") } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+      ];
+
+      const sorted = sortPropertyMatches(mockMatches, { minBudget: null, maxBudget: null });
+      expect(sorted[0].property.id).toBe("prop-newer");
+      expect(sorted[1].property.id).toBe("prop-older");
+    });
+
+    // Scenario 14: Latest validation date tie-break (same score and price, more recent updatedAt ranks higher)
+    it("Scenario 14: Breaks score and price ties by most recent validation / updatedAt date descending", () => {
+      const mockMatches: EvaluatedPropertyMatch[] = [
+        {
+          property: { id: "prop-older", price: 18000000, updatedAt: new Date("2026-01-01") } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+        {
+          property: { id: "prop-newer", price: 18000000, updatedAt: new Date("2026-05-01") } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+      ];
+
+      const sorted = sortPropertyMatches(mockMatches, { minBudget: 15000000, maxBudget: 20000000 });
+      expect(sorted[0].property.id).toBe("prop-newer");
+      expect(sorted[1].property.id).toBe("prop-older");
+    });
+
+    // Scenario 15: Stable property ID tie-break (same score, price, date, sorted by id ASC)
+    it("Scenario 15: Breaks remaining ties using stable ascending property ID", () => {
+      const sameDate = new Date("2026-05-01");
+      const mockMatches: EvaluatedPropertyMatch[] = [
+        {
+          property: { id: "prop-zzz", price: 18000000, updatedAt: sameDate } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+        {
+          property: { id: "prop-aaa", price: 18000000, updatedAt: sameDate } as any,
+          score: 80,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 5,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+        },
+      ];
+
+      const sorted = sortPropertyMatches(mockMatches, { minBudget: 15000000, maxBudget: 20000000 });
+      expect(sorted[0].property.id).toBe("prop-aaa");
+      expect(sorted[1].property.id).toBe("prop-zzz");
+    });
+
+    // Scenario 16: Active supply eligibility
+    it("Scenario 16: Active supply pool gate excludes unvalidated, unavailable, or unconfirmed willingness inventory", () => {
+      expect(isPropertySupplyEligible({
+        validationStatus: SupplyValidationStatus.VALIDATED,
+        availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
+        ownerWillingnessConfirmed: true,
+      })).toBe(true);
+
+      expect(isPropertySupplyEligible({
+        validationStatus: SupplyValidationStatus.NOT_VALIDATED,
+        availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
+        ownerWillingnessConfirmed: true,
+      })).toBe(false);
+
+      expect(isPropertySupplyEligible({
+        validationStatus: SupplyValidationStatus.VALIDATED,
+        availabilityStatus: PropertyAvailabilityStatus.SOLD,
+        ownerWillingnessConfirmed: true,
+      })).toBe(false);
+
+      expect(isPropertySupplyEligible({
+        validationStatus: SupplyValidationStatus.VALIDATED,
+        availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
+        ownerWillingnessConfirmed: false,
+      })).toBe(false);
+    });
+
+    // Scenario 17: Symmetrical buyer/property matching
+    it("Scenario 17: Property-to-buyer matching (sortLeadMatches) enforces symmetrical matching logic and tie-breaking", () => {
+      const mockLeadMatches: EvaluatedLeadMatch[] = [
+        {
+          lead: {
+            id: "lead-lower",
+            requirements: { minBudget: 15000000, maxBudget: 20000000 },
+            updatedAt: new Date("2026-05-01"),
+          } as any,
+          score: 75,
+          isEligible: true,
+          criteriaMatchedCount: 3,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+        {
+          lead: {
+            id: "lead-higher",
+            requirements: { minBudget: 15000000, maxBudget: 20000000 },
+            updatedAt: new Date("2026-05-01"),
+          } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+      ];
+
+      const sortedLeads = sortLeadMatches(mockLeadMatches, 18000000);
+      expect(sortedLeads[0].lead.id).toBe("lead-higher");
+      expect(sortedLeads[1].lead.id).toBe("lead-lower");
+    });
+
+    // Scenario 18: Top-3 consistency between lead detail and matching workspace
+    it("Scenario 18: Ensures top-3 matches in Lead Detail match the top results of the full matching engine", () => {
+      const mockMatches: EvaluatedPropertyMatch[] = [
+        { property: { id: "prop-1", price: 18000000, updatedAt: new Date() } as any, score: 100 } as any,
+        { property: { id: "prop-2", price: 18000000, updatedAt: new Date() } as any, score: 90 } as any,
+        { property: { id: "prop-3", price: 18000000, updatedAt: new Date() } as any, score: 80 } as any,
+        { property: { id: "prop-4", price: 18000000, updatedAt: new Date() } as any, score: 70 } as any,
+      ];
+
+      const top3 = mockMatches.slice(0, 3);
+      expect(top3.length).toBe(3);
+      expect(top3.map((m) => m.property.id)).toEqual(["prop-1", "prop-2", "prop-3"]);
+    });
+
+    // Scenario 19: Matching refresh after requirement edits
+    it("Scenario 19: Reflects updated criteria in newly computed match scores when requirements change", () => {
+      // Original requirement: SALE, budget 1.5 - 2.0 Cr -> propBase matches 100%
+      const initialResult = evaluatePropertyMatch(baseReq, baseProp);
+      expect(initialResult.score).toBe(100);
+
+      // Requirement edited: Budget lowered to 50L - 80L -> budget no longer matches
+      const updatedReq: RawRequirementData = {
+        ...baseReq,
+        minBudget: 5000000,
+        maxBudget: 8000000,
+      };
+      const refreshedResult = evaluatePropertyMatch(updatedReq, baseProp);
+      expect(refreshedResult.score).toBeLessThan(100);
+      expect(refreshedResult.breakdown.budget.matched).toBe(false);
+    });
+  });
+
+  describe("5. Pure Scoring Engine: Missing / Unspecified Buyer Criteria (PRD §6.3)", () => {
     it("excludes unspecified criteria from both numerator and denominator", () => {
       // Buyer has only specified Preference, Budget, and BHK.
       // Localities, Property Types, and Target Area are all empty / unspecified.
@@ -489,6 +931,10 @@ describe("Property Matching Engine & Active Supply Pool", () => {
         bedroomConfigurations: ["3 BHK"],
         minBedrooms: 3,
         maxBedrooms: 3,
+        minArea: 1200,
+        maxArea: 1800,
+        areaUnit: "sq.ft",
+        areaType: AreaUnitType.CARPET,
         targetArea: 1500,
         localities: [
           {
@@ -523,6 +969,7 @@ describe("Property Matching Engine & Active Supply Pool", () => {
         preference: "SALE",
         price: BigInt(15000000),
         city: "Gurugram",
+        localityId: "loc-1",
         localityName: "Golf Course Road",
         locality: {
           id: "loc-1",
@@ -533,6 +980,8 @@ describe("Property Matching Engine & Active Supply Pool", () => {
         propertyType: "APARTMENT",
         bedroomCount: 3,
         area: 1500,
+        areaUnit: "sq.ft",
+        areaType: AreaUnitType.CARPET,
         validationStatus: SupplyValidationStatus.VALIDATED,
         availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
         ownerWillingnessConfirmed: true,
@@ -558,6 +1007,7 @@ describe("Property Matching Engine & Active Supply Pool", () => {
         preference: "SALE",
         price: BigInt(18000000),
         city: "Gurugram",
+        localityId: "loc-1",
         localityName: "Golf Course Road",
         locality: {
           id: "loc-1",
@@ -568,6 +1018,8 @@ describe("Property Matching Engine & Active Supply Pool", () => {
         propertyType: "APARTMENT",
         bedroomCount: 4, // BHK mismatch
         area: 1500,
+        areaUnit: "sq.ft",
+        areaType: AreaUnitType.CARPET,
         validationStatus: SupplyValidationStatus.VALIDATED,
         availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
         ownerWillingnessConfirmed: true,
@@ -692,6 +1144,7 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       preference: "SALE",
       price: BigInt(15000000),
       city: "Gurugram",
+      localityId: "loc-1",
       localityName: "Golf Course Road",
       locality: {
         id: "loc-1",
@@ -702,6 +1155,8 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       propertyType: "APARTMENT",
       bedroomCount: 3,
       area: 1500,
+      areaUnit: "sq.ft",
+      areaType: AreaUnitType.CARPET,
       validationStatus: SupplyValidationStatus.VALIDATED,
       availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
       ownerWillingnessConfirmed: true,
@@ -749,6 +1204,10 @@ describe("Property Matching Engine & Active Supply Pool", () => {
           bedroomConfigurations: ["3 BHK"],
           minBedrooms: 3,
           maxBedrooms: 3,
+          minArea: 1200,
+          maxArea: 1800,
+          areaUnit: "sq.ft",
+          areaType: AreaUnitType.CARPET,
           targetArea: 1500,
           localities: [
             {

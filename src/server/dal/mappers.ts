@@ -281,6 +281,8 @@ export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
       }) || [],
     isFieldVerified: p.isFieldVerified ?? false,
     fieldVerifiedAt: p.fieldVerifiedAt ? p.fieldVerifiedAt.toISOString() : null,
+    createdAt: p.createdAt ? p.createdAt.toISOString() : undefined,
+    updatedAt: p.updatedAt ? p.updatedAt.toISOString() : undefined,
   };
 }
 
@@ -433,6 +435,8 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
       })) || [],
     topMatches: [],
     siteVisitHistory: [],
+    createdAt: l.createdAt ? l.createdAt.toISOString() : undefined,
+    updatedAt: l.updatedAt ? l.updatedAt.toISOString() : undefined,
   };
 }
 

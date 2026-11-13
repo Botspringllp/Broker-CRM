@@ -88,6 +88,8 @@ export interface Property {
   assignmentHistory?: PropertyAssignment[];
   isFieldVerified?: boolean;
   fieldVerifiedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface PropertyVerificationView {
@@ -199,6 +201,8 @@ export interface Lead {
     outcome: string;
     agentName: string;
   }[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface LeadEnquiryItem {

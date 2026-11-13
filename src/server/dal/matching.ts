@@ -6,6 +6,7 @@ import {
   SupplyValidationStatus,
   PropertyAvailabilityStatus,
   LeadStatus,
+  Prisma,
 } from "@prisma/client";
 import { getLeadById } from "./leads";
 import { mapPrismaPropertyToView, mapPrismaLeadToView } from "./mappers";
@@ -15,21 +16,29 @@ import {
   MatchCriteriaBreakdown,
   RawRequirementData,
   RawPropertyData,
+  LocalityItem,
   calculateHaversineDistanceKm,
   isPropertySupplyEligible,
   evaluatePropertyMatch,
+  normalizeLocalityName,
+  areCoordinatesVerified,
+  normalizeAreaUnit,
 } from "@/lib/matching-engine";
 
 export {
   calculateHaversineDistanceKm,
   isPropertySupplyEligible,
   evaluatePropertyMatch,
+  normalizeLocalityName,
+  areCoordinatesVerified,
+  normalizeAreaUnit,
 };
 export type {
   CriterionResult,
   MatchCriteriaBreakdown,
   RawRequirementData,
   RawPropertyData,
+  LocalityItem,
 };
 
 export interface EvaluatedPropertyMatch {
@@ -66,13 +75,126 @@ export interface PropertyMatchingResults {
 }
 
 /**
+ * Deterministic multi-level tie-breaking for matching properties (Decision M6):
+ * 1. Matching score descending
+ * 2. If buyer budget exists, property price closest to the buyer budget midpoint
+ * 3. Most recently validated eligible property (validation date / updatedAt DESC)
+ * 4. Stable property ID ascending
+ */
+export function sortPropertyMatches(
+  matches: EvaluatedPropertyMatch[],
+  requirement: { minBudget?: number | null; maxBudget?: number | null }
+): EvaluatedPropertyMatch[] {
+  const hasMinB = requirement.minBudget != null && Number(requirement.minBudget) > 0;
+  const hasMaxB = requirement.maxBudget != null && Number(requirement.maxBudget) > 0;
+  let budgetMidpoint: number | null = null;
+
+  if (hasMinB && hasMaxB) {
+    budgetMidpoint = (Number(requirement.minBudget) + Number(requirement.maxBudget)) / 2;
+  } else if (hasMinB) {
+    budgetMidpoint = Number(requirement.minBudget);
+  } else if (hasMaxB) {
+    budgetMidpoint = Number(requirement.maxBudget);
+  }
+
+  return matches.sort((a, b) => {
+    // 1. Matching score descending
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+
+    // 2. Property price closest to buyer budget midpoint (only if buyer budget exists)
+    if (budgetMidpoint !== null) {
+      const diffA = Math.abs(a.property.price - budgetMidpoint);
+      const diffB = Math.abs(b.property.price - budgetMidpoint);
+      if (diffA !== diffB) {
+        return diffA - diffB;
+      }
+    }
+
+    // 3. Most recently validated eligible property
+    const timeA = a.property.updatedAt ? new Date(a.property.updatedAt).getTime() : 0;
+    const timeB = b.property.updatedAt ? new Date(b.property.updatedAt).getTime() : 0;
+    if (timeB !== timeA) {
+      return timeB - timeA;
+    }
+
+    // 4. Stable property ID ascending
+    return a.property.id.localeCompare(b.property.id);
+  });
+}
+
+/**
+ * Deterministic multi-level tie-breaking for matching leads (symmetrical to M6):
+ * 1. Matching score descending
+ * 2. If buyer budget exists, price closest to the property price
+ * 3. Most recently created/updated lead
+ * 4. Stable lead ID ascending
+ */
+export function sortLeadMatches(
+  matches: EvaluatedLeadMatch[],
+  propertyPrice: number
+): EvaluatedLeadMatch[] {
+  return matches.sort((a, b) => {
+    // 1. Matching score descending
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+
+    // 2. Buyer budget midpoint closest to property price (if buyer budget exists)
+    const reqA = a.lead.requirements;
+    const reqB = b.lead.requirements;
+
+    const midA =
+      reqA && reqA.minBudget > 0 && reqA.maxBudget > 0
+        ? (reqA.minBudget + reqA.maxBudget) / 2
+        : reqA?.minBudget && reqA.minBudget > 0
+        ? reqA.minBudget
+        : reqA?.maxBudget && reqA.maxBudget > 0
+        ? reqA.maxBudget
+        : null;
+
+    const midB =
+      reqB && reqB.minBudget > 0 && reqB.maxBudget > 0
+        ? (reqB.minBudget + reqB.maxBudget) / 2
+        : reqB?.minBudget && reqB.minBudget > 0
+        ? reqB.minBudget
+        : reqB?.maxBudget && reqB.maxBudget > 0
+        ? reqB.maxBudget
+        : null;
+
+    if (midA !== null && midB !== null) {
+      const diffA = Math.abs(midA - propertyPrice);
+      const diffB = Math.abs(midB - propertyPrice);
+      if (diffA !== diffB) {
+        return diffA - diffB;
+      }
+    } else if (midA !== null && midB === null) {
+      return -1;
+    } else if (midA === null && midB !== null) {
+      return 1;
+    }
+
+    // 3. Most recently updated/created lead
+    const timeA = a.lead.createdAt ? new Date(a.lead.createdAt).getTime() : 0;
+    const timeB = b.lead.createdAt ? new Date(b.lead.createdAt).getTime() : 0;
+    if (timeB !== timeA) {
+      return timeB - timeA;
+    }
+
+    // 4. Stable lead ID ascending
+    return a.lead.id.localeCompare(b.lead.id);
+  });
+}
+
+/**
  * Retrieves matching active supply properties for a given lead.
  * Strictly enforces:
  * - Tenant isolation.
  * - Telecaller scoping (assigned lead only, unless demand:view_all).
  * - "matching:view_matches" permission.
  * - Active supply pool eligibility (VALIDATED, AVAILABLE, willing owner).
- * - PRD deterministic scoring and ranking.
+ * - PRD deterministic scoring and ranking (M1-M6).
  */
 export async function getMatchingPropertiesForLead(
   context: TenantContext,
@@ -106,49 +228,42 @@ export async function getMatchingPropertiesForLead(
     },
   });
 
-  // Query eligible active supply properties matching the hard preference gate
+  const propertyWhere: Prisma.PropertyWhereInput = {
+    tenantId: context.tenantId, // STRICT TENANT ENFORCEMENT
+    isActiveSupply: true,
+    validationStatus: SupplyValidationStatus.VALIDATED,
+    availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
+    ownerWillingnessConfirmed: true,
+    preference: lead.requirement.preference, // HARD GATE IN DATABASE
+  };
+
+  // Safe city candidate filter where requirement city is specified
+  if (lead.requirement.city?.trim()) {
+    propertyWhere.city = { equals: lead.requirement.city.trim(), mode: "insensitive" };
+  }
+
+  // Query eligible active supply properties (lean includes: avoid heavy media/callLogs/assignments/siteVisitItems)
   const eligibleProperties = await prisma.property.findMany({
-    where: {
-      tenantId: context.tenantId, // STRICT TENANT ENFORCEMENT
-      isActiveSupply: true,
-      validationStatus: SupplyValidationStatus.VALIDATED,
-      availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
-      ownerWillingnessConfirmed: true,
-      preference: lead.requirement.preference, // HARD GATE IN DATABASE
-    },
+    where: propertyWhere,
     include: {
       locality: true,
       keyHolders: true,
-      media: true,
-      callLogs: {
-        orderBy: { calledAt: "desc" },
-        include: { caller: true },
-      },
-      assignments: {
-        include: {
-          assignedUser: true,
-          assignedByUser: true,
-        },
-      },
-      siteVisitItems: {
-        include: {
-          siteVisit: true,
-        },
-      },
     },
     orderBy: { createdAt: "desc" },
   });
 
   const buyerLocalities = lead.requirement.localities.map((l) => ({
+    id: l.locality?.id || l.localityId || null,
     name: l.locality?.name || "",
     latitude: l.locality?.latitude ? Number(l.locality.latitude) : null,
     longitude: l.locality?.longitude ? Number(l.locality.longitude) : null,
+    isVerified: true,
   }));
 
   const reqData: RawRequirementData = {
     preference: lead.requirement.preference,
-    minBudget: Number(lead.requirement.minBudget),
-    maxBudget: Number(lead.requirement.maxBudget),
+    minBudget: lead.requirement.minBudget ? Number(lead.requirement.minBudget) : null,
+    maxBudget: lead.requirement.maxBudget ? Number(lead.requirement.maxBudget) : null,
     city: lead.requirement.city,
     localities: buyerLocalities,
     propertyTypes: lead.requirement.propertyTypes,
@@ -156,6 +271,10 @@ export async function getMatchingPropertiesForLead(
     minBedrooms: lead.requirement.minBedrooms,
     maxBedrooms: lead.requirement.maxBedrooms,
     targetArea: lead.requirement.targetArea ? Number(lead.requirement.targetArea) : null,
+    minArea: lead.requirement.minArea ? Number(lead.requirement.minArea) : null,
+    maxArea: lead.requirement.maxArea ? Number(lead.requirement.maxArea) : null,
+    areaUnit: lead.requirement.areaUnit || "sq.ft",
+    areaType: lead.requirement.areaType || null,
   };
 
   const matches: EvaluatedPropertyMatch[] = [];
@@ -166,21 +285,28 @@ export async function getMatchingPropertiesForLead(
       preference: prop.preference,
       price: Number(prop.price),
       city: prop.city,
+      localityId: prop.localityId || prop.locality?.id || null,
       localityName: prop.localityName,
       locality: prop.locality
         ? {
+            id: prop.locality.id,
             name: prop.locality.name,
             latitude: prop.locality.latitude ? Number(prop.locality.latitude) : null,
             longitude: prop.locality.longitude ? Number(prop.locality.longitude) : null,
+            isVerified: true,
           }
         : null,
       propertyType: prop.propertyType,
       bedroomCount: prop.bedroomCount,
       area: Number(prop.area),
+      areaUnit: "sq.ft",
+      areaType: prop.areaType,
       validationStatus: prop.validationStatus,
       availabilityStatus: prop.availabilityStatus,
       ownerWillingnessConfirmed: prop.ownerWillingnessConfirmed,
       isActiveSupply: prop.isActiveSupply,
+      validatedAt: prop.updatedAt,
+      updatedAt: prop.updatedAt,
     };
 
     const evaluation = evaluatePropertyMatch(reqData, rawProp);
@@ -198,8 +324,8 @@ export async function getMatchingPropertiesForLead(
     }
   }
 
-  // Sort by score descending
-  matches.sort((a, b) => b.score - a.score);
+  // Deterministic sorting via M6 approved multi-tier tie-breaking
+  sortPropertyMatches(matches, reqData);
 
   return {
     lead: mapPrismaLeadToView(lead),
@@ -214,7 +340,7 @@ export async function getMatchingPropertiesForLead(
  * - Tenant isolation.
  * - Property existence and eligibility.
  * - "matching:view_matches" permission.
- * - Identical PRD scoring logic.
+ * - Identical PRD scoring logic (symmetrical matching).
  */
 export async function getMatchingLeadsForProperty(
   context: TenantContext,
@@ -265,15 +391,18 @@ export async function getMatchingLeadsForProperty(
     },
   });
 
+  const leadWhere: Prisma.LeadWhereInput = {
+    tenantId: context.tenantId, // STRICT TENANT ENFORCEMENT
+    status: LeadStatus.ACTIVE,
+    requirement: {
+      preference: property.preference, // HARD GATE
+      ...(property.city?.trim() ? { city: { equals: property.city.trim(), mode: "insensitive" } } : {}),
+    },
+  };
+
   // Query all active leads in the tenant matching the transaction preference hard gate
   const activeLeads = await prisma.lead.findMany({
-    where: {
-      tenantId: context.tenantId, // STRICT TENANT ENFORCEMENT
-      status: LeadStatus.ACTIVE,
-      requirement: {
-        preference: property.preference, // HARD GATE
-      },
-    },
+    where: leadWhere,
     include: {
       requirement: {
         include: {
@@ -308,21 +437,28 @@ export async function getMatchingLeadsForProperty(
     preference: property.preference,
     price: Number(property.price),
     city: property.city,
+    localityId: property.localityId || property.locality?.id || null,
     localityName: property.localityName,
     locality: property.locality
       ? {
+          id: property.locality.id,
           name: property.locality.name,
           latitude: property.locality.latitude ? Number(property.locality.latitude) : null,
           longitude: property.locality.longitude ? Number(property.locality.longitude) : null,
+          isVerified: true,
         }
       : null,
     propertyType: property.propertyType,
     bedroomCount: property.bedroomCount,
     area: Number(property.area),
+    areaUnit: "sq.ft",
+    areaType: property.areaType,
     validationStatus: property.validationStatus,
     availabilityStatus: property.availabilityStatus,
     ownerWillingnessConfirmed: property.ownerWillingnessConfirmed,
     isActiveSupply: property.isActiveSupply,
+    validatedAt: property.updatedAt,
+    updatedAt: property.updatedAt,
   };
 
   const matches: EvaluatedLeadMatch[] = [];
@@ -331,15 +467,17 @@ export async function getMatchingLeadsForProperty(
     if (!dbLead.requirement) continue;
 
     const buyerLocalities = dbLead.requirement.localities.map((l) => ({
+      id: l.locality?.id || l.localityId || null,
       name: l.locality?.name || "",
       latitude: l.locality?.latitude ? Number(l.locality.latitude) : null,
       longitude: l.locality?.longitude ? Number(l.locality.longitude) : null,
+      isVerified: true,
     }));
 
     const reqData: RawRequirementData = {
       preference: dbLead.requirement.preference,
-      minBudget: Number(dbLead.requirement.minBudget),
-      maxBudget: Number(dbLead.requirement.maxBudget),
+      minBudget: dbLead.requirement.minBudget ? Number(dbLead.requirement.minBudget) : null,
+      maxBudget: dbLead.requirement.maxBudget ? Number(dbLead.requirement.maxBudget) : null,
       city: dbLead.requirement.city,
       localities: buyerLocalities,
       propertyTypes: dbLead.requirement.propertyTypes,
@@ -347,6 +485,10 @@ export async function getMatchingLeadsForProperty(
       minBedrooms: dbLead.requirement.minBedrooms,
       maxBedrooms: dbLead.requirement.maxBedrooms,
       targetArea: dbLead.requirement.targetArea ? Number(dbLead.requirement.targetArea) : null,
+      minArea: dbLead.requirement.minArea ? Number(dbLead.requirement.minArea) : null,
+      maxArea: dbLead.requirement.maxArea ? Number(dbLead.requirement.maxArea) : null,
+      areaUnit: dbLead.requirement.areaUnit || "sq.ft",
+      areaType: dbLead.requirement.areaType || null,
     };
 
     const evaluation = evaluatePropertyMatch(reqData, rawProp);
@@ -370,8 +512,8 @@ export async function getMatchingLeadsForProperty(
     }
   }
 
-  // Sort by score descending
-  matches.sort((a, b) => b.score - a.score);
+  // Deterministic symmetrical sorting
+  sortLeadMatches(matches, Number(property.price));
 
   return {
     property: mapPrismaPropertyToView(property as unknown as Parameters<typeof mapPrismaPropertyToView>[0]),

@@ -17,7 +17,10 @@ import {
   getLeadChangeHistoryAction,
   markLeadDoNotContactAction,
 } from "../actions";
-import { sharePropertyDetailsWithLeadAction } from "@/app/matching/actions";
+import {
+  sharePropertyDetailsWithLeadAction,
+  getMatchingPropertiesForLeadAction,
+} from "@/app/matching/actions";
 import { formatIndianCurrency } from "@/server/dal/mappers";
 
 interface EligibleTelecaller {
@@ -103,7 +106,8 @@ export function LeadDetailsClient({
 }: LeadDetailsClientProps) {
   // Main Lead & Related States
   const [lead, setLead] = useState<Lead>(initialLead);
-  const [topMatches] = useState<EvaluatedPropertyMatch[]>(initialTopMatches);
+  const [topMatches, setTopMatches] = useState<EvaluatedPropertyMatch[]>(initialTopMatches);
+  const [isRefreshingMatches, setIsRefreshingMatches] = useState(false);
   const [siteVisits] = useState<SiteVisit[]>(initialSiteVisits);
   const [changeHistory, setChangeHistory] = useState<LeadChangeLogItem[]>(initialChangeHistory);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -466,6 +470,21 @@ export function LeadDetailsClient({
       setLead(res.lead);
       setIsEditModalOpen(false);
       setToastMessage("Requirements updated successfully.");
+
+      // Refresh top 3 matching properties dynamically (DV-11)
+      if (canViewMatches) {
+        setIsRefreshingMatches(true);
+        try {
+          const matchRes = await getMatchingPropertiesForLeadAction(lead.id);
+          if (matchRes.success && matchRes.data) {
+            setTopMatches(matchRes.data.matches.slice(0, 3));
+          }
+        } catch {
+          // Keep existing matches if refresh fails
+        } finally {
+          setIsRefreshingMatches(false);
+        }
+      }
 
       // Refresh change history
       if (canViewChangelog) {
@@ -1295,6 +1314,11 @@ export function LeadDetailsClient({
                   <div>
                     <h3 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
                       <span>🎯</span> Top 3 Matching Properties
+                      {isRefreshingMatches && (
+                        <span className="text-[10px] lowercase text-crm-primary font-normal">
+                          (updating matches...)
+                        </span>
+                      )}
                     </h3>
                     <span className="text-[10px] text-crm-muted">PRD §5.7 Active Supply</span>
                   </div>
