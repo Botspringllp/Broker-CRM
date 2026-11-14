@@ -8,6 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "test:db:verify": "npx tsx scripts/verify-test-db.ts",
+    "test:db:setup": "npx tsx scripts/setup-test-db.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "postinstall": "prisma generate",
     "db:migrate:deploy": "prisma migrate deploy",
     "bootstrap:superadmin": "npx tsx scripts/bootstrap-superadmin.ts"
