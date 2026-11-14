@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { PrismaClient, UserRole, TransactionType, PropertyType, ScheduleChangeType, CallTargetType } from "@prisma/client";
+import { PrismaClient, UserRole, TransactionType, PropertyType, SiteVisitStatus, ScheduleChangeType, CallTargetType } from "@prisma/client";
 import { getTestPrisma, disconnectTestDb } from "./helpers/db-client";
-import { createTestTenant, createTestUser, createTestProperty, TestTenantFixture } from "./helpers/tenant-helper";
+import { createTestTenant, createTestUser, TestTenantFixture } from "./helpers/tenant-helper";
 
 describe("Live PostgreSQL Integration: Constraints & Referential Integrity", () => {
   let prisma: PrismaClient;
@@ -127,17 +127,21 @@ describe("Live PostgreSQL Integration: Constraints & Referential Integrity", () 
       },
     });
 
-    const property = await createTestProperty(prisma, fixtureA.tenant.id, {
-      societyName: "Green Valley",
-      localityName: "Sector 54",
-      city: "Gurugram",
-      preference: TransactionType.SALE,
-      propertyType: PropertyType.APARTMENT,
-      bedroomCount: 2,
-      price: 15000000,
-      area: 1200,
-      ownerName: "Owner A",
-      ownerMobile: "9877766655",
+    const property = await prisma.property.create({
+      data: {
+        tenantId: fixtureA.tenant.id,
+        title: "2 BHK Residency",
+        societyName: "Green Valley",
+        localityName: "Sector 54",
+        city: "Gurugram",
+        preference: TransactionType.SALE,
+        propertyType: PropertyType.APARTMENT,
+        bedroomCount: 2,
+        price: 15000000,
+        area: 1200,
+        ownerName: "Owner A",
+        ownerMobile: "9877766655",
+      },
     });
 
     const visit = await prisma.siteVisit.create({
@@ -234,17 +238,21 @@ describe("Live PostgreSQL Integration: Constraints & Referential Integrity", () 
       },
     });
 
-    const property = await createTestProperty(prisma, fixtureA.tenant.id, {
-      societyName: "Skyline Heights",
-      localityName: "Golf Course",
-      city: "Gurugram",
-      preference: TransactionType.SALE,
-      propertyType: PropertyType.APARTMENT,
-      bedroomCount: 3,
-      price: 35000000,
-      area: 2500,
-      ownerName: "Owner B",
-      ownerMobile: "9888877766",
+    const property = await prisma.property.create({
+      data: {
+        tenantId: fixtureA.tenant.id,
+        title: "3 BHK Penthouse",
+        societyName: "Skyline Heights",
+        localityName: "Golf Course",
+        city: "Gurugram",
+        preference: TransactionType.SALE,
+        propertyType: PropertyType.APARTMENT,
+        bedroomCount: 3,
+        price: 35000000,
+        area: 2500,
+        ownerName: "Owner B",
+        ownerMobile: "9888877766",
+      },
     });
 
     const visit = await prisma.siteVisit.create({
@@ -280,7 +288,7 @@ describe("Live PostgreSQL Integration: Constraints & Referential Integrity", () 
         tenantId: fixtureA.tenant.id,
         siteVisitId: visit.id,
         previousScheduledAt: visit.scheduledDate,
-        changeType: ScheduleChangeType.RESCHEDULED,
+        changeType: ScheduleChangeType.CREATED,
         reason: "Initial tour schedule",
         recordedByUserId: salesAgent.id,
       },
