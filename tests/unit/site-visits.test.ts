@@ -47,6 +47,7 @@ import {
   createSiteVisit,
   recordVisitItemOutcome,
   confirmSiteVisit,
+  confirmSiteVisitOwnerAvailability,
   getSiteVisitById,
   listSiteVisits,
   rescheduleSiteVisit,
@@ -175,7 +176,7 @@ describe("Site Visits DAL & Workflow Management", () => {
         tenantId: "tenant-broker-1",
         leadId: "lead-1",
         assignedSalesAgentId: "user-sales-1",
-        status: SiteVisitStatus.CONFIRMED,
+        status: SiteVisitStatus.TENTATIVE_AWAITING_OWNER,
         items: [
           { id: "item-1", propertyId: "prop-1", visitOrder: 1 },
           { id: "item-2", propertyId: "prop-2", visitOrder: 2 },
@@ -197,7 +198,7 @@ describe("Site Visits DAL & Workflow Management", () => {
             tenantId: "tenant-broker-1",
             leadId: "lead-1",
             assignedSalesAgentId: "user-sales-1",
-            status: SiteVisitStatus.CONFIRMED,
+            status: SiteVisitStatus.TENTATIVE_AWAITING_OWNER,
             items: {
               create: [
                 expect.objectContaining({ propertyId: "prop-1", visitOrder: 1 }),
@@ -357,6 +358,137 @@ describe("Site Visits DAL & Workflow Management", () => {
         })
       ).rejects.toThrow(ForbiddenError);
     });
+
+    it("does not prematurely complete or update the parent visit status when recording an item outcome", async () => {
+      vi.mocked(prisma.siteVisitItem.findFirst).mockResolvedValueOnce({
+        id: "item-1",
+        tenantId: "tenant-broker-1",
+        siteVisitId: "visit-1",
+        siteVisit: {
+          id: "visit-1",
+          assignedSalesAgentId: "user-sales-1",
+          status: SiteVisitStatus.CONFIRMED,
+        },
+      } as any);
+
+      vi.mocked(prisma.siteVisitItem.update).mockResolvedValueOnce({
+        id: "item-1",
+        status: SiteVisitItemOutcome.VISIT_DONE,
+      } as any);
+
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.CONFIRMED,
+      } as any);
+
+      await recordVisitItemOutcome(salesAgentContext, "item-1", {
+        status: SiteVisitItemOutcome.VISIT_DONE,
+        agentTextNotes: "Showing finished",
+      });
+
+      // Item was updated
+      expect(prisma.siteVisitItem.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "item-1" },
+          data: expect.objectContaining({
+            status: SiteVisitItemOutcome.VISIT_DONE,
+          }),
+        })
+      );
+
+      // Parent visit update was NOT called (no premature completion)
+      expect(prisma.siteVisit.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("confirmSiteVisitOwnerAvailability", () => {
+    it("authorized telecaller confirms owner availability transitioning tentative visit to confirmed", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.TENTATIVE_AWAITING_OWNER,
+      } as any);
+
+      vi.mocked(prisma.siteVisit.update).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.CONFIRMED,
+      } as any);
+
+      const confirmedVisit = await confirmSiteVisitOwnerAvailability(telecallerContext, "visit-1");
+
+      expect(prisma.siteVisit.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: "visit-1",
+            tenantId: "tenant-broker-1",
+          },
+        })
+      );
+
+      expect(prisma.siteVisit.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "visit-1" },
+          data: {
+            status: SiteVisitStatus.CONFIRMED,
+          },
+        })
+      );
+    });
+
+    it("rejects confirmation if visit is already confirmed", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.CONFIRMED,
+      } as any);
+
+      await expect(
+        confirmSiteVisitOwnerAvailability(telecallerContext, "visit-1")
+      ).rejects.toThrow(ValidationError);
+      expect(prisma.siteVisit.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects confirmation of cancelled or completed visits", async () => {
+      // Cancelled
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.CANCELLED,
+      } as any);
+
+      await expect(
+        confirmSiteVisitOwnerAvailability(telecallerContext, "visit-1")
+      ).rejects.toThrow(ValidationError);
+
+      // Completed
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.COMPLETED,
+      } as any);
+
+      await expect(
+        confirmSiteVisitOwnerAvailability(telecallerContext, "visit-1")
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects cross-tenant owner confirmation", async () => {
+      // Not found in caller's tenant
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce(null);
+
+      await expect(
+        confirmSiteVisitOwnerAvailability(telecallerContext, "visit-cross-tenant")
+      ).rejects.toThrow(NotFoundError);
+      expect(prisma.siteVisit.update).not.toHaveBeenCalled();
+    });
+
+    it("denies unauthorized users (e.g. Sales Agent) from confirming owner availability", async () => {
+      await expect(
+        confirmSiteVisitOwnerAvailability(salesAgentContext, "visit-1")
+      ).rejects.toThrow(ForbiddenError);
+    });
   });
 
   describe("confirmSiteVisit", () => {
@@ -365,6 +497,10 @@ describe("Site Visits DAL & Workflow Management", () => {
         id: "visit-1",
         tenantId: "tenant-broker-1",
         status: SiteVisitStatus.CONFIRMED,
+        items: [
+          { id: "item-1", status: SiteVisitItemOutcome.VISIT_DONE },
+          { id: "item-2", status: SiteVisitItemOutcome.VISIT_NOT_DONE },
+        ],
       } as any);
 
       vi.mocked(prisma.siteVisit.update).mockResolvedValueOnce({
@@ -385,6 +521,76 @@ describe("Site Visits DAL & Workflow Management", () => {
           }),
         })
       );
+    });
+
+    it("rejects finalizing a visit that is still awaiting owner availability confirmation", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.TENTATIVE_AWAITING_OWNER,
+        items: [{ id: "item-1", status: SiteVisitItemOutcome.VISIT_DONE }],
+      } as any);
+
+      await expect(
+        confirmSiteVisit(telecallerContext, "visit-1")
+      ).rejects.toThrow(ValidationError);
+      expect(prisma.siteVisit.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects finalizing a visit if any itinerary item remains pending outcome", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.CONFIRMED,
+        items: [
+          { id: "item-1", status: SiteVisitItemOutcome.VISIT_DONE },
+          { id: "item-2", status: SiteVisitItemOutcome.PENDING }, // PENDING!
+        ],
+      } as any);
+
+      await expect(
+        confirmSiteVisit(telecallerContext, "visit-1")
+      ).rejects.toThrow(ValidationError);
+      expect(prisma.siteVisit.update).not.toHaveBeenCalled();
+    });
+
+    it("rejects finalizing a cancelled or already completed site visit", async () => {
+      // Cancelled
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.CANCELLED,
+        items: [{ id: "item-1", status: SiteVisitItemOutcome.VISIT_DONE }],
+      } as any);
+
+      await expect(
+        confirmSiteVisit(telecallerContext, "visit-1")
+      ).rejects.toThrow(ValidationError);
+
+      // Completed
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.COMPLETED,
+        items: [{ id: "item-1", status: SiteVisitItemOutcome.VISIT_DONE }],
+      } as any);
+
+      await expect(
+        confirmSiteVisit(telecallerContext, "visit-1")
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects finalizing a site visit with no itinerary items", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+        status: SiteVisitStatus.CONFIRMED,
+        items: [],
+      } as any);
+
+      await expect(
+        confirmSiteVisit(telecallerContext, "visit-1")
+      ).rejects.toThrow(ValidationError);
     });
 
     it("denies unprivileged roles from finalizing visits", async () => {

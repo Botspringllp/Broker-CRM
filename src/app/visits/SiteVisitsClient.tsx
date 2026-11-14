@@ -12,6 +12,7 @@ import {
   createSiteVisitAction,
   recordVisitItemOutcomeAction,
   confirmSiteVisitAction,
+  confirmSiteVisitOwnerAvailabilityAction,
 } from "./actions";
 
 interface AvailableLead {
@@ -66,6 +67,9 @@ export function SiteVisitsClient({
 
   // Telecaller Final Confirmation state
   const [isConfirming, setIsConfirming] = useState(false);
+
+  // Owner Availability Confirmation state
+  const [isConfirmingOwner, setIsConfirmingOwner] = useState(false);
 
   // Schedule Visit Modal state
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
@@ -162,6 +166,30 @@ export function SiteVisitsClient({
       setToastMessage(err instanceof Error ? err.message : "Failed to confirm site visit.");
     } finally {
       setIsConfirming(false);
+    }
+  };
+
+  const handleConfirmOwnerAvailability = async () => {
+    if (!selectedVisit || isConfirmingOwner) return;
+
+    setIsConfirmingOwner(true);
+    try {
+      const res = await confirmSiteVisitOwnerAvailabilityAction({
+        visitId: selectedVisit.id,
+      });
+
+      if (!res.success) {
+        setToastMessage(`Failed to confirm owner availability: ${res.error}`);
+        return;
+      }
+
+      setVisits((prev) => prev.map((v) => (v.id === res.visit.id ? res.visit : v)));
+      setSelectedVisit(res.visit);
+      setToastMessage("Owner availability confirmed! Site visit status is now Confirmed.");
+    } catch (err: unknown) {
+      setToastMessage(err instanceof Error ? err.message : "Failed to confirm owner availability.");
+    } finally {
+      setIsConfirmingOwner(false);
     }
   };
 
@@ -440,7 +468,7 @@ export function SiteVisitsClient({
                   </div>
                 )}
 
-                {/* Final Confirmation Banner */}
+                {/* Lifecycle & Confirmation Banner */}
                 {selectedVisit.status === "Completed" ? (
                   <div className="p-3.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-center justify-between">
                     <div>
@@ -453,22 +481,88 @@ export function SiteVisitsClient({
                       Finalized
                     </span>
                   </div>
-                ) : (
-                  <div className="p-3.5 rounded-md bg-stone-50 border border-crm-border flex items-center justify-between">
+                ) : selectedVisit.status === "Cancelled" ? (
+                  <div className="p-3.5 rounded-md bg-red-50 border border-red-200 text-red-900 flex items-center justify-between">
                     <div>
-                      <div className="font-semibold text-crm-text">Telecaller Review & Finalisation (PRD §8.3)</div>
-                      <div className="text-[11px] text-crm-muted">
-                        A visit is not final until the telecaller reviews agent updates and confirms.
+                      <div className="font-bold">✕ Site Visit Cancelled</div>
+                      <div className="text-[11px] text-red-700 mt-0.5">
+                        {selectedVisit.cancellationReason
+                          ? `Reason: ${selectedVisit.cancellationReason}`
+                          : "This visit was cancelled."}
                       </div>
                     </div>
+                    <span className="px-2 py-0.5 rounded text-[10px] bg-red-200/60 text-red-900 font-bold uppercase">
+                      Cancelled
+                    </span>
+                  </div>
+                ) : selectedVisit.status === "Tentative - Awaiting Owner" ? (
+                  <div className="p-3.5 rounded-md bg-amber-50 border border-amber-300 text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <div className="font-bold flex items-center gap-1.5 text-xs">
+                        <span>⏳ Awaiting Owner Availability Confirmation (PRD §7.1)</span>
+                      </div>
+                      <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                        Buyer agreed to tentative schedule. Telecaller must confirm availability with property owner / key-holder before dispatching field agent.
+                      </p>
+                    </div>
                     <button
-                      onClick={handleTelecallerFinalConfirm}
-                      disabled={isConfirming}
-                      className="px-3 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs disabled:opacity-50"
+                      onClick={handleConfirmOwnerAvailability}
+                      disabled={isConfirmingOwner}
+                      className="px-3.5 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs disabled:opacity-50 shrink-0 cursor-pointer"
                     >
-                      {isConfirming ? "Confirming..." : "Confirm Outcome"}
+                      {isConfirmingOwner ? "Confirming..." : "✓ Confirm Owner Availability"}
                     </button>
                   </div>
+                ) : (
+                  (() => {
+                    const pendingCount = selectedVisit.items.filter((item) => item.status === "Pending").length;
+                    const canFinalize = pendingCount === 0 && selectedVisit.items.length > 0;
+
+                    if (!canFinalize) {
+                      return (
+                        <div className="p-3.5 rounded-md bg-stone-50 border border-crm-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div>
+                            <div className="font-semibold text-crm-text flex items-center gap-1.5">
+                              <span>Telecaller Review & Finalisation (PRD §7.3)</span>
+                              <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                {pendingCount} Pending Outcome{pendingCount > 1 ? "s" : ""}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-crm-muted mt-0.5">
+                              Field sales agent must record outcomes for all {selectedVisit.items.length} properties before telecaller can finalize this visit.
+                            </div>
+                          </div>
+                          <button
+                            disabled={true}
+                            title={`${pendingCount} property itinerary item(s) still pending outcome recording`}
+                            className="px-3 py-1.5 text-xs font-bold rounded bg-stone-200 text-stone-500 cursor-not-allowed shadow-2xs shrink-0"
+                          >
+                            Awaiting Item Outcomes
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="p-3.5 rounded-md bg-emerald-50/60 border border-emerald-300 text-emerald-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <div className="font-semibold text-emerald-900 flex items-center gap-1.5">
+                            <span>✓ All Property Outcomes Recorded</span>
+                          </div>
+                          <div className="text-[11px] text-emerald-800 mt-0.5">
+                            Review field agent feedback and notes, then finalize this visit itinerary.
+                          </div>
+                        </div>
+                        <button
+                          onClick={handleTelecallerFinalConfirm}
+                          disabled={isConfirming}
+                          className="px-3.5 py-1.5 text-xs font-bold rounded bg-crm-success text-white hover:bg-emerald-700 shadow-2xs disabled:opacity-50 shrink-0 cursor-pointer"
+                        >
+                          {isConfirming ? "Finalizing..." : "✓ Finalize Visit"}
+                        </button>
+                      </div>
+                    );
+                  })()
                 )}
 
                 {/* Multi-Property Visit Itinerary Line Items */}

@@ -279,7 +279,7 @@ export async function createSiteVisit(context: TenantContext, input: CreateSiteV
       leadId: input.leadId,
       assignedSalesAgentId: input.assignedSalesAgentId,
       scheduledDate: schedDate,
-      status: SiteVisitStatus.CONFIRMED,
+      status: SiteVisitStatus.TENTATIVE_AWAITING_OWNER,
       notes: input.notes?.trim() || null,
       items: {
         create: input.propertyIds.map((propId, idx) => ({
@@ -347,8 +347,61 @@ export async function recordVisitItemOutcome(
 }
 
 /**
- * Confirms and finalizes a completed site visit itinerary.
+ * Confirms property owner/key-holder availability for a tentative site visit (PRD §7.1).
+ * Transitions visit status strictly from TENTATIVE_AWAITING_OWNER to CONFIRMED.
+ * Only authorized users with 'visits:schedule' permission in the tenant can perform this.
+ */
+export async function confirmSiteVisitOwnerAvailability(
+  context: TenantContext,
+  visitId: string
+) {
+  assertPermission(context, "visits:schedule");
+
+  if (!visitId?.trim()) {
+    throw new ValidationError("Visit ID is required.");
+  }
+
+  const visit = await getSiteVisitById(context, visitId.trim());
+
+  if (visit.status !== SiteVisitStatus.TENTATIVE_AWAITING_OWNER) {
+    if (visit.status === SiteVisitStatus.CONFIRMED) {
+      throw new ValidationError(
+        "Owner availability has already been confirmed for this site visit."
+      );
+    }
+    if (visit.status === SiteVisitStatus.CANCELLED) {
+      throw new ValidationError(
+        "Cannot confirm owner availability for a cancelled site visit."
+      );
+    }
+    if (visit.status === SiteVisitStatus.COMPLETED) {
+      throw new ValidationError(
+        "Cannot confirm owner availability for an already completed site visit."
+      );
+    }
+    throw new ValidationError(
+      `Cannot confirm owner availability for a site visit with status '${visit.status}'. Only tentative visits awaiting owner confirmation can be confirmed.`
+    );
+  }
+
+  return prisma.siteVisit.update({
+    where: { id: visit.id },
+    data: {
+      status: SiteVisitStatus.CONFIRMED,
+    },
+    include: FULL_SITE_VISIT_INCLUDE,
+  });
+}
+
+export const confirmOwnerAvailability = confirmSiteVisitOwnerAvailability;
+
+/**
+ * Confirms and finalizes a completed site visit itinerary after telecaller review (PRD §7.3).
  * Authorized for Telecallers, Team Leaders, and Broker Owners.
+ * Requires:
+ * - Visit must NOT be tentative awaiting owner confirmation.
+ * - Visit must NOT be cancelled or already completed.
+ * - All itinerary items must have outcomes recorded (no item remains PENDING).
  */
 export async function confirmSiteVisit(
   context: TenantContext,
@@ -357,7 +410,39 @@ export async function confirmSiteVisit(
 ) {
   assertPermission(context, "visits:confirm_final");
 
-  const visit = await getSiteVisitById(context, visitId);
+  if (!visitId?.trim()) {
+    throw new ValidationError("Visit ID is required.");
+  }
+
+  const visit = await getSiteVisitById(context, visitId.trim());
+
+  if (visit.status === SiteVisitStatus.TENTATIVE_AWAITING_OWNER) {
+    throw new ValidationError(
+      "Cannot finalize a site visit that is still awaiting owner availability confirmation. Owner availability must be confirmed first."
+    );
+  }
+
+  if (visit.status === SiteVisitStatus.CANCELLED) {
+    throw new ValidationError("Cannot finalize a cancelled site visit.");
+  }
+
+  if (visit.status === SiteVisitStatus.COMPLETED) {
+    throw new ValidationError("Site visit has already been finalized and completed.");
+  }
+
+  const items = visit.items || [];
+  if (items.length === 0) {
+    throw new ValidationError("Cannot finalize a site visit with no itinerary items.");
+  }
+
+  const pendingItems = items.filter(
+    (item) => item.status === SiteVisitItemOutcome.PENDING
+  );
+  if (pendingItems.length > 0) {
+    throw new ValidationError(
+      `Cannot finalize site visit. ${pendingItems.length} property itinerary item(s) are still pending outcome recording.`
+    );
+  }
 
   return prisma.siteVisit.update({
     where: { id: visit.id },

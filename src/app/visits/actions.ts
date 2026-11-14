@@ -5,6 +5,7 @@ import {
   createSiteVisit,
   recordVisitItemOutcome,
   confirmSiteVisit,
+  confirmSiteVisitOwnerAvailability,
   getSiteVisitById,
   rescheduleSiteVisit,
   reassignSiteVisitAgent,
@@ -59,6 +60,30 @@ export async function recordVisitItemOutcomeAction(input: {
   }
 }
 
+export async function confirmSiteVisitOwnerAvailabilityAction(input: {
+  visitId: string;
+}) {
+  try {
+    const context = await requireTenantContext();
+    const updated = await confirmSiteVisitOwnerAvailability(context, input.visitId);
+    revalidatePath("/visits");
+    revalidatePath(`/visits/${input.visitId}`);
+    revalidatePath("/");
+    return {
+      success: true as const,
+      visit: mapPrismaSiteVisitToView(updated),
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to confirm owner availability.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
+export const confirmOwnerAvailabilityAction = confirmSiteVisitOwnerAvailabilityAction;
+
 export async function confirmSiteVisitAction(input: {
   visitId: string;
   notes?: string;
@@ -67,6 +92,7 @@ export async function confirmSiteVisitAction(input: {
     const context = await requireTenantContext();
     const updatedVisit = await confirmSiteVisit(context, input.visitId, input.notes);
     revalidatePath("/visits");
+    revalidatePath(`/visits/${input.visitId}`);
     revalidatePath("/");
     return {
       success: true as const,

@@ -52,15 +52,19 @@ export function StatusBadge({ status }: { status: string }) {
     case "Available":
     case "Visit Done":
     case "Confirmed":
+    case "CONFIRMED":
     case "Completed":
+    case "COMPLETED":
       variant = "success";
       break;
 
     case "In Validation":
     case "Call Back":
     case "Pending":
+    case "PENDING":
     case "Tentative":
     case "Tentative - Awaiting Owner":
+    case "TENTATIVE_AWAITING_OWNER":
     case "Due":
       variant = "warning";
       break;
@@ -70,9 +74,16 @@ export function StatusBadge({ status }: { status: string }) {
     case "Sold":
     case "Rented":
     case "Cancelled":
+    case "CANCELLED":
     case "Visit Not Done":
+    case "VISIT_NOT_DONE":
     case "Buyer / Tenant Says Not Looking":
       variant = "error";
+      break;
+
+    case "Rescheduled":
+    case "RESCHEDULED":
+      variant = "accent";
       break;
 
     case "Connected":

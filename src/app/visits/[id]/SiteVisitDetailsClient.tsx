@@ -13,6 +13,7 @@ import {
   reassignSiteVisitAgentAction,
   cancelSiteVisitAction,
   confirmSiteVisitAction,
+  confirmSiteVisitOwnerAvailabilityAction,
   recordVisitItemOutcomeAction,
 } from "../actions";
 
@@ -75,6 +76,7 @@ export function SiteVisitDetailsClient({
 
   // Confirm visit state
   const [isConfirming, setIsConfirming] = useState(false);
+  const [isConfirmingOwner, setIsConfirmingOwner] = useState(false);
 
   // Handle Reschedule
   const handleRescheduleSubmit = async (e: React.FormEvent) => {
@@ -196,6 +198,27 @@ export function SiteVisitDetailsClient({
     }
   };
 
+  // Handle Confirm Owner Availability
+  const handleConfirmOwnerAvailability = async () => {
+    setIsConfirmingOwner(true);
+    try {
+      const res = await confirmSiteVisitOwnerAvailabilityAction({
+        visitId: visit.id,
+      });
+
+      if (res.success && res.visit) {
+        setVisit(res.visit);
+        setToastMessage("Owner availability confirmed! Site visit status is now Confirmed.");
+      } else {
+        setToastMessage(res.error || "Failed to confirm owner availability.");
+      }
+    } catch (err: unknown) {
+      setToastMessage(err instanceof Error ? err.message : "Error confirming owner availability.");
+    } finally {
+      setIsConfirmingOwner(false);
+    }
+  };
+
   // Open Record Outcome Modal
   const handleOpenOutcomeModal = (item: SiteVisitItem) => {
     setSelectedItemForOutcome(item);
@@ -240,6 +263,9 @@ export function SiteVisitDetailsClient({
 
   const isCompleted = visit.status === "Completed";
   const isCancelled = visit.status === "Cancelled";
+  const isTentative = visit.status === "Tentative - Awaiting Owner";
+  const pendingItemsCount = visit.items.filter((item) => item.status === "Pending").length;
+  const allItemsRecorded = pendingItemsCount === 0 && visit.items.length > 0;
 
   return (
     <AppShell>
@@ -293,7 +319,7 @@ export function SiteVisitDetailsClient({
 
             {/* Action Buttons Toolbar */}
             <div className="flex items-center gap-2 flex-wrap">
-              {canReschedule && !isCompleted && (
+              {canReschedule && !isCompleted && !isCancelled && (
                 <button
                   type="button"
                   onClick={() => setIsRescheduleOpen(true)}
@@ -313,12 +339,34 @@ export function SiteVisitDetailsClient({
                 </button>
               )}
 
-              {canConfirm && !isCompleted && !isCancelled && (
+              {/* Owner Availability Confirmation Button for Tentative visits */}
+              {canReschedule && isTentative && !isCancelled && !isCompleted && (
+                <button
+                  type="button"
+                  onClick={handleConfirmOwnerAvailability}
+                  disabled={isConfirmingOwner}
+                  className="px-3.5 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {isConfirmingOwner ? "Confirming..." : "✓ Confirm Owner Availability"}
+                </button>
+              )}
+
+              {/* Complete Visit Button (Only for Confirmed/Rescheduled visits with all items recorded) */}
+              {canConfirm && !isCompleted && !isCancelled && !isTentative && (
                 <button
                   type="button"
                   onClick={handleConfirmVisit}
-                  disabled={isConfirming}
-                  className="px-3.5 py-1.5 text-xs font-bold rounded bg-crm-success text-white hover:bg-emerald-700 shadow-2xs cursor-pointer disabled:opacity-50"
+                  disabled={isConfirming || !allItemsRecorded}
+                  title={
+                    !allItemsRecorded
+                      ? `Cannot finalize: ${pendingItemsCount} property item(s) still pending outcome`
+                      : "Finalize and complete this site visit"
+                  }
+                  className={`px-3.5 py-1.5 text-xs font-bold rounded shadow-2xs ${
+                    allItemsRecorded
+                      ? "bg-crm-success text-white hover:bg-emerald-700 cursor-pointer"
+                      : "bg-stone-200 text-stone-500 cursor-not-allowed"
+                  } disabled:opacity-60`}
                 >
                   {isConfirming ? "Completing..." : "✓ Complete Visit"}
                 </button>
@@ -341,6 +389,66 @@ export function SiteVisitDetailsClient({
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
           {/* LEFT 2 COLUMNS: Itinerary & Participant Overview */}
           <div className="lg:col-span-2 space-y-6">
+            {/* Status Information Banners */}
+            {isTentative && (
+              <div className="p-4 rounded-lg bg-amber-50 border border-amber-300 text-amber-900 space-y-1 shadow-2xs">
+                <div className="font-bold flex items-center gap-1.5 text-xs">
+                  <span>⏳ Awaiting Owner Availability Confirmation (PRD §7.1)</span>
+                </div>
+                <p className="text-[11px] text-amber-800 leading-relaxed">
+                  The buyer has agreed to this tentative slot. The telecaller must confirm availability with the property owner / key-holder before dispatching the field sales agent. Use the &quot;Confirm Owner Availability&quot; button above once confirmed.
+                </p>
+              </div>
+            )}
+
+            {!isTentative && !isCompleted && !isCancelled && !allItemsRecorded && (
+              <div className="p-4 rounded-lg bg-stone-50 border border-crm-border text-crm-text space-y-1 shadow-2xs">
+                <div className="font-semibold flex items-center gap-1.5 text-xs">
+                  <span>ℹ️ Telecaller Review & Finalisation Blocked (PRD §7.3)</span>
+                  <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-amber-100 text-amber-800 border border-amber-200">
+                    {pendingItemsCount} Pending
+                  </span>
+                </div>
+                <p className="text-[11px] text-crm-muted leading-relaxed">
+                  Field sales agent must record outcomes (Visit Done or Visit Not Done) for all {visit.items.length} properties in this itinerary before telecaller can finalize this visit.
+                </p>
+              </div>
+            )}
+
+            {!isTentative && !isCompleted && !isCancelled && allItemsRecorded && (
+              <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-900 space-y-1 shadow-2xs">
+                <div className="font-semibold flex items-center gap-1.5 text-xs">
+                  <span>✓ All Property Outcomes Recorded</span>
+                </div>
+                <p className="text-[11px] text-emerald-800 leading-relaxed">
+                  Review agent field notes and buyer feedback below. When satisfied, click &quot;Complete Visit&quot; above to finalize the tour.
+                </p>
+              </div>
+            )}
+
+            {isCompleted && (
+              <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-center justify-between shadow-2xs">
+                <div>
+                  <div className="font-bold text-xs">✓ Visit Finalised & Confirmed by Telecaller</div>
+                  <div className="text-[11px] text-emerald-800 mt-0.5">
+                    Confirmed by {visit.telecallerConfirmedBy || "Telecaller"} {visit.telecallerConfirmedAt ? `on ${visit.telecallerConfirmedAt}` : ""}
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-200/60 font-bold uppercase">
+                  Finalized
+                </span>
+              </div>
+            )}
+
+            {isCancelled && (
+              <div className="p-4 rounded-lg bg-red-50 border border-red-200 text-red-900 space-y-1 shadow-2xs">
+                <div className="font-bold text-xs">✕ Site Visit Cancelled</div>
+                <div className="text-[11px] text-red-800">
+                  {visit.cancellationReason ? `Reason: ${visit.cancellationReason}` : "This visit was cancelled."}
+                </div>
+              </div>
+            )}
+
             {/* Card: Tour Itinerary */}
             <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
               <div className="px-5 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
