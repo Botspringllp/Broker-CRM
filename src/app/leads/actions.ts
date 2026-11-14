@@ -30,6 +30,12 @@ import { hasPermission } from "@/server/permissions";
 import { mapPrismaLeadToView, formatIndianDateTime } from "@/server/dal/mappers";
 import { revalidatePath } from "next/cache";
 import { LeadStatus } from "@prisma/client";
+import {
+  generateLeadImportTemplate,
+  parseAndPreviewLeadImportFile,
+  executeBulkLeadImport,
+  BulkLeadImportExecutionInput,
+} from "@/server/dal/lead-bulk-import";
 
 export async function createLeadAction(data: CreateLeadData) {
   try {
@@ -407,4 +413,71 @@ export async function getManagerDemandMetricsAction() {
     };
   }
 }
+
+export async function downloadLeadImportTemplateAction() {
+  try {
+    await requireTenantContext();
+    const buffer = await generateLeadImportTemplate();
+    return {
+      success: true as const,
+      base64: buffer.toString("base64"),
+      filename: "lead_import_template.csv",
+      mimeType: "text/csv",
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to generate lead import template.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
+export async function previewBulkLeadUploadAction(formData: FormData) {
+  try {
+    const context = await requireTenantContext();
+    const file = formData.get("file");
+    if (!file || !(file instanceof File)) {
+      return {
+        success: false as const,
+        error: "No file was selected for upload.",
+      };
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    const preview = await parseAndPreviewLeadImportFile(context, buffer, file.name);
+    return {
+      success: true as const,
+      preview,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to parse lead import file.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
+export async function confirmBulkLeadUploadAction(input: BulkLeadImportExecutionInput) {
+  try {
+    const context = await requireTenantContext();
+    const result = await executeBulkLeadImport(context, input);
+    revalidatePath("/leads");
+    revalidatePath("/");
+    return {
+      success: true as const,
+      result,
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to execute bulk lead import.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
 

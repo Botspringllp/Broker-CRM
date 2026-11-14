@@ -14,7 +14,29 @@ import {
   updateLeadStatusAction,
   assignLeadAction,
   assignLeadRoundRobinAction,
+  downloadLeadImportTemplateAction,
+  previewBulkLeadUploadAction,
+  confirmBulkLeadUploadAction,
 } from "./actions";
+import type { BulkLeadImportPreview, BulkLeadImportResult } from "@/server/dal/lead-bulk-import";
+
+function downloadBase64File(base64: string, filename: string, mimeType: string) {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 interface EligibleTelecallerOption {
   id: string;
@@ -87,6 +109,126 @@ export function LeadValidationClient({
   >(["APARTMENT"]);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Bulk Lead Upload Modal state
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
+  const [bulkStep, setBulkStep] = useState<"UPLOAD" | "ANALYZE" | "PREVIEW" | "SUMMARY">("UPLOAD");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const [bulkPreview, setBulkPreview] = useState<BulkLeadImportPreview | null>(null);
+  const [skipInvalidRows, setSkipInvalidRows] = useState(true);
+  const [bulkResult, setBulkResult] = useState<BulkLeadImportResult | null>(null);
+  const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
+
+  const handleOpenBulkModal = () => {
+    setBulkStep("UPLOAD");
+    setSelectedFile(null);
+    setIsAnalyzing(false);
+    setIsImporting(false);
+    setBulkError(null);
+    setBulkPreview(null);
+    setSkipInvalidRows(true);
+    setBulkResult(null);
+    setIsBulkModalOpen(true);
+  };
+
+  const handleDownloadTemplate = async () => {
+    setIsDownloadingTemplate(true);
+    setBulkError(null);
+    try {
+      const res = await downloadLeadImportTemplateAction();
+      if (!res.success || !res.base64) {
+        setBulkError(res.error || "Failed to download template.");
+        return;
+      }
+      downloadBase64File(res.base64, res.filename, res.mimeType);
+      setToastMessage("Lead CSV template downloaded.");
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : "Failed to download template.");
+    } finally {
+      setIsDownloadingTemplate(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      if (!file.name.toLowerCase().endsWith(".csv")) {
+        setBulkError("Unsupported file format. Please upload a .csv file.");
+        setSelectedFile(null);
+        return;
+      }
+      setSelectedFile(file);
+      setBulkError(null);
+    }
+  };
+
+  const handleAnalyzeFile = async () => {
+    if (!selectedFile) {
+      setBulkError("Please choose a CSV file to analyze.");
+      return;
+    }
+
+    setBulkStep("ANALYZE");
+    setIsAnalyzing(true);
+    setBulkError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      const res = await previewBulkLeadUploadAction(formData);
+
+      if (!res.success || !res.preview) {
+        setBulkError(res.error || "Failed to analyze file.");
+        setBulkStep("UPLOAD");
+        return;
+      }
+
+      if (res.preview.hasHeadersError) {
+        setBulkError(res.preview.headersErrorMessage || "Invalid CSV column structure.");
+        setBulkStep("UPLOAD");
+        return;
+      }
+
+      setBulkPreview(res.preview);
+      setBulkStep("PREVIEW");
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : "Failed to analyze CSV file.");
+      setBulkStep("UPLOAD");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!bulkPreview || bulkPreview.rows.length === 0) return;
+
+    setIsImporting(true);
+    setBulkError(null);
+
+    try {
+      const res = await confirmBulkLeadUploadAction({
+        rows: bulkPreview.rows,
+        skipInvalidRows,
+      });
+
+      if (!res.success || !res.result) {
+        setBulkError(res.error || "Failed to execute bulk lead import.");
+        setIsImporting(false);
+        return;
+      }
+
+      setBulkResult(res.result);
+      setBulkStep("SUMMARY");
+      setToastMessage(res.result.message);
+    } catch (err) {
+      setBulkError(err instanceof Error ? err.message : "Failed to execute bulk lead import.");
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   // Extract distinct telecallers for the filter
   const distinctTelecallers = useMemo(() => {
@@ -493,6 +635,13 @@ export function LeadValidationClient({
               title="Webhook API integration scheduled for Phase 2"
             >
               📥 Ingest Portal Leads
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenBulkModal}
+              className="px-3.5 py-1.5 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs cursor-pointer flex items-center gap-1.5"
+            >
+              📊 Bulk Upload Leads
             </button>
             <Link
               href="/leads/new"
@@ -1640,6 +1789,346 @@ export function LeadValidationClient({
               </button>
             </div>
           </div>
+        </div>
+      </Modal>
+
+      {/* Bulk Lead Upload Modal (CSV Only - PRD §5.2, DEC-Q18) */}
+      <Modal
+        isOpen={isBulkModalOpen}
+        onClose={() => {
+          if (!isImporting && !isAnalyzing) {
+            setIsBulkModalOpen(false);
+            setBulkStep("UPLOAD");
+            setSelectedFile(null);
+            setBulkPreview(null);
+            setBulkResult(null);
+            setBulkError(null);
+          }
+        }}
+        title="Bulk Upload Leads (CSV)"
+        subtitle="Import multiple buyer and tenant demand inquiries into the CRM calling queue at once."
+      >
+        <div className="space-y-4 text-xs">
+          {bulkError && (
+            <div className="p-3 text-xs rounded bg-red-50 border border-red-200 text-red-700 font-medium whitespace-pre-line">
+              {bulkError}
+            </div>
+          )}
+
+          {/* Step 1: UPLOAD */}
+          {bulkStep === "UPLOAD" && (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-stone-50 border border-crm-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold text-crm-text">Download Official Lead CSV Template</div>
+                  <div className="text-[11px] text-crm-muted">
+                    Pre-formatted with all 20 required and optional columns and sample data (PRD §5.2).
+                  </div>
+                </div>
+                <div className="shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleDownloadTemplate}
+                    disabled={isDownloadingTemplate}
+                    className="px-3 py-1.5 rounded bg-white border border-crm-border text-crm-text font-semibold hover:bg-stone-50 shadow-2xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                  >
+                    <span>📥</span>
+                    {isDownloadingTemplate ? "Downloading..." : "Download CSV Template"}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-crm-text mb-1">
+                  Select CSV File (Max 5 MB, up to 500 records)
+                </label>
+                <div className="border-2 border-dashed border-crm-border rounded-lg p-6 text-center hover:bg-stone-50/50 transition-colors">
+                  <input
+                    type="file"
+                    id="lead-bulk-file-input"
+                    accept=".csv,text/csv"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  <label
+                    htmlFor="lead-bulk-file-input"
+                    className="cursor-pointer flex flex-col items-center justify-center space-y-2"
+                  >
+                    <span className="text-2xl">📄</span>
+                    <span className="font-semibold text-crm-primary hover:underline">
+                      {selectedFile ? selectedFile.name : "Click to browse or drop CSV file here"}
+                    </span>
+                    <span className="text-[11px] text-crm-muted">
+                      Strict predefined CSV format only. Excel (.xlsx) is not supported for leads.
+                    </span>
+                  </label>
+                </div>
+                {selectedFile && (
+                  <div className="mt-2 text-[11px] text-crm-muted flex items-center justify-between">
+                    <span>
+                      Selected: <strong>{selectedFile.name}</strong> ({(selectedFile.size / 1024).toFixed(1)} KB)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFile(null)}
+                      className="text-red-600 hover:underline"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2 border-t border-crm-border">
+                <button
+                  type="button"
+                  onClick={() => setIsBulkModalOpen(false)}
+                  className="px-3 py-1.5 rounded border border-crm-border text-crm-muted hover:text-crm-text cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={!selectedFile || isAnalyzing}
+                  onClick={handleAnalyzeFile}
+                  className="px-4 py-1.5 rounded bg-crm-primary text-white font-semibold hover:bg-crm-primary-hover shadow-2xs disabled:opacity-50 cursor-pointer"
+                >
+                  {isAnalyzing ? "Analyzing File..." : "Analyze & Preview Rows →"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: ANALYZE */}
+          {bulkStep === "ANALYZE" && (
+            <div className="py-12 text-center space-y-3">
+              <div className="w-8 h-8 border-3 border-crm-primary border-t-transparent rounded-full animate-spin mx-auto" />
+              <div className="font-semibold text-crm-text text-sm">
+                Analyzing CSV structure, validating Indian phone numbers, and checking for existing buyers...
+              </div>
+              <div className="text-crm-muted text-xs">
+                Verifying column headers, normalizing mobile numbers, and preparing preview grid.
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: PREVIEW */}
+          {bulkStep === "PREVIEW" && bulkPreview && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
+                <div className="p-2 rounded border border-crm-border bg-stone-50">
+                  <div className="text-[10px] uppercase font-bold text-crm-muted">Total Rows</div>
+                  <div className="text-base font-bold text-crm-text mt-0.5">{bulkPreview.totalRows}</div>
+                </div>
+                <div className="p-2 rounded border border-emerald-200 bg-emerald-50">
+                  <div className="text-[10px] uppercase font-bold text-emerald-800">New Leads</div>
+                  <div className="text-base font-bold text-emerald-700 mt-0.5">{bulkPreview.newLeadCount}</div>
+                </div>
+                <div className="p-2 rounded border border-indigo-200 bg-indigo-50">
+                  <div className="text-[10px] uppercase font-bold text-indigo-800">Existing Buyers</div>
+                  <div className="text-base font-bold text-indigo-700 mt-0.5">{bulkPreview.existingBuyerCount}</div>
+                </div>
+                <div className="p-2 rounded border border-amber-200 bg-amber-50">
+                  <div className="text-[10px] uppercase font-bold text-amber-800">File Duplicates</div>
+                  <div className="text-base font-bold text-amber-700 mt-0.5">{bulkPreview.internalDuplicateCount}</div>
+                </div>
+                <div className="p-2 rounded border border-red-200 bg-red-50">
+                  <div className="text-[10px] uppercase font-bold text-red-800">Errors</div>
+                  <div className="text-base font-bold text-red-700 mt-0.5">{bulkPreview.errorCount}</div>
+                </div>
+              </div>
+
+              {/* Skip invalid rows option */}
+              <div className="p-2.5 rounded bg-stone-50 border border-crm-border flex items-center justify-between text-xs">
+                <label className="flex items-center gap-2 font-medium text-crm-text cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={skipInvalidRows}
+                    onChange={(e) => setSkipInvalidRows(e.target.checked)}
+                    className="rounded border-crm-border text-crm-primary focus:ring-crm-primary"
+                  />
+                  <span>Skip invalid rows and proceed with importing valid records</span>
+                </label>
+                <span className="text-[11px] text-crm-muted">
+                  {skipInvalidRows
+                    ? `${bulkPreview.validCount} valid row(s) will be processed`
+                    : "All rows must be valid to import"}
+                </span>
+              </div>
+
+              {/* Data Preview Table */}
+              <div className="border border-crm-border rounded-lg overflow-hidden">
+                <div className="max-h-64 overflow-y-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead className="bg-stone-50 text-[10px] font-bold text-crm-muted uppercase sticky top-0 border-b border-crm-border">
+                      <tr>
+                        <th className="p-2">Row</th>
+                        <th className="p-2">Prospect</th>
+                        <th className="p-2">Phone</th>
+                        <th className="p-2">Source</th>
+                        <th className="p-2">Preference / BHK</th>
+                        <th className="p-2">Budget</th>
+                        <th className="p-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-crm-border text-[11px]">
+                      {bulkPreview.rows.map((row) => (
+                        <tr
+                          key={row.rowNumber}
+                          className={
+                            !row.isValid
+                              ? "bg-red-50/40"
+                              : row.isInternalDuplicate
+                              ? "bg-amber-50/30"
+                              : row.isExistingBuyer
+                              ? "bg-indigo-50/20"
+                              : "hover:bg-stone-50/50"
+                          }
+                        >
+                          <td className="p-2 font-mono text-[10px] text-crm-muted">#{row.rowNumber}</td>
+                          <td className="p-2 font-semibold text-crm-text">
+                            {row.name || <span className="text-red-500 italic">Missing</span>}
+                          </td>
+                          <td className="p-2 font-mono">{row.primaryPhone}</td>
+                          <td className="p-2 text-crm-muted">{row.source}</td>
+                          <td className="p-2">
+                            {row.preference} • {row.bedroomConfigurations.join(", ")}
+                          </td>
+                          <td className="p-2">
+                            ₹{(row.minBudget / 100000).toFixed(1)}L - ₹{(row.maxBudget / 100000).toFixed(1)}L
+                          </td>
+                          <td className="p-2">
+                            {!row.isValid ? (
+                              <div className="space-y-0.5">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800 border border-red-300">
+                                  Invalid
+                                </span>
+                                <div className="text-[10px] text-red-700">{row.errors.join("; ")}</div>
+                              </div>
+                            ) : row.isInternalDuplicate ? (
+                              <div className="space-y-0.5">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                  File Duplicate
+                                </span>
+                                <div className="text-[10px] text-amber-700">{row.duplicateWarning}</div>
+                              </div>
+                            ) : row.isExistingBuyer ? (
+                              <div className="space-y-0.5">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-300">
+                                  Existing Buyer
+                                </span>
+                                <div className="text-[10px] text-indigo-700">{row.duplicateWarning}</div>
+                              </div>
+                            ) : (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                Valid New Lead
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-between border-t border-crm-border">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBulkStep("UPLOAD");
+                    setBulkPreview(null);
+                  }}
+                  className="px-3 py-1.5 rounded border border-crm-border text-crm-muted hover:text-crm-text cursor-pointer"
+                >
+                  ← Choose Another File
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsBulkModalOpen(false)}
+                    className="px-3 py-1.5 rounded border border-crm-border text-crm-muted hover:text-crm-text cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      isImporting ||
+                      bulkPreview.validCount === 0 ||
+                      (!skipInvalidRows && bulkPreview.errorCount > 0)
+                    }
+                    onClick={handleConfirmImport}
+                    className="px-4 py-1.5 rounded bg-crm-primary text-white font-semibold hover:bg-crm-primary-hover shadow-2xs disabled:opacity-50 cursor-pointer"
+                  >
+                    {isImporting ? "Importing..." : "Confirm & Import Valid Leads →"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: SUMMARY */}
+          {bulkStep === "SUMMARY" && bulkResult && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-start gap-3">
+                <span className="text-xl">✓</span>
+                <div>
+                  <div className="font-bold text-sm">Lead Import Complete</div>
+                  <div className="text-xs text-emerald-800 mt-0.5">{bulkResult.message}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                <div className="p-2 rounded border border-crm-border bg-stone-50">
+                  <div className="text-[10px] text-crm-muted uppercase font-bold">Total Processed</div>
+                  <div className="text-sm font-bold text-crm-text mt-0.5">{bulkResult.totalProcessed}</div>
+                </div>
+                <div className="p-2 rounded border border-emerald-200 bg-emerald-50">
+                  <div className="text-[10px] text-emerald-800 uppercase font-bold">New Leads Created</div>
+                  <div className="text-sm font-bold text-emerald-700 mt-0.5">{bulkResult.newLeadsCreated}</div>
+                </div>
+                <div className="p-2 rounded border border-indigo-200 bg-indigo-50">
+                  <div className="text-[10px] text-indigo-800 uppercase font-bold">Enquiries Linked</div>
+                  <div className="text-sm font-bold text-indigo-700 mt-0.5">{bulkResult.enquiriesAttached}</div>
+                </div>
+                <div className="p-2 rounded border border-amber-200 bg-amber-50">
+                  <div className="text-[10px] text-amber-800 uppercase font-bold">Skipped / Failed</div>
+                  <div className="text-sm font-bold text-amber-700 mt-0.5">{bulkResult.skippedCount}</div>
+                </div>
+              </div>
+
+              {bulkResult.failures.length > 0 && (
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 space-y-1.5">
+                  <div className="font-semibold text-red-800 text-xs">Unimported Rows:</div>
+                  <ul className="text-[11px] text-red-700 list-disc list-inside space-y-0.5 max-h-32 overflow-y-auto">
+                    {bulkResult.failures.map((f) => (
+                      <li key={f.rowNumber}>
+                        Row {f.rowNumber}: {f.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="pt-2 flex justify-end border-t border-crm-border">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsBulkModalOpen(false);
+                    setBulkStep("UPLOAD");
+                    setSelectedFile(null);
+                    setBulkPreview(null);
+                    setBulkResult(null);
+                    window.location.reload();
+                  }}
+                  className="px-4 py-1.5 rounded bg-crm-primary text-white font-semibold hover:bg-crm-primary-hover shadow-2xs cursor-pointer"
+                >
+                  Done & Refresh Leads Table
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </Modal>
 
