@@ -8,8 +8,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { SiteVisit, SiteVisitItem } from "@/types/crm";
 import { SiteVisitItemOutcome, VisitOutcomeEntryChannel } from "@prisma/client";
+import { ScheduleVisitModal } from "@/components/visits/ScheduleVisitModal";
 import {
-  createSiteVisitAction,
   recordVisitItemOutcomeAction,
   confirmSiteVisitAction,
   confirmSiteVisitOwnerAvailabilityAction,
@@ -73,14 +73,6 @@ export function SiteVisitsClient({
 
   // Schedule Visit Modal state
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
-  const [isScheduling, setIsScheduling] = useState(false);
-  const [scheduleError, setScheduleError] = useState<string | null>(null);
-  const [scheduleLeadId, setScheduleLeadId] = useState("");
-  const [scheduleAgentId, setScheduleAgentId] = useState("");
-  const [scheduleDate, setScheduleDate] = useState("");
-  const [scheduleTime, setScheduleTime] = useState("11:00");
-  const [scheduleSelectedProperties, setScheduleSelectedProperties] = useState<string[]>([]);
-  const [scheduleNotes, setScheduleNotes] = useState("");
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -194,65 +186,7 @@ export function SiteVisitsClient({
   };
 
   const handleOpenScheduleModal = () => {
-    setScheduleLeadId(availableLeads[0]?.id || "");
-    setScheduleAgentId(salesAgents[0]?.id || "");
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    setScheduleDate(tomorrow.toISOString().split("T")[0]);
-    setScheduleTime("11:00");
-    setScheduleSelectedProperties([]);
-    setScheduleNotes("");
-    setScheduleError(null);
     setIsScheduleModalOpen(true);
-  };
-
-  const handleCreateScheduleVisit = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (isScheduling) return;
-    setScheduleError(null);
-
-    if (!scheduleLeadId) {
-      setScheduleError("Please select a prospect lead.");
-      return;
-    }
-    if (!scheduleAgentId) {
-      setScheduleError("Please select an assigned sales agent.");
-      return;
-    }
-    if (!scheduleDate) {
-      setScheduleError("Please select a visit date.");
-      return;
-    }
-    if (scheduleSelectedProperties.length === 0) {
-      setScheduleError("Please select at least one property from Active Supply Pool.");
-      return;
-    }
-
-    setIsScheduling(true);
-    try {
-      const scheduledDateTime = new Date(`${scheduleDate}T${scheduleTime || "10:00"}:00`);
-      const res = await createSiteVisitAction({
-        leadId: scheduleLeadId,
-        assignedSalesAgentId: scheduleAgentId,
-        scheduledDate: scheduledDateTime.toISOString(),
-        propertyIds: scheduleSelectedProperties,
-        notes: scheduleNotes.trim() || undefined,
-      });
-
-      if (!res.success) {
-        setScheduleError(res.error);
-        return;
-      }
-
-      setVisits((prev) => [res.visit, ...prev]);
-      setSelectedVisit(res.visit);
-      setIsScheduleModalOpen(false);
-      setToastMessage(`Site visit itinerary scheduled for ${res.visit.buyerName}.`);
-    } catch (err: unknown) {
-      setScheduleError(err instanceof Error ? err.message : "Failed to schedule site visit.");
-    } finally {
-      setIsScheduling(false);
-    }
   };
 
   return (
@@ -849,168 +783,19 @@ export function SiteVisitsClient({
         </div>
       </Modal>
 
-      {/* Modal: Schedule New Multi-Property Site Visit */}
-      <Modal
+      {/* Modal: Schedule New Multi-Property Site Visit (Shared Component) */}
+      <ScheduleVisitModal
         isOpen={isScheduleModalOpen}
         onClose={() => setIsScheduleModalOpen(false)}
-        title="Schedule Site Visit Itinerary"
-        subtitle="Coordinate buyer with assigned field sales agent for active properties (PRD §8)"
-        footer={
-          <>
-            <button
-              onClick={() => setIsScheduleModalOpen(false)}
-              className="px-3 py-1.5 text-xs rounded border border-crm-border text-crm-muted hover:text-crm-text"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => handleCreateScheduleVisit()}
-              disabled={isScheduling}
-              className="px-4 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs disabled:opacity-50"
-            >
-              {isScheduling ? "Scheduling..." : "Create Itinerary"}
-            </button>
-          </>
-        }
-      >
-        <div className="space-y-4 text-xs max-h-[70vh] overflow-y-auto pr-1">
-          {scheduleError && (
-            <div className="p-2.5 rounded bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
-              {scheduleError}
-            </div>
-          )}
-
-          <div>
-            <label className="block font-semibold text-crm-text mb-1">
-              Select Prospect Lead <span className="text-red-500">*</span>
-            </label>
-            <select
-              value={scheduleLeadId}
-              onChange={(e) => setScheduleLeadId(e.target.value)}
-              className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-            >
-              <option value="">-- Choose Prospect --</option>
-              {availableLeads.map((lead) => (
-                <option key={lead.id} value={lead.id}>
-                  {lead.name} ({lead.primaryPhone})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block font-semibold text-crm-text mb-1">
-              Assigned Field Sales Agent <span className="text-red-500">*</span>
-            </label>
-            <select
-              value={scheduleAgentId}
-              onChange={(e) => setScheduleAgentId(e.target.value)}
-              className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-            >
-              <option value="">-- Choose Field Agent --</option>
-              {salesAgents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name} ({agent.email})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block font-semibold text-crm-text mb-1">
-                Scheduled Date <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="date"
-                value={scheduleDate}
-                onChange={(e) => setScheduleDate(e.target.value)}
-                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold text-crm-text mb-1">
-                Time Window / Slot
-              </label>
-              <input
-                type="time"
-                value={scheduleTime}
-                onChange={(e) => setScheduleTime(e.target.value)}
-                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block font-semibold text-crm-text mb-1.5">
-              Select Properties to Visit (Active Supply Pool) <span className="text-red-500">*</span>
-            </label>
-            <p className="text-[11px] text-crm-muted mb-2">
-              Only verified properties with Available status can be included in itineraries (PRD §8.1).
-            </p>
-            {availableProperties.length === 0 ? (
-              <div className="p-3 rounded border border-amber-200 bg-amber-50 text-amber-900 text-xs">
-                No active properties available in supply pool. Verify and activate properties first.
-              </div>
-            ) : (
-              <div className="space-y-1.5 max-h-48 overflow-y-auto p-2 border border-crm-border rounded bg-stone-50/30">
-                {availableProperties.map((prop) => {
-                  const isChecked = scheduleSelectedProperties.includes(prop.id);
-                  return (
-                    <label
-                      key={prop.id}
-                      className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors ${
-                        isChecked
-                          ? "bg-teal-50 border border-teal-300"
-                          : "hover:bg-stone-100/70 border border-transparent"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => {
-                          if (isChecked) {
-                            setScheduleSelectedProperties(
-                              scheduleSelectedProperties.filter((id) => id !== prop.id)
-                            );
-                          } else {
-                            setScheduleSelectedProperties([
-                              ...scheduleSelectedProperties,
-                              prop.id,
-                            ]);
-                          }
-                        }}
-                        className="accent-crm-primary"
-                      />
-                      <div className="text-xs">
-                        <span className="font-semibold text-crm-text">
-                          {prop.societyName} ({prop.flatNumber})
-                        </span>
-                        <span className="text-crm-muted ml-1.5 text-[11px]">
-                          • {prop.bedroomCount} BHK • {prop.localityName}
-                        </span>
-                      </div>
-                    </label>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <label className="block font-semibold text-crm-text mb-1">
-              Visit Instructions / Special Notes
-            </label>
-            <textarea
-              rows={2}
-              placeholder="e.g. Buyer is interested in 3 BHK garden facing, meeting at club house gate..."
-              value={scheduleNotes}
-              onChange={(e) => setScheduleNotes(e.target.value)}
-              className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-            />
-          </div>
-        </div>
-      </Modal>
+        availableLeads={availableLeads}
+        availableProperties={availableProperties}
+        salesAgents={salesAgents}
+        onSuccess={(createdVisit) => {
+          setVisits((prev) => [createdVisit, ...prev]);
+          setSelectedVisit(createdVisit);
+          setToastMessage(`Site visit itinerary scheduled for ${createdVisit.buyerName}.`);
+        }}
+      />
 
       <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
     </AppShell>

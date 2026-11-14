@@ -7,7 +7,7 @@ import {
   RawRequirementData,
   RawPropertyData,
 } from "@/lib/matching-engine";
-import { UserRole, SupplyValidationStatus, PropertyAvailabilityStatus, LeadStatus, AreaUnitType } from "@prisma/client";
+import { UserRole, SupplyValidationStatus, PropertyAvailabilityStatus, LeadStatus, AreaUnitType, BuyerInterestLevel, SiteVisitStatus } from "@prisma/client";
 import { TenantContext } from "@/server/tenant-context";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 
@@ -22,6 +22,9 @@ vi.mock("@/server/db", () => {
       findFirst: vi.fn(),
       findMany: vi.fn(),
       count: vi.fn(),
+    },
+    buyerPropertyInterest: {
+      findMany: vi.fn(),
     },
   };
   return { prisma: mockPrisma };
@@ -1615,6 +1618,114 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       expect(result.matches[0].lead.id).toBe("lead-gurugram");
       expect(result.matches[0].breakdown.locality.matched).toBe(true);
       expect(result.matches[0].score).toBe(100);
+    });
+
+    it("returns matching active buyers with latest visit status, date, interest level, and feedback", async () => {
+      const leadWithVisit = {
+        ...mockActiveLeads[0],
+        id: "lead-visit-1",
+        siteVisits: [
+          {
+            id: "visit-1",
+            scheduledDate: new Date("2026-11-10T10:00:00Z"),
+            status: SiteVisitStatus.COMPLETED,
+            items: [{ propertyId: "prop-1" }],
+          },
+        ],
+      };
+
+      (prisma.property.findFirst as any).mockResolvedValue(mockProperty);
+      (prisma.lead.count as any).mockResolvedValue(1);
+      (prisma.lead.findMany as any).mockResolvedValue([leadWithVisit]);
+      (prisma.buyerPropertyInterest.findMany as any).mockResolvedValue([
+        {
+          leadId: "lead-visit-1",
+          propertyId: "prop-1",
+          interestLevel: BuyerInterestLevel.HIGH,
+          feedbackNotes: "Client was very impressed with ventilation.",
+        },
+      ]);
+
+      const result = await getMatchingLeadsForProperty(brokerContext, "prop-1");
+
+      expect(result.matches.length).toBe(1);
+      const match = result.matches[0];
+      expect(match.lead.id).toBe("lead-visit-1");
+      expect(match.latestVisitStatus).toBe("Completed");
+      expect(match.latestVisitDate).toBe("10 Nov 2026");
+      expect(match.buyerInterestLevel).toBe(BuyerInterestLevel.HIGH);
+      expect(match.feedbackNotes).toBe("Client was very impressed with ventilation.");
+    });
+
+    it("handles matching buyers without visit history cleanly (empty state)", async () => {
+      const leadWithoutVisit = {
+        ...mockActiveLeads[0],
+        id: "lead-no-visit",
+        siteVisits: [],
+      };
+
+      (prisma.property.findFirst as any).mockResolvedValue(mockProperty);
+      (prisma.lead.count as any).mockResolvedValue(1);
+      (prisma.lead.findMany as any).mockResolvedValue([leadWithoutVisit]);
+      (prisma.buyerPropertyInterest.findMany as any).mockResolvedValue([]);
+
+      const result = await getMatchingLeadsForProperty(brokerContext, "prop-1");
+
+      expect(result.matches.length).toBe(1);
+      const match = result.matches[0];
+      expect(match.lead.id).toBe("lead-no-visit");
+      expect(match.latestVisitDate).toBeUndefined();
+      expect(match.latestVisitStatus).toBeUndefined();
+      expect(match.buyerInterestLevel).toBeNull();
+      expect(match.feedbackNotes).toBeNull();
+      expect(match.visitStatus).toBe("No Visits Yet");
+    });
+
+    it("dedupes multiple historical visits for the same lead and property, showing only the latest visit", async () => {
+      const leadWithMultipleVisits = {
+        ...mockActiveLeads[0],
+        id: "lead-multi-visit",
+        siteVisits: [
+          // Older visit
+          {
+            id: "visit-old",
+            scheduledDate: new Date("2026-10-01T10:00:00Z"),
+            status: SiteVisitStatus.CANCELLED,
+            items: [{ propertyId: "prop-1" }],
+          },
+          // Newer visit
+          {
+            id: "visit-recent",
+            scheduledDate: new Date("2026-11-12T14:00:00Z"),
+            status: SiteVisitStatus.COMPLETED,
+            items: [{ propertyId: "prop-1" }],
+          },
+        ],
+      };
+
+      (prisma.property.findFirst as any).mockResolvedValue(mockProperty);
+      (prisma.lead.count as any).mockResolvedValue(1);
+      (prisma.lead.findMany as any).mockResolvedValue([leadWithMultipleVisits]);
+      (prisma.buyerPropertyInterest.findMany as any).mockResolvedValue([
+        {
+          leadId: "lead-multi-visit",
+          propertyId: "prop-1",
+          interestLevel: BuyerInterestLevel.MEDIUM,
+          feedbackNotes: "Second visit was positive, negotiating on price.",
+        },
+      ]);
+
+      const result = await getMatchingLeadsForProperty(brokerContext, "prop-1");
+
+      // Exactly 1 match row, no duplicates
+      expect(result.matches.length).toBe(1);
+      const match = result.matches[0];
+      expect(match.lead.id).toBe("lead-multi-visit");
+      // Shows latest visit (Nov 12th COMPLETED, NOT older Oct 1st CANCELLED)
+      expect(match.latestVisitStatus).toBe("Completed");
+      expect(match.latestVisitDate).toBe("12 Nov 2026");
+      expect(match.buyerInterestLevel).toBe(BuyerInterestLevel.MEDIUM);
+      expect(match.feedbackNotes).toBe("Second visit was positive, negotiating on price.");
     });
   });
 });

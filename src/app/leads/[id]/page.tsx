@@ -8,6 +8,7 @@ import { getSiteVisitsForLead } from "@/server/dal/visits";
 import { mapPrismaLeadToView, mapPrismaSiteVisitToView } from "@/server/dal/mappers";
 import { hasPermission } from "@/server/permissions";
 import { UserRole } from "@prisma/client";
+import { prisma } from "@/server/db";
 import { LeadDetailsClient } from "./LeadDetailsClient";
 import { SiteVisit, LeadChangeLogItem } from "@/types/crm";
 
@@ -100,6 +101,12 @@ async function LeadDetailsData({ params }: PageProps) {
     context.user?.delegatedPermissions || context.delegatedPermissions
   );
 
+  const canScheduleVisits = hasPermission(
+    context.role,
+    "visits:schedule",
+    context.user?.delegatedPermissions || context.delegatedPermissions
+  );
+
   let eligibleTelecallers: { id: string; name: string; email: string; phone: string }[] = [];
   if (canAssignTelecaller) {
     try {
@@ -116,6 +123,81 @@ async function LeadDetailsData({ params }: PageProps) {
       topMatches = matchResult.matches.slice(0, 3);
     } catch {
       topMatches = [];
+    }
+  }
+
+  let availableProperties: Array<{
+    id: string;
+    societyName: string;
+    flatNumber: string;
+    bedroomCount: number;
+    localityName: string;
+  }> = [];
+
+  let salesAgents: Array<{
+    id: string;
+    name: string;
+    email: string;
+  }> = [];
+
+  if (canScheduleVisits) {
+    try {
+      const [props, agents] = await Promise.all([
+        prisma.property.findMany({
+          where: {
+            tenantId: context.tenantId,
+            isActiveSupply: true,
+            availabilityStatus: "AVAILABLE",
+          },
+          select: {
+            id: true,
+            societyName: true,
+            flatNumber: true,
+            bedroomCount: true,
+            localityName: true,
+          },
+          orderBy: { societyName: "asc" },
+        }),
+        prisma.user.findMany({
+          where: {
+            tenantId: context.tenantId,
+            role: UserRole.FIELD_SALES_AGENT,
+            isActive: true,
+          },
+          select: { id: true, name: true, email: true },
+          orderBy: { name: "asc" },
+        }),
+      ]);
+
+      availableProperties = props;
+      salesAgents = agents;
+
+      if (salesAgents.length === 0) {
+        salesAgents = await prisma.user.findMany({
+          where: {
+            tenantId: context.tenantId,
+            isActive: true,
+          },
+          select: { id: true, name: true, email: true },
+          orderBy: { name: "asc" },
+        });
+      }
+    } catch {
+      availableProperties = [];
+      salesAgents = [];
+    }
+  }
+
+  // Ensure topMatches properties are included in availableProperties
+  for (const m of topMatches) {
+    if (!availableProperties.some((p) => p.id === m.property.id)) {
+      availableProperties.push({
+        id: m.property.id,
+        societyName: m.property.societyName,
+        flatNumber: m.property.flatNumber,
+        bedroomCount: m.property.bedroomCount,
+        localityName: m.property.locality,
+      });
     }
   }
 
@@ -171,6 +253,9 @@ async function LeadDetailsData({ params }: PageProps) {
       canViewChangelog={canViewChangelog}
       canAssignTelecaller={canAssignTelecaller}
       canViewMatches={canViewMatches}
+      canScheduleVisits={canScheduleVisits}
+      availableProperties={availableProperties}
+      salesAgents={salesAgents}
       eligibleTelecallers={eligibleTelecallers}
       userRole={context.role}
     />

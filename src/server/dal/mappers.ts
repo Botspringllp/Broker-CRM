@@ -539,6 +539,8 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
           ? "Medium"
           : item.buyerInterestLevel === "LOW"
           ? "Low"
+          : item.buyerInterestLevel === "NOT_INTERESTED"
+          ? "Not Interested"
           : undefined,
     })),
     scheduleHistory:

@@ -25,6 +25,7 @@ export async function createSiteVisitAction(input: CreateSiteVisitInput) {
     const created = await createSiteVisit(context, input);
     revalidatePath("/visits");
     revalidatePath("/");
+    revalidatePath(`/leads/${input.leadId}`);
     return {
       success: true as const,
       visit: mapPrismaSiteVisitToView(created),

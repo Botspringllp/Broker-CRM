@@ -7,6 +7,7 @@ import {
   PropertyAvailabilityStatus,
   LeadStatus,
   Prisma,
+  BuyerInterestLevel,
 } from "@prisma/client";
 import { getLeadById } from "./leads";
 import { mapPrismaPropertyToView, mapPrismaLeadToView } from "./mappers";
@@ -60,6 +61,10 @@ export interface EvaluatedLeadMatch {
   breakdown: MatchCriteriaBreakdown;
   unspecifiedCriteria: string[];
   visitStatus: string;
+  latestVisitDate?: string;
+  latestVisitStatus?: string;
+  buyerInterestLevel?: BuyerInterestLevel | null;
+  feedbackNotes?: string | null;
 }
 
 export interface LeadMatchingResults {
@@ -470,6 +475,20 @@ export async function getMatchingLeadsForProperty(
     updatedAt: property.updatedAt,
   };
 
+  // Query Active Supply Pool feedback & interest records for this property
+  const rawPropertyInterests = prisma.buyerPropertyInterest
+    ? await prisma.buyerPropertyInterest.findMany({
+        where: {
+          tenantId: context.tenantId,
+          propertyId: property.id,
+        },
+      })
+    : [];
+  const propertyInterests = Array.isArray(rawPropertyInterests) ? rawPropertyInterests : [];
+  const interestByLeadId = new Map(
+    propertyInterests.map((bi) => [bi.leadId, bi])
+  );
+
   const matches: EvaluatedLeadMatch[] = [];
 
   for (const dbLead of activeLeads) {
@@ -503,10 +522,44 @@ export async function getMatchingLeadsForProperty(
     const evaluation = evaluatePropertyMatch(reqData, rawProp);
 
     if (evaluation.isEligible) {
-      // Determine site visit status for this buyer against this property
-      const hasVisit = dbLead.siteVisits?.some((v) =>
-        v.items?.some((item) => item.propertyId === property.id)
-      );
+      // Find all visits for this buyer containing this property, ordered by scheduledDate DESC
+      const propertyVisits = (dbLead.siteVisits || [])
+        .filter((v) => v.items?.some((item) => item.propertyId === property.id))
+        .sort((a, b) => new Date(b.scheduledDate).getTime() - new Date(a.scheduledDate).getTime());
+
+      const latestVisit = propertyVisits[0] || null;
+      const latestItem = latestVisit?.items?.find((item) => item.propertyId === property.id) || null;
+
+      let latestVisitDate: string | undefined;
+      let latestVisitStatus: string | undefined;
+
+      if (latestVisit) {
+        latestVisitDate = new Date(latestVisit.scheduledDate).toLocaleDateString("en-IN", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+
+        latestVisitStatus =
+          latestVisit.status === "CONFIRMED"
+            ? "Confirmed"
+            : latestVisit.status === "COMPLETED"
+            ? "Completed"
+            : latestVisit.status === "CANCELLED"
+            ? "Cancelled"
+            : latestVisit.status === "RESCHEDULED"
+            ? "Rescheduled"
+            : "Tentative - Awaiting Owner";
+      }
+
+      // Synchronized buyer interest from BuyerPropertyInterest (Active Supply Pool)
+      const synchedInterest = interestByLeadId.get(dbLead.id);
+      const buyerInterestLevel = synchedInterest?.interestLevel ?? latestItem?.buyerInterestLevel ?? null;
+      const feedbackNotes =
+        synchedInterest?.feedbackNotes ??
+        latestItem?.buyerFeedback ??
+        latestItem?.agentTextNotes ??
+        null;
 
       matches.push({
         lead: mapPrismaLeadToView(dbLead as unknown as Parameters<typeof mapPrismaLeadToView>[0]),
@@ -516,7 +569,11 @@ export async function getMatchingLeadsForProperty(
         criteriaEvaluatedCount: evaluation.criteriaEvaluatedCount,
         breakdown: evaluation.breakdown,
         unspecifiedCriteria: evaluation.unspecifiedCriteria,
-        visitStatus: hasVisit ? "Visit Scheduled" : "No Visits Yet",
+        visitStatus: latestVisit ? latestVisitStatus! : "No Visits Yet",
+        latestVisitDate,
+        latestVisitStatus,
+        buyerInterestLevel,
+        feedbackNotes,
       });
     }
   }

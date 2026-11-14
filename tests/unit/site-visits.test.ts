@@ -5,6 +5,7 @@ import {
   SiteVisitStatus,
   SiteVisitItemOutcome,
   VisitOutcomeEntryChannel,
+  BuyerInterestLevel,
 } from "@prisma/client";
 import { TenantContext } from "@/server/tenant-context";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
@@ -23,6 +24,14 @@ vi.mock("@/server/db", () => {
     },
     siteVisitScheduleHistory: {
       create: vi.fn(),
+    },
+    buyerPropertyInterest: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      upsert: vi.fn(),
     },
     lead: {
       findFirst: vi.fn(),
@@ -256,6 +265,103 @@ describe("Site Visits DAL & Workflow Management", () => {
           propertyIds: [], // Empty
         })
       ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects site visit creation if caller lacks visits:schedule permission", async () => {
+      await expect(
+        createSiteVisit(salesAgentContext, {
+          leadId: "lead-1",
+          assignedSalesAgentId: "user-sales-1",
+          scheduledDate: "2026-10-30T10:00:00.000Z",
+          propertyIds: ["prop-1"],
+        })
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it("rejects site visit creation if lead belongs to another tenant", async () => {
+      // Lead lookup returns null because tenantId does not match
+      vi.mocked(prisma.lead.findFirst).mockResolvedValueOnce(null);
+
+      await expect(
+        createSiteVisit(telecallerContext, {
+          leadId: "lead-cross-tenant",
+          assignedSalesAgentId: "user-sales-1",
+          scheduledDate: "2026-10-30T10:00:00.000Z",
+          propertyIds: ["prop-1"],
+        })
+      ).rejects.toThrow(NotFoundError);
+    });
+
+    it("rejects site visit creation if selected property belongs to another tenant", async () => {
+      vi.mocked(prisma.lead.findFirst).mockResolvedValueOnce({
+        id: "lead-1",
+        tenantId: "tenant-broker-1",
+      } as any);
+
+      vi.mocked(prisma.user.findFirst).mockResolvedValueOnce({
+        id: "user-sales-1",
+        tenantId: "tenant-broker-1",
+        isActive: true,
+      } as any);
+
+      // Property lookup returns empty array because tenantId filter excluded it
+      vi.mocked(prisma.property.findMany).mockResolvedValueOnce([]);
+
+      await expect(
+        createSiteVisit(telecallerContext, {
+          leadId: "lead-1",
+          assignedSalesAgentId: "user-sales-1",
+          scheduledDate: "2026-10-30T10:00:00.000Z",
+          propertyIds: ["prop-cross-tenant"],
+        })
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("verifies that newly created visit begins in TENTATIVE_AWAITING_OWNER status without auto-confirming owner", async () => {
+      vi.mocked(prisma.lead.findFirst).mockResolvedValueOnce({
+        id: "lead-1",
+        tenantId: "tenant-broker-1",
+      } as any);
+
+      vi.mocked(prisma.user.findFirst).mockResolvedValueOnce({
+        id: "user-sales-1",
+        tenantId: "tenant-broker-1",
+        isActive: true,
+      } as any);
+
+      vi.mocked(prisma.property.findMany).mockResolvedValueOnce([
+        {
+          id: "prop-1",
+          societyName: "The Camellias",
+          isActiveSupply: true,
+          availabilityStatus: "AVAILABLE",
+        },
+      ] as any);
+
+      vi.mocked(prisma.siteVisit.create).mockResolvedValueOnce({
+        id: "visit-tentative",
+        tenantId: "tenant-broker-1",
+        leadId: "lead-1",
+        assignedSalesAgentId: "user-sales-1",
+        status: SiteVisitStatus.TENTATIVE_AWAITING_OWNER,
+        items: [{ id: "item-1", propertyId: "prop-1", visitOrder: 1 }],
+      } as any);
+
+      const created = await createSiteVisit(telecallerContext, {
+        leadId: "lead-1",
+        assignedSalesAgentId: "user-sales-1",
+        scheduledDate: "2026-11-01T10:00:00.000Z",
+        propertyIds: ["prop-1"],
+      });
+
+      expect(prisma.siteVisit.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: SiteVisitStatus.TENTATIVE_AWAITING_OWNER,
+          }),
+        })
+      );
+      expect(created.status).toBe(SiteVisitStatus.TENTATIVE_AWAITING_OWNER);
     });
   });
 
@@ -597,6 +703,252 @@ describe("Site Visits DAL & Workflow Management", () => {
       await expect(
         confirmSiteVisit(salesAgentContext, "visit-1")
       ).rejects.toThrow(ForbiddenError);
+    });
+
+    it("synchronizes BuyerPropertyInterest on successful finalization (creates new interest when none exists)", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-sync-1",
+        tenantId: "tenant-broker-1",
+        leadId: "lead-1",
+        status: SiteVisitStatus.CONFIRMED,
+        items: [
+          {
+            id: "item-1",
+            propertyId: "prop-1",
+            status: SiteVisitItemOutcome.VISIT_DONE,
+            buyerInterestLevel: BuyerInterestLevel.HIGH,
+            buyerFeedback: "Loves the garden view and floor plan.",
+          },
+        ],
+      } as any);
+
+      vi.mocked(prisma.buyerPropertyInterest.findUnique).mockResolvedValueOnce(null);
+      vi.mocked(prisma.buyerPropertyInterest.create).mockResolvedValueOnce({
+        id: "bpi-1",
+      } as any);
+
+      vi.mocked(prisma.siteVisit.update).mockResolvedValueOnce({
+        id: "visit-sync-1",
+        status: SiteVisitStatus.COMPLETED,
+        telecallerConfirmedByUserId: "user-telecaller-1",
+      } as any);
+
+      await confirmSiteVisit(telecallerContext, "visit-sync-1", "Showing was successful.");
+
+      expect(prisma.buyerPropertyInterest.create).toHaveBeenCalledWith({
+        data: {
+          tenantId: "tenant-broker-1",
+          leadId: "lead-1",
+          propertyId: "prop-1",
+          interestLevel: BuyerInterestLevel.HIGH,
+          feedbackNotes: "Loves the garden view and floor plan.",
+        },
+      });
+    });
+
+    it("updates existing BuyerPropertyInterest rather than creating a duplicate", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-sync-2",
+        tenantId: "tenant-broker-1",
+        leadId: "lead-1",
+        status: SiteVisitStatus.CONFIRMED,
+        items: [
+          {
+            id: "item-1",
+            propertyId: "prop-1",
+            status: SiteVisitItemOutcome.VISIT_DONE,
+            buyerInterestLevel: BuyerInterestLevel.MEDIUM,
+            buyerFeedback: "Wants to negotiate price by 5%.",
+          },
+        ],
+      } as any);
+
+      vi.mocked(prisma.buyerPropertyInterest.findUnique).mockResolvedValueOnce({
+        id: "existing-bpi-1",
+        tenantId: "tenant-broker-1",
+        leadId: "lead-1",
+        propertyId: "prop-1",
+        interestLevel: BuyerInterestLevel.LOW,
+        feedbackNotes: "First visit was lukewarm.",
+      } as any);
+
+      vi.mocked(prisma.buyerPropertyInterest.update).mockResolvedValueOnce({
+        id: "existing-bpi-1",
+        interestLevel: BuyerInterestLevel.MEDIUM,
+      } as any);
+
+      vi.mocked(prisma.siteVisit.update).mockResolvedValueOnce({
+        id: "visit-sync-2",
+        status: SiteVisitStatus.COMPLETED,
+      } as any);
+
+      await confirmSiteVisit(telecallerContext, "visit-sync-2");
+
+      expect(prisma.buyerPropertyInterest.update).toHaveBeenCalledWith({
+        where: { id: "existing-bpi-1" },
+        data: {
+          interestLevel: BuyerInterestLevel.MEDIUM,
+          feedbackNotes: "Wants to negotiate price by 5%.",
+        },
+      });
+      expect(prisma.buyerPropertyInterest.create).not.toHaveBeenCalled();
+    });
+
+    it("synchronizes multiple properties in one itinerary independently", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-multi-prop",
+        tenantId: "tenant-broker-1",
+        leadId: "lead-1",
+        status: SiteVisitStatus.CONFIRMED,
+        items: [
+          {
+            id: "item-1",
+            propertyId: "prop-1",
+            status: SiteVisitItemOutcome.VISIT_DONE,
+            buyerInterestLevel: BuyerInterestLevel.HIGH,
+            buyerFeedback: "Top choice for buyer.",
+          },
+          {
+            id: "item-2",
+            propertyId: "prop-2",
+            status: SiteVisitItemOutcome.VISIT_NOT_DONE,
+            buyerInterestLevel: BuyerInterestLevel.NOT_INTERESTED,
+            buyerFeedback: "Location too far from school.",
+          },
+        ],
+      } as any);
+
+      vi.mocked(prisma.buyerPropertyInterest.findUnique)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
+
+      vi.mocked(prisma.buyerPropertyInterest.create)
+        .mockResolvedValueOnce({ id: "bpi-1" } as any)
+        .mockResolvedValueOnce({ id: "bpi-2" } as any);
+
+      vi.mocked(prisma.siteVisit.update).mockResolvedValueOnce({
+        id: "visit-multi-prop",
+        status: SiteVisitStatus.COMPLETED,
+      } as any);
+
+      await confirmSiteVisit(telecallerContext, "visit-multi-prop");
+
+      expect(prisma.buyerPropertyInterest.create).toHaveBeenCalledWith({
+        data: {
+          tenantId: "tenant-broker-1",
+          leadId: "lead-1",
+          propertyId: "prop-1",
+          interestLevel: BuyerInterestLevel.HIGH,
+          feedbackNotes: "Top choice for buyer.",
+        },
+      });
+
+      expect(prisma.buyerPropertyInterest.create).toHaveBeenCalledWith({
+        data: {
+          tenantId: "tenant-broker-1",
+          leadId: "lead-1",
+          propertyId: "prop-2",
+          interestLevel: BuyerInterestLevel.NOT_INTERESTED,
+          feedbackNotes: "Location too far from school.",
+        },
+      });
+    });
+
+    it("blocks finalization and feedback synchronization when any item remains pending", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-pending",
+        tenantId: "tenant-broker-1",
+        leadId: "lead-1",
+        status: SiteVisitStatus.CONFIRMED,
+        items: [
+          { id: "item-1", propertyId: "prop-1", status: SiteVisitItemOutcome.VISIT_DONE },
+          { id: "item-2", propertyId: "prop-2", status: SiteVisitItemOutcome.PENDING },
+        ],
+      } as any);
+
+      await expect(
+        confirmSiteVisit(telecallerContext, "visit-pending")
+      ).rejects.toThrow(ValidationError);
+
+      expect(prisma.siteVisit.update).not.toHaveBeenCalled();
+      expect(prisma.buyerPropertyInterest.create).not.toHaveBeenCalled();
+      expect(prisma.buyerPropertyInterest.update).not.toHaveBeenCalled();
+    });
+
+    it("recording outcome alone does not synchronize feedback into BuyerPropertyInterest", async () => {
+      vi.mocked(prisma.siteVisitItem.findFirst).mockResolvedValueOnce({
+        id: "item-1",
+        siteVisitId: "visit-1",
+        status: SiteVisitItemOutcome.PENDING,
+        siteVisit: {
+          id: "visit-1",
+          tenantId: "tenant-broker-1",
+          assignedSalesAgentId: "user-sales-1",
+        },
+      } as any);
+
+      vi.mocked(prisma.siteVisitItem.update).mockResolvedValueOnce({
+        id: "item-1",
+        status: SiteVisitItemOutcome.VISIT_DONE,
+      } as any);
+
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-1",
+        tenantId: "tenant-broker-1",
+      } as any);
+
+      await recordVisitItemOutcome(salesAgentContext, "item-1", {
+        status: SiteVisitItemOutcome.VISIT_DONE,
+        buyerFeedback: "Loves it",
+        buyerInterestLevel: BuyerInterestLevel.HIGH,
+      });
+
+      expect(prisma.siteVisitItem.update).toHaveBeenCalled();
+      expect(prisma.buyerPropertyInterest.create).not.toHaveBeenCalled();
+      expect(prisma.buyerPropertyInterest.update).not.toHaveBeenCalled();
+    });
+
+    it("rolls back the entire transaction if BuyerPropertyInterest synchronization fails", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce({
+        id: "visit-rollback",
+        tenantId: "tenant-broker-1",
+        leadId: "lead-1",
+        status: SiteVisitStatus.CONFIRMED,
+        items: [
+          {
+            id: "item-1",
+            propertyId: "prop-1",
+            status: SiteVisitItemOutcome.VISIT_DONE,
+            buyerInterestLevel: BuyerInterestLevel.HIGH,
+          },
+        ],
+      } as any);
+
+      vi.mocked(prisma.siteVisit.update).mockResolvedValueOnce({
+        id: "visit-rollback",
+        status: SiteVisitStatus.COMPLETED,
+      } as any);
+
+      vi.mocked(prisma.buyerPropertyInterest.findUnique).mockResolvedValueOnce(null);
+      vi.mocked(prisma.buyerPropertyInterest.create).mockRejectedValueOnce(
+        new Error("Database connection dropped during sync")
+      );
+
+      await expect(
+        confirmSiteVisit(telecallerContext, "visit-rollback")
+      ).rejects.toThrow("Database connection dropped during sync");
+    });
+
+    it("strictly scopes feedback synchronization to tenant and rejects cross-tenant records", async () => {
+      vi.mocked(prisma.siteVisit.findFirst).mockResolvedValueOnce(null);
+
+      await expect(
+        confirmSiteVisit(telecallerContext, "cross-tenant-visit")
+      ).rejects.toThrow(NotFoundError);
+
+      expect(prisma.siteVisit.update).not.toHaveBeenCalled();
+      expect(prisma.buyerPropertyInterest.create).not.toHaveBeenCalled();
+      expect(prisma.buyerPropertyInterest.update).not.toHaveBeenCalled();
     });
   });
 

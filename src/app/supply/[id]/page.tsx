@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { notFound, redirect } from "next/navigation";
 import { requireTenantContext, NotFoundError } from "@/server/tenant-context";
 import { getPropertyById, listEligibleTelecallers } from "@/server/dal/properties";
+import { getMatchingLeadsForProperty, EvaluatedLeadMatch } from "@/server/dal/matching";
 import { mapPrismaPropertyToView } from "@/server/dal/mappers";
 import { hasPermission } from "@/server/permissions";
 import { UserRole } from "@prisma/client";
@@ -74,6 +75,22 @@ async function PropertyDetailsData({ params }: PageProps) {
     context.user?.delegatedPermissions
   );
 
+  const canViewMatches = hasPermission(
+    context.role,
+    "matching:view_matches",
+    context.user?.delegatedPermissions
+  );
+
+  let matchingBuyers: EvaluatedLeadMatch[] = [];
+  if (canViewMatches) {
+    try {
+      const matchResults = await getMatchingLeadsForProperty(context, id);
+      matchingBuyers = matchResults.matches || [];
+    } catch {
+      matchingBuyers = [];
+    }
+  }
+
   let eligibleTelecallers: Array<{
     id: string;
     name: string;
@@ -101,6 +118,7 @@ async function PropertyDetailsData({ params }: PageProps) {
       canAssignFieldVerifier={canAssignFieldVerifier}
       canUploadMedia={canUploadMedia}
       initialTelecallers={eligibleTelecallers}
+      matchingBuyers={matchingBuyers}
     />
   );
 }

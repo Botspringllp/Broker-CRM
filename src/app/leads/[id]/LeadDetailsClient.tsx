@@ -2,12 +2,18 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Toast } from "@/components/ui/Toast";
 import { Modal } from "@/components/ui/Modal";
 import { Lead, SiteVisit, LeadChangeLogItem } from "@/types/crm";
 import { EvaluatedPropertyMatch } from "@/server/dal/matching";
+import {
+  ScheduleVisitModal,
+  AvailablePropertyItem,
+  SalesAgentItem,
+} from "@/components/visits/ScheduleVisitModal";
 import {
   updateLeadStatusAction,
   assignLeadAction,
@@ -41,6 +47,9 @@ export interface LeadDetailsClientProps {
   canViewChangelog?: boolean;
   canAssignTelecaller?: boolean;
   canViewMatches?: boolean;
+  canScheduleVisits?: boolean;
+  availableProperties?: AvailablePropertyItem[];
+  salesAgents?: SalesAgentItem[];
   eligibleTelecallers?: EligibleTelecaller[];
   userRole: string;
 }
@@ -102,17 +111,37 @@ export function LeadDetailsClient({
   canViewChangelog = false,
   canAssignTelecaller = false,
   canViewMatches = true,
+  canScheduleVisits = false,
+  availableProperties = [],
+  salesAgents = [],
   eligibleTelecallers = [],
 }: LeadDetailsClientProps) {
+  const router = useRouter();
+
   // Main Lead & Related States
   const [lead, setLead] = useState<Lead>(initialLead);
   const [topMatches, setTopMatches] = useState<EvaluatedPropertyMatch[]>(initialTopMatches);
   const [isRefreshingMatches, setIsRefreshingMatches] = useState(false);
-  const [siteVisits] = useState<SiteVisit[]>(initialSiteVisits);
+  const [siteVisits, setSiteVisits] = useState<SiteVisit[]>(initialSiteVisits);
   const [changeHistory, setChangeHistory] = useState<LeadChangeLogItem[]>(initialChangeHistory);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [isActivating, setIsActivating] = useState(false);
+
+  // Column 3: Site Visit Scheduling Modal State
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+  const [scheduleInitialPropertyIds, setScheduleInitialPropertyIds] = useState<string[]>([]);
+
+  const handleOpenScheduleModal = (propertyIds: string[] = []) => {
+    setScheduleInitialPropertyIds(propertyIds);
+    setIsScheduleModalOpen(true);
+  };
+
+  const handleScheduleSuccess = (createdVisit: SiteVisit) => {
+    setSiteVisits((prev) => [createdVisit, ...prev]);
+    setToastMessage(`Site visit itinerary scheduled for ${createdVisit.buyerName}.`);
+    router.refresh();
+  };
 
   // Column 2: Activity Tabs State
   const [activityTab, setActivityTab] = useState<"calls" | "changelog" | "enquiries">("calls");
@@ -1377,14 +1406,25 @@ export function LeadDetailsClient({
                             <span className="font-bold text-crm-primary text-xs">
                               {m.property.priceFormatted}
                             </span>
-                            <button
-                              type="button"
-                              onClick={() => handleShareProperty(m.property.id)}
-                              disabled={sharingPropertyId === m.property.id}
-                              className="px-2.5 py-1 text-[11px] font-bold rounded bg-white hover:bg-stone-100 text-crm-primary border border-crm-border shadow-2xs cursor-pointer disabled:opacity-50"
-                            >
-                              {sharingPropertyId === m.property.id ? "Sharing..." : "Share Details →"}
-                            </button>
+                            <div className="flex items-center gap-1.5">
+                              {canScheduleVisits && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenScheduleModal([m.property.id])}
+                                  className="px-2.5 py-1 text-[11px] font-bold rounded bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 shadow-2xs cursor-pointer transition-colors"
+                                >
+                                  Schedule Visit
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleShareProperty(m.property.id)}
+                                disabled={sharingPropertyId === m.property.id}
+                                className="px-2.5 py-1 text-[11px] font-bold rounded bg-white hover:bg-stone-100 text-crm-primary border border-crm-border shadow-2xs cursor-pointer disabled:opacity-50"
+                              >
+                                {sharingPropertyId === m.property.id ? "Sharing..." : "Share Details →"}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -1403,9 +1443,20 @@ export function LeadDetailsClient({
                   </h3>
                   <span className="text-[10px] text-crm-muted">PRD §5.7 Past Itineraries</span>
                 </div>
-                <Link href="/visits" className="text-xs font-bold text-crm-primary hover:underline">
-                  All Visits →
-                </Link>
+                <div className="flex items-center gap-3">
+                  {canScheduleVisits && (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenScheduleModal([])}
+                      className="px-2.5 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer transition-colors"
+                    >
+                      + Schedule Visit
+                    </button>
+                  )}
+                  <Link href="/visits" className="text-xs font-bold text-crm-primary hover:underline">
+                    All Visits →
+                  </Link>
+                </div>
               </div>
 
               <div className="p-4 space-y-3 text-xs">
@@ -1913,6 +1964,23 @@ export function LeadDetailsClient({
           </div>
         </div>
       </Modal>
+
+      {/* ========================================================================= */}
+      {/* SCHEDULE VISIT MODAL (PRD §5.7 & §8)                                      */}
+      {/* ========================================================================= */}
+      {canScheduleVisits && (
+        <ScheduleVisitModal
+          isOpen={isScheduleModalOpen}
+          onClose={() => setIsScheduleModalOpen(false)}
+          leadId={lead.id}
+          leadName={lead.name}
+          leadPhone={lead.primaryPhone}
+          initialPropertyIds={scheduleInitialPropertyIds}
+          availableProperties={availableProperties}
+          salesAgents={salesAgents}
+          onSuccess={handleScheduleSuccess}
+        />
+      )}
 
       {toastMessage && (
         <Toast message={toastMessage} onClose={() => setToastMessage(null)} />

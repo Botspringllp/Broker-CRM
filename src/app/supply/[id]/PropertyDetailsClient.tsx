@@ -8,6 +8,7 @@ import { StatusBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
 import { Toast } from "@/components/ui/Toast";
 import { Property, PropertyMedia } from "@/types/crm";
+import { EvaluatedLeadMatch } from "@/server/dal/matching";
 import {
   assignPropertyAction,
   assignPropertyRoundRobinAction,
@@ -38,6 +39,7 @@ interface PropertyDetailsClientProps {
   canAssignFieldVerifier?: boolean;
   canUploadMedia?: boolean;
   initialTelecallers?: EligibleTelecallerItem[];
+  matchingBuyers?: EvaluatedLeadMatch[];
 }
 
 export function PropertyDetailsClient({
@@ -49,6 +51,7 @@ export function PropertyDetailsClient({
   canAssignFieldVerifier = false,
   canUploadMedia = false,
   initialTelecallers = [],
+  matchingBuyers = [],
 }: PropertyDetailsClientProps) {
   const router = useRouter();
   const [property, setProperty] = useState<Property>(initialProperty);
@@ -801,6 +804,207 @@ export function PropertyDetailsClient({
               )}
             </div>
           </div>
+        </div>
+
+        {/* Matching Active Buyers & Site Visit History Card (PRD §6.2 & §7.3) */}
+        <div className="p-5 rounded-lg bg-crm-surface border border-crm-border shadow-2xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-crm-border pb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold text-crm-text uppercase tracking-wider">
+                  Matching Active Buyers &amp; Site Visit History
+                </h2>
+                <span className="px-2 py-0.5 text-xs font-bold rounded-full bg-teal-50 text-teal-800 border border-teal-200">
+                  {matchingBuyers.length} {matchingBuyers.length === 1 ? "Buyer" : "Buyers"}
+                </span>
+              </div>
+              <p className="text-xs text-crm-muted mt-0.5">
+                Active buyers matching this property with latest visit progression, interest level, and feedback notes.
+              </p>
+            </div>
+          </div>
+
+          {matchingBuyers.length === 0 ? (
+            <div className="p-8 text-center rounded-md bg-stone-50 border border-dashed border-crm-border">
+              <p className="text-xs font-semibold text-crm-text">No matching active buyers found</p>
+              <p className="text-[11px] text-crm-muted mt-0.5">
+                There are currently no active validated buyer requirements matching this property&apos;s attributes.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {matchingBuyers.map((match) => {
+                const parsedDate = match.latestVisitDate ? new Date(match.latestVisitDate) : null;
+                const visitDateStr = match.latestVisitDate
+                  ? (parsedDate && !isNaN(parsedDate.getTime())
+                      ? parsedDate.toLocaleDateString("en-IN", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })
+                      : match.latestVisitDate)
+                  : null;
+
+                const renderVisitBadge = () => {
+                  const s = match.latestVisitStatus?.toUpperCase();
+                  if (!s) {
+                    return (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-stone-100 text-crm-muted border border-crm-border">
+                        No Visits Scheduled Yet
+                      </span>
+                    );
+                  }
+                  if (s === "COMPLETED" || s === "VISIT_DONE") {
+                    return (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                        Visit Completed
+                      </span>
+                    );
+                  }
+                  if (s === "CONFIRMED") {
+                    return (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-800 border border-indigo-200">
+                        Visit Confirmed
+                      </span>
+                    );
+                  }
+                  if (s === "TENTATIVE_AWAITING_OWNER") {
+                    return (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                        Awaiting Owner
+                      </span>
+                    );
+                  }
+                  if (s === "OVERDUE") {
+                    return (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-orange-50 text-orange-800 border border-orange-200">
+                        Visit Overdue
+                      </span>
+                    );
+                  }
+                  if (s === "CANCELLED" || s === "VISIT_NOT_DONE") {
+                    return (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                        Cancelled / Not Done
+                      </span>
+                    );
+                  }
+                  return (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-stone-100 text-crm-text border border-crm-border">
+                      {match.latestVisitStatus}
+                    </span>
+                  );
+                };
+
+                const renderInterestBadge = () => {
+                  if (!match.buyerInterestLevel) return null;
+                  switch (match.buyerInterestLevel) {
+                    case "HIGH":
+                      return (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          High Interest
+                        </span>
+                      );
+                    case "MEDIUM":
+                      return (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                          Medium Interest
+                        </span>
+                      );
+                    case "LOW":
+                      return (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                          Low Interest
+                        </span>
+                      );
+                    case "NOT_INTERESTED":
+                      return (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-800 border border-rose-200">
+                          Not Interested
+                        </span>
+                      );
+                    default:
+                      return null;
+                  }
+                };
+
+                return (
+                  <div
+                    key={match.lead.id}
+                    className="p-4 rounded-md border border-crm-border bg-stone-50/50 space-y-3 flex flex-col justify-between"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <Link
+                            href={`/leads/${match.lead.id}`}
+                            className="font-bold text-crm-text hover:text-crm-primary text-sm hover:underline"
+                          >
+                            {match.lead.name}
+                          </Link>
+                          <div className="text-xs text-crm-muted font-mono">
+                            {match.lead.primaryPhone}
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className="px-2 py-0.5 text-xs font-bold rounded bg-teal-50 text-teal-800 border border-teal-200">
+                            {match.score}% Match
+                          </span>
+                          <span className="text-[10px] text-crm-muted">
+                            {match.criteriaMatchedCount}/{match.criteriaEvaluatedCount} criteria
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Lead requirement summary chips */}
+                      <div className="flex flex-wrap gap-1.5 text-[11px]">
+                        {match.lead.requirements.bedroomConfigurations?.length > 0 && (
+                          <span className="px-2 py-0.5 rounded bg-white border border-crm-border text-crm-text">
+                            {match.lead.requirements.bedroomConfigurations.join(", ")}
+                          </span>
+                        )}
+                        {match.lead.requirements.budgetFormatted && (
+                          <span className="px-2 py-0.5 rounded bg-white border border-crm-border text-crm-text">
+                            {match.lead.requirements.budgetFormatted}
+                          </span>
+                        )}
+                        {match.lead.requirements.localities?.length > 0 && (
+                          <span className="px-2 py-0.5 rounded bg-white border border-crm-border text-crm-muted truncate max-w-[180px]">
+                            📍 {match.lead.requirements.localities.join(", ")}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Site Visit Progression & Feedback */}
+                    <div className="p-3 rounded-md bg-white border border-crm-border text-xs space-y-2">
+                      <div className="flex items-center justify-between flex-wrap gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[11px] font-semibold text-crm-muted">Latest Visit:</span>
+                          {renderVisitBadge()}
+                          {visitDateStr && (
+                            <span className="text-[11px] text-crm-muted">on {visitDateStr}</span>
+                          )}
+                        </div>
+                        {renderInterestBadge()}
+                      </div>
+
+                      {match.feedbackNotes && (
+                        <div className="pt-2 border-t border-crm-border/60 text-[11px] text-crm-text">
+                          <span className="text-[10px] uppercase font-bold text-crm-muted block mb-0.5">
+                            Feedback Notes:
+                          </span>
+                          <p className="italic text-crm-text bg-stone-50 p-2 rounded border border-crm-border/70">
+                            &quot;{match.feedbackNotes}&quot;
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Full-width Call History & Assignment History Tabs/Sections */}

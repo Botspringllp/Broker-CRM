@@ -10,6 +10,7 @@ import {
   VisitOutcomeEntryChannel,
   ScheduleChangeType,
   VisitPartyPersona,
+  BuyerInterestLevel,
 } from "@prisma/client";
 
 export interface CreateSiteVisitInput {
@@ -43,6 +44,7 @@ export interface RecordVisitItemOutcomeInput {
   agentTextNotes?: string;
   voiceNoteUrl?: string;
   buyerFeedback?: string;
+  buyerInterestLevel?: BuyerInterestLevel;
   reportedByUserId?: string;
   entryChannel?: VisitOutcomeEntryChannel;
 }
@@ -336,6 +338,7 @@ export async function recordVisitItemOutcome(
       agentTextNotes: data.agentTextNotes?.trim() || null,
       voiceNoteUrl: data.voiceNoteUrl || null,
       buyerFeedback: data.buyerFeedback?.trim() || null,
+      ...(data.buyerInterestLevel ? { buyerInterestLevel: data.buyerInterestLevel } : {}),
       reportedOutcomeAt: new Date(),
       reportedByUserId: data.reportedByUserId || context.userId,
       enteredByUserId: context.userId,
@@ -444,15 +447,73 @@ export async function confirmSiteVisit(
     );
   }
 
-  return prisma.siteVisit.update({
-    where: { id: visit.id },
-    data: {
-      status: SiteVisitStatus.COMPLETED,
-      telecallerConfirmedAt: new Date(),
-      telecallerConfirmedByUserId: context.userId,
-      ...(notes?.trim() ? { notes: notes.trim() } : {}),
-    },
-    include: FULL_SITE_VISIT_INCLUDE,
+  return prisma.$transaction(async (tx) => {
+    // 1. Update site visit to COMPLETED with telecaller confirmation audit (PRD §7.3)
+    const updatedVisit = await tx.siteVisit.update({
+      where: { id: visit.id },
+      data: {
+        status: SiteVisitStatus.COMPLETED,
+        telecallerConfirmedAt: new Date(),
+        telecallerConfirmedByUserId: context.userId,
+        ...(notes?.trim() ? { notes: notes.trim() } : {}),
+      },
+      include: FULL_SITE_VISIT_INCLUDE,
+    });
+
+    // 2. Synchronize feedback to Active Supply Pool (BuyerPropertyInterest) for each itinerary item
+    for (const item of items) {
+      if (item.status === SiteVisitItemOutcome.PENDING) continue;
+
+      const feedback = item.buyerFeedback?.trim() || item.agentTextNotes?.trim() || null;
+
+      // Find existing interest record strictly scoped by tenant, lead, and property
+      const existingInterest = await tx.buyerPropertyInterest.findUnique({
+        where: {
+          tenantId_leadId_propertyId: {
+            tenantId: context.tenantId,
+            leadId: visit.leadId,
+            propertyId: item.propertyId,
+          },
+        },
+      });
+
+      let nextInterestLevel: BuyerInterestLevel | undefined;
+
+      if (item.buyerInterestLevel) {
+        // Explicitly recorded interest level is preserved
+        nextInterestLevel = item.buyerInterestLevel;
+      } else if (item.status === SiteVisitItemOutcome.VISIT_DONE) {
+        // For completed showings without explicit interest recorded:
+        // preserve existing level if available, otherwise default to MEDIUM
+        nextInterestLevel = existingInterest?.interestLevel ?? BuyerInterestLevel.MEDIUM;
+      } else {
+        // VISIT_NOT_DONE without explicitly recorded interest:
+        // Do NOT invent an interest level. Preserve existing if present.
+        nextInterestLevel = existingInterest?.interestLevel;
+      }
+
+      if (existingInterest) {
+        await tx.buyerPropertyInterest.update({
+          where: { id: existingInterest.id },
+          data: {
+            ...(nextInterestLevel ? { interestLevel: nextInterestLevel } : {}),
+            ...(feedback ? { feedbackNotes: feedback } : {}),
+          },
+        });
+      } else if (nextInterestLevel) {
+        await tx.buyerPropertyInterest.create({
+          data: {
+            tenantId: context.tenantId,
+            leadId: visit.leadId,
+            propertyId: item.propertyId,
+            interestLevel: nextInterestLevel,
+            feedbackNotes: feedback,
+          },
+        });
+      }
+    }
+
+    return updatedVisit;
   });
 }
 
