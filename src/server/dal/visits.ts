@@ -827,6 +827,12 @@ export async function createSiteVisitAccessLink(
   // Link expires 24 hours after the scheduled visit window (DEC-M1-05)
   const expiresAt = new Date(visit.scheduledDate.getTime() + 24 * 60 * 60 * 1000);
 
+  if (expiresAt.getTime() <= Date.now()) {
+    throw new ValidationError(
+      "Cannot generate access link: the scheduled visit window and its 24-hour validity period have already passed. Please reschedule the visit first."
+    );
+  }
+
   return prisma.$transaction(async (tx) => {
     // Revoke any previous active links for this visit
     await tx.siteVisitAccessLink.updateMany({
@@ -945,6 +951,11 @@ export async function getSiteVisitByAccessToken(rawToken: string) {
   }
 
   if (link.isRevoked) {
+    if (link.siteVisit.status === SiteVisitStatus.COMPLETED) {
+      throw new ForbiddenError(
+        "This site visit has already been finalized and completed. This access link has been closed."
+      );
+    }
     throw new ForbiddenError(
       "This site visit access link has been revoked. Please contact your coordinator for a new link."
     );
@@ -1037,6 +1048,12 @@ export async function recordVisitItemOutcomeViaToken(
     throw new NotFoundError("Invalid or expired site visit link.");
   }
 
+  if (link.siteVisit.status === SiteVisitStatus.COMPLETED) {
+    throw new ForbiddenError(
+      "Cannot modify outcomes for an already finalized site visit. Outcome editing is locked."
+    );
+  }
+
   if (link.isRevoked) {
     throw new ForbiddenError("This site visit link has been revoked.");
   }
@@ -1055,12 +1072,6 @@ export async function recordVisitItemOutcomeViaToken(
 
   if (link.siteVisit.status === SiteVisitStatus.CANCELLED) {
     throw new ForbiddenError("Cannot record outcome for a cancelled site visit.");
-  }
-
-  if (link.siteVisit.status === SiteVisitStatus.COMPLETED) {
-    throw new ForbiddenError(
-      "Cannot modify outcomes for an already finalized site visit. Outcome editing is locked."
-    );
   }
 
   if (link.siteVisit.assignedSalesAgentId !== link.salesAgentId) {

@@ -11,7 +11,7 @@ async function MobileSiteVisitData({ params }: PageProps) {
 
   let data: Awaited<ReturnType<typeof getSiteVisitByAccessToken>> | null = null;
   let initialError: {
-    type: "EXPIRED" | "REVOKED" | "CANCELLED" | "NOT_FOUND";
+    type: "EXPIRED" | "REVOKED" | "CANCELLED" | "COMPLETED" | "NOT_FOUND";
     message: string;
   } | null = null;
 
@@ -21,8 +21,13 @@ async function MobileSiteVisitData({ params }: PageProps) {
     const errorMessage =
       err instanceof Error ? err.message : "Invalid or expired site visit access link.";
 
-    let errorType: "EXPIRED" | "REVOKED" | "CANCELLED" | "NOT_FOUND" = "NOT_FOUND";
-    if (errorMessage.toLowerCase().includes("expired")) {
+    let errorType: "EXPIRED" | "REVOKED" | "CANCELLED" | "COMPLETED" | "NOT_FOUND" = "NOT_FOUND";
+    if (
+      errorMessage.toLowerCase().includes("completed") ||
+      errorMessage.toLowerCase().includes("finalized")
+    ) {
+      errorType = "COMPLETED";
+    } else if (errorMessage.toLowerCase().includes("expired")) {
       errorType = "EXPIRED";
     } else if (errorMessage.toLowerCase().includes("revoked")) {
       errorType = "REVOKED";

@@ -11,7 +11,7 @@ interface MobileSiteVisitClientProps {
   salesAgentName?: string;
   expiresAt?: string;
   initialError?: {
-    type: "EXPIRED" | "REVOKED" | "CANCELLED" | "NOT_FOUND";
+    type: "EXPIRED" | "REVOKED" | "CANCELLED" | "COMPLETED" | "NOT_FOUND";
     message: string;
   };
 }
@@ -88,6 +88,12 @@ export function MobileSiteVisitClient({
         desc: "This itinerary access link has been revoked (e.g., following visit rescheduling, sales agent reassignment, or coordinator update).",
         icon: "🔒",
         badge: "Link Revoked",
+      },
+      COMPLETED: {
+        title: "Site Visit Finalized",
+        desc: "This site visit has been reviewed and finalized by the telecaller. All access links for this visit are now closed.",
+        icon: "✓",
+        badge: "Visit Finalized",
       },
       CANCELLED: {
         title: "Site Visit Cancelled",

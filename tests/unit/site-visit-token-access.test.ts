@@ -877,4 +877,207 @@ describe("DV-12 Phase 4: Field Agent Mobile Token Access & Security", () => {
       expect((prop as any).keyHolder).toBeUndefined();
     });
   });
+
+  // -----------------------------------------------------------------
+  // 8. SCHEDULE-ANCHORED EXPIRY & COMPLETION REVOCATION AUDIT TESTS
+  // -----------------------------------------------------------------
+  describe("8. Schedule-Anchored Expiry & Completion Revocation Audit", () => {
+    it("calculates expiry anchored to scheduled visit tomorrow + 24 hours (not token creation time)", async () => {
+      const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      (prisma.siteVisit.findFirst as any).mockResolvedValue({
+        id: "visit-tomorrow",
+        tenantId: "tenant-apex-1",
+        assignedSalesAgentId: "agent-1",
+        scheduledDate: tomorrow,
+        status: SiteVisitStatus.CONFIRMED,
+        assignedSalesAgent: { id: "agent-1", isActive: true },
+      });
+
+      (prisma.siteVisitAccessLink.create as any).mockImplementation(({ data }: any) => ({
+        id: "link-tomorrow",
+        ...data,
+      }));
+
+      const res = await createSiteVisitAccessLink(telecallerContext, "visit-tomorrow");
+
+      const expectedExpiry = new Date(tomorrow.getTime() + 24 * 60 * 60 * 1000);
+      expect(new Date(res.expiresAt).getTime()).toBe(expectedExpiry.getTime());
+      // Must be roughly 48 hours from now
+      expect(new Date(res.expiresAt).getTime() - Date.now()).toBeGreaterThan(47 * 60 * 60 * 1000);
+    });
+
+    it("calculates expiry anchored to scheduled visit 5 days later + 24 hours", async () => {
+      const fiveDaysLater = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+      (prisma.siteVisit.findFirst as any).mockResolvedValue({
+        id: "visit-5days",
+        tenantId: "tenant-apex-1",
+        assignedSalesAgentId: "agent-1",
+        scheduledDate: fiveDaysLater,
+        status: SiteVisitStatus.CONFIRMED,
+        assignedSalesAgent: { id: "agent-1", isActive: true },
+      });
+
+      (prisma.siteVisitAccessLink.create as any).mockImplementation(({ data }: any) => ({
+        id: "link-5days",
+        ...data,
+      }));
+
+      const res = await createSiteVisitAccessLink(telecallerContext, "visit-5days");
+
+      const expectedExpiry = new Date(fiveDaysLater.getTime() + 24 * 60 * 60 * 1000);
+      expect(new Date(res.expiresAt).getTime()).toBe(expectedExpiry.getTime());
+      // Must be roughly 6 days from now
+      expect(new Date(res.expiresAt).getTime() - Date.now()).toBeGreaterThan(5.9 * 24 * 60 * 60 * 1000);
+    });
+
+    it("rejects access link creation if the visit schedule + 24h validity has already elapsed", async () => {
+      // Scheduled 3 days ago
+      const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      (prisma.siteVisit.findFirst as any).mockResolvedValue({
+        id: "visit-past",
+        tenantId: "tenant-apex-1",
+        assignedSalesAgentId: "agent-1",
+        scheduledDate: threeDaysAgo,
+        status: SiteVisitStatus.CONFIRMED,
+        assignedSalesAgent: { id: "agent-1", isActive: true },
+      });
+
+      await expect(
+        createSiteVisitAccessLink(telecallerContext, "visit-past")
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rescheduling revokes previous link atomically and recalculates expiry for the new schedule", async () => {
+      const originalDate = new Date("2026-11-20T10:00:00Z");
+      const rescheduledDate = new Date("2026-11-25T15:00:00Z");
+
+      // Mock visit for rescheduling
+      (prisma.siteVisit.findFirst as any).mockResolvedValue({
+        id: "visit-resched",
+        tenantId: "tenant-apex-1",
+        scheduledDate: originalDate,
+        status: SiteVisitStatus.CONFIRMED,
+        assignedSalesAgentId: "agent-1",
+        assignedSalesAgent: { id: "agent-1", isActive: true },
+      });
+
+      (prisma.siteVisit.update as any).mockImplementation(({ data }: any) => ({
+        id: "visit-resched",
+        tenantId: "tenant-apex-1",
+        scheduledDate: data.scheduledDate,
+        status: SiteVisitStatus.CONFIRMED,
+        assignedSalesAgentId: "agent-1",
+      }));
+
+      // 1. Perform reschedule
+      await rescheduleSiteVisit(telecallerContext, {
+        visitId: "visit-resched",
+        newScheduledDate: rescheduledDate.toISOString(),
+        reason: "Buyer requested postponement to next week",
+      });
+
+      // Verify old links were atomically revoked in transaction
+      expect((prisma.siteVisitAccessLink.updateMany as any)).toHaveBeenCalledWith({
+        where: {
+          siteVisitId: "visit-resched",
+          tenantId: "tenant-apex-1",
+          isRevoked: false,
+        },
+        data: {
+          isRevoked: true,
+        },
+      });
+
+      // 2. Generate new link after reschedule
+      (prisma.siteVisit.findFirst as any).mockResolvedValue({
+        id: "visit-resched",
+        tenantId: "tenant-apex-1",
+        scheduledDate: rescheduledDate,
+        status: SiteVisitStatus.CONFIRMED,
+        assignedSalesAgentId: "agent-1",
+        assignedSalesAgent: { id: "agent-1", isActive: true },
+      });
+
+      (prisma.siteVisitAccessLink.create as any).mockImplementation(({ data }: any) => ({
+        id: "link-new-schedule",
+        ...data,
+      }));
+
+      const newLinkRes = await createSiteVisitAccessLink(telecallerContext, "visit-resched");
+
+      // Verify new expiry is anchored to the new scheduled date + 24 hours
+      const expectedNewExpiry = new Date(rescheduledDate.getTime() + 24 * 60 * 60 * 1000);
+      expect(new Date(newLinkRes.expiresAt).getTime()).toBe(expectedNewExpiry.getTime());
+    });
+
+    it("confirmSiteVisit atomically revokes active access links and locks token outcome reporting", async () => {
+      const visitMock = {
+        id: "visit-to-confirm",
+        tenantId: "tenant-apex-1",
+        leadId: "lead-1",
+        status: SiteVisitStatus.CONFIRMED,
+        items: [
+          {
+            id: "item-done-1",
+            propertyId: "prop-1",
+            status: SiteVisitItemOutcome.VISIT_DONE,
+            buyerInterestLevel: BuyerInterestLevel.HIGH,
+            buyerFeedback: "Interested in making an offer",
+            agentTextNotes: "Great showing",
+          },
+        ],
+      };
+
+      (prisma.siteVisit.findFirst as any).mockResolvedValue(visitMock);
+      (prisma.siteVisit.update as any).mockResolvedValue({
+        ...visitMock,
+        status: SiteVisitStatus.COMPLETED,
+      });
+
+      // Confirm the site visit
+      await confirmSiteVisit(telecallerContext, "visit-to-confirm", "Telecaller approved finalization");
+
+      // Verify active access links were atomically revoked in transaction
+      expect((prisma.siteVisitAccessLink.updateMany as any)).toHaveBeenCalledWith({
+        where: {
+          siteVisitId: "visit-to-confirm",
+          tenantId: "tenant-apex-1",
+          isRevoked: false,
+        },
+        data: {
+          isRevoked: true,
+        },
+      });
+
+      // Verify token outcome submission on finalized visit is rejected
+      const rawToken = "b".repeat(64);
+      const tokenHash = hashSiteVisitToken(rawToken);
+
+      (prisma.siteVisitAccessLink.findUnique as any).mockResolvedValue({
+        id: "link-revoked-on-confirm",
+        tokenHash,
+        expiresAt: new Date(Date.now() + 86400000),
+        isRevoked: true, // revoked upon finalization
+        tenant: { id: "tenant-apex-1", isActive: true },
+        salesAgent: { id: "agent-1", isActive: true },
+        siteVisit: {
+          id: "visit-to-confirm",
+          status: SiteVisitStatus.COMPLETED,
+          assignedSalesAgentId: "agent-1",
+        },
+      });
+
+      await expect(
+        recordVisitItemOutcomeViaToken(rawToken, "item-done-1", {
+          status: SiteVisitItemOutcome.VISIT_DONE,
+          agentTextNotes: "Attempting to change outcome after completion",
+        })
+      ).rejects.toThrow("Cannot modify outcomes for an already finalized site visit");
+
+      // Verify token resolution provides clear completion feedback
+      await expect(
+        getSiteVisitByAccessToken(rawToken)
+      ).rejects.toThrow("This site visit has already been finalized and completed");
+    });
+  });
 });
