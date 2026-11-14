@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
@@ -15,6 +15,7 @@ import {
   confirmSiteVisitAction,
   confirmSiteVisitOwnerAvailabilityAction,
   recordVisitItemOutcomeAction,
+  generateSiteVisitMobileLinkAction,
 } from "../actions";
 
 interface SalesAgentOption {
@@ -77,6 +78,58 @@ export function SiteVisitDetailsClient({
   // Confirm visit state
   const [isConfirming, setIsConfirming] = useState(false);
   const [isConfirmingOwner, setIsConfirmingOwner] = useState(false);
+
+  // Mobile link state (DV-12 Phase 4)
+  const [mobileUrl, setMobileUrl] = useState<string | null>(null);
+  const [mobileExpiresAt, setMobileExpiresAt] = useState<string | null>(
+    visit.activeLink?.expiresAt || null
+  );
+  const [isLinkExpired, setIsLinkExpired] = useState(() => {
+    return visit.activeLink?.expiresAt
+      ? new Date(visit.activeLink.expiresAt).getTime() <= Date.now()
+      : false;
+  });
+  const [isGeneratingLink, setIsGeneratingLink] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+
+  useEffect(() => {
+    if (!mobileExpiresAt) return;
+    const msRemaining = new Date(mobileExpiresAt).getTime() - Date.now();
+    if (msRemaining <= 0) {
+      const timer = setTimeout(() => setIsLinkExpired(true), 0);
+      return () => clearTimeout(timer);
+    }
+    const timer = setTimeout(() => setIsLinkExpired(true), msRemaining);
+    return () => clearTimeout(timer);
+  }, [mobileExpiresAt]);
+
+  const handleGenerateMobileLink = async () => {
+    setIsGeneratingLink(true);
+    try {
+      const res = await generateSiteVisitMobileLinkAction(visit.id);
+      if (res.success && res.mobileUrl) {
+        setMobileUrl(res.mobileUrl);
+        setMobileExpiresAt(res.expiresAt);
+        setIsLinkExpired(false);
+        setToastMessage("Fresh mobile itinerary link generated successfully.");
+      } else {
+        setToastMessage(res.error || "Failed to generate mobile link.");
+      }
+    } catch (err: unknown) {
+      setToastMessage(err instanceof Error ? err.message : "Error generating mobile link.");
+    } finally {
+      setIsGeneratingLink(false);
+    }
+  };
+
+  const handleCopyLink = () => {
+    if (!mobileUrl) return;
+    const fullUrl = `${window.location.origin}${mobileUrl}`;
+    navigator.clipboard.writeText(fullUrl);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 3000);
+    setToastMessage("Mobile itinerary link copied to clipboard!");
+  };
 
   // Handle Reschedule
   const handleRescheduleSubmit = async (e: React.FormEvent) => {
@@ -672,6 +725,95 @@ export function SiteVisitDetailsClient({
                       Change Assigned Agent
                     </button>
                   </div>
+                )}
+              </div>
+            </div>
+
+            {/* Field Agent Mobile Itinerary Card (DV-12 Phase 4 / PRD §7.2) */}
+            <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
+              <div className="px-5 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
+                <h2 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
+                  <span>📱</span> Field Agent Mobile Link
+                </h2>
+                <span className="text-[10px] text-crm-muted">PRD §7.2</span>
+              </div>
+
+              <div className="p-5 space-y-3.5 text-xs">
+                <p className="text-[#667085] text-xs leading-relaxed">
+                  Time-limited passwordless link for the assigned field sales agent to access this itinerary and record outcomes on mobile.
+                </p>
+
+                {/* Status indicator */}
+                <div className="p-2.5 rounded-lg bg-[#F7F5F0] border border-[#E4DFD5] space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-[#667085] uppercase">Link Status</span>
+                    {mobileExpiresAt && !isCancelled && !isCompleted && (
+                      <span className="text-[10px] text-[#667085]">
+                        Expires: {new Date(mobileExpiresAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    )}
+                  </div>
+                  <div className="font-semibold text-xs">
+                    {isCancelled ? (
+                      <span className="text-[#B3261E]">🚫 Visit Cancelled (Link Inactive)</span>
+                    ) : isCompleted ? (
+                      <span className="text-[#3B5BA9]">✓ Visit Completed (Read-Only)</span>
+                    ) : visit.activeLink?.isRevoked ? (
+                      <span className="text-[#B3261E]">🔒 Link Revoked</span>
+                    ) : isLinkExpired ? (
+                      <span className="text-[#B7791F]">⏳ Link Expired (24h passed)</span>
+                    ) : mobileUrl || (visit.activeLink && !visit.activeLink.isRevoked) ? (
+                      <span className="text-[#2E7D4F]">✓ Active Link Valid</span>
+                    ) : (
+                      <span className="text-[#667085]">Not generated yet</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Generated Link Display & Copy Actions */}
+                {mobileUrl && !isCancelled && !isCompleted && (
+                  <div className="space-y-2">
+                    <div className="p-2 bg-stone-50 border border-[#E4DFD5] rounded text-[11px] font-mono break-all text-[#1E2A32]">
+                      {typeof window !== "undefined" ? window.location.origin : ""}{mobileUrl}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={handleCopyLink}
+                        className="py-1.5 px-3 rounded text-xs font-semibold bg-white border border-[#E4DFD5] text-[#1E2A32] hover:bg-stone-50 shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <span>{copiedLink ? "✓" : "📋"}</span>
+                        {copiedLink ? "Copied!" : "Copy Link"}
+                      </button>
+                      <a
+                        href={`https://wa.me/?text=${encodeURIComponent(
+                          `Hello ${visit.assignedSalesAgent}! Here is your site visit itinerary for ${visit.buyerName} on ${visit.scheduledDate} at ${visit.timeSlot}:\n${typeof window !== "undefined" ? window.location.origin : ""}${mobileUrl}`
+                        )}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="py-1.5 px-3 rounded text-xs font-semibold bg-[#2E7D4F] text-white hover:bg-[#256640] shadow-2xs flex items-center justify-center gap-1.5 text-center cursor-pointer"
+                      >
+                        <span>💬</span> WhatsApp
+                      </a>
+                    </div>
+                  </div>
+                )}
+
+                {/* Generate / Reissue Action Button */}
+                {canReschedule && !isCancelled && !isCompleted && (
+                  <button
+                    type="button"
+                    disabled={isGeneratingLink}
+                    onClick={handleGenerateMobileLink}
+                    className="w-full py-2 text-xs font-bold rounded bg-[#1F6F6B] text-white hover:bg-[#185855] disabled:opacity-50 transition-colors shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <span>{isGeneratingLink ? "⏳" : "🔗"}</span>
+                    {isGeneratingLink
+                      ? "Generating Link..."
+                      : mobileUrl || visit.activeLink
+                      ? "Reissue Mobile Link"
+                      : "Generate Mobile Link"}
+                  </button>
                 )}
               </div>
             </div>

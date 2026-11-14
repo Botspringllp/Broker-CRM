@@ -22,6 +22,13 @@ vi.mock("@/server/db", () => {
       findFirst: vi.fn(),
       update: vi.fn(),
     },
+    siteVisitAccessLink: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
     siteVisitScheduleHistory: {
       create: vi.fn(),
     },

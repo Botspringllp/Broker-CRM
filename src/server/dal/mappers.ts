@@ -1,5 +1,6 @@
-import { Property, Lead, SiteVisit, PropertyVerificationView, LeadChangeLogItem } from "@/types/crm";
+import { Property, Lead, SiteVisit, PropertyVerificationView, LeadChangeLogItem, KeyHolder } from "@/types/crm";
 import {
+  Prisma,
   Property as PrismaProperty,
   KeyHolder as PrismaKeyHolder,
   PropertyMedia as PrismaPropertyMedia,
@@ -442,8 +443,14 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
   };
 }
 
-type FullPrismaSiteVisit = PrismaSiteVisit & {
-  lead: { id: string; name: string; primaryPhone: string };
+export type FullPrismaSiteVisit = PrismaSiteVisit & {
+  lead: {
+    id: string;
+    name: string;
+    primaryPhone: string;
+    alternatePhone?: string | null;
+    email?: string | null;
+  };
   assignedSalesAgent: { id: string; name: string; email: string };
   telecallerConfirmedByUser?: { id: string; name: string; role?: string } | null;
   items: (PrismaSiteVisitItem & {
@@ -456,6 +463,26 @@ type FullPrismaSiteVisit = PrismaSiteVisit & {
       flatNumber: string;
       ownerName: string;
       ownerMobile: string;
+      preference?: string;
+      propertyType?: string;
+      furnishingStatus?: string;
+      area?: Prisma.Decimal | number | null;
+      areaType?: string;
+      price?: Prisma.Decimal | number | null;
+      amenities?: string[];
+      keyHolders?: Array<{
+        id: string;
+        name: string;
+        mobile: string;
+        persona: string;
+        notes?: string | null;
+      }>;
+      media?: Array<{
+        id: string;
+        url: string;
+        caption?: string | null;
+        displayOrder: number;
+      }>;
     };
     reportedByUser?: { id: string; name: string; role?: string } | null;
     enteredByUser?: { id: string; name: string; role?: string } | null;
@@ -463,6 +490,14 @@ type FullPrismaSiteVisit = PrismaSiteVisit & {
   scheduleHistories?: (PrismaSiteVisitScheduleHistory & {
     recordedByUser?: { id: string; name: string } | null;
   })[];
+  accessLinks?: Array<{
+    id: string;
+    salesAgentId: string;
+    expiresAt: Date;
+    accessedAt?: Date | null;
+    isRevoked: boolean;
+    createdAt: Date;
+  }>;
 };
 
 export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
@@ -471,6 +506,8 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
     buyerId: v.lead.id,
     buyerName: v.lead.name,
     buyerPhone: v.lead.primaryPhone,
+    buyerAlternatePhone: v.lead.alternatePhone || undefined,
+    buyerEmail: v.lead.email || undefined,
     assignedSalesAgent: v.assignedSalesAgent?.name || "Unassigned",
     assignedSalesAgentId: v.assignedSalesAgentId,
     notes: v.notes || undefined,
@@ -499,50 +536,111 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
       : undefined,
     telecallerConfirmedBy: v.telecallerConfirmedByUser?.name || undefined,
     cancellationReason: v.cancellationReason || undefined,
-    items: v.items.map((item) => ({
-      id: item.id,
-      propertyId: item.property.id,
-      propertyTitle: `${item.property.bedroomCount} BHK ${item.property.societyName}`,
-      locality: item.property.localityName,
-      city: item.property.city,
-      flatNumber: item.property.flatNumber,
-      ownerName: item.property.ownerName,
-      ownerMobile: item.property.ownerMobile,
-      keyHolder: { name: "Keyholder", mobile: "-", persona: "Other" },
-      status:
-        item.status === "VISIT_DONE"
-          ? "Visit Done"
-          : item.status === "VISIT_NOT_DONE"
-          ? "Visit Not Done"
-          : "Pending",
-      reportedBy: item.reportedByUser?.name || undefined,
-      enteredBy: item.enteredByUser?.name || "Agent",
-      entryChannel:
-        item.entryChannel === "FIELD_AGENT_DIRECT"
-          ? "Field Agent Direct"
-          : "Telecaller on Behalf",
-      reportedAt: item.reportedOutcomeAt
-        ? new Date(item.reportedOutcomeAt).toLocaleDateString("en-IN")
-        : undefined,
-      agentNotes: item.agentTextNotes || undefined,
-      hasVoiceNote: !!item.voiceNoteUrl,
-      voiceNoteDuration: item.voiceNoteDurationSeconds
-        ? `${Math.floor(item.voiceNoteDurationSeconds / 60)}:${
-            item.voiceNoteDurationSeconds % 60
-          } min`
-        : undefined,
-      buyerFeedback: item.buyerFeedback || undefined,
-      buyerInterest:
-        item.buyerInterestLevel === "HIGH"
-          ? "High"
-          : item.buyerInterestLevel === "MEDIUM"
-          ? "Medium"
-          : item.buyerInterestLevel === "LOW"
-          ? "Low"
-          : item.buyerInterestLevel === "NOT_INTERESTED"
-          ? "Not Interested"
+    activeLink: (() => {
+      const links = v.accessLinks || [];
+      const active = links.find((l) => !l.isRevoked && new Date(l.expiresAt) > new Date());
+      const target = active || links[0];
+      if (!target) return undefined;
+      return {
+        id: target.id,
+        expiresAt: new Date(target.expiresAt).toISOString(),
+        isRevoked: target.isRevoked,
+        accessedAt: target.accessedAt ? new Date(target.accessedAt).toISOString() : undefined,
+      };
+    })(),
+    items: v.items.map((item) => {
+      const kh =
+        item.property.keyHolders && item.property.keyHolders.length > 0
+          ? item.property.keyHolders[0]
+          : null;
+      const personaMap: Record<string, KeyHolder["persona"]> = {
+        GUARD: "Guard",
+        MAINTENANCE_OFFICE: "Maintenance Office",
+        NEIGHBOUR: "Neighbour",
+        OWNER: "Owner",
+        OTHER: "Other",
+      };
+      const primaryKeyHolder: KeyHolder = kh
+        ? {
+            name: kh.name,
+            mobile: kh.mobile,
+            persona: personaMap[kh.persona] || "Other",
+            notes: kh.notes || undefined,
+          }
+        : {
+            name: item.property.ownerName,
+            mobile: item.property.ownerMobile,
+            persona: "Owner",
+          };
+
+      return {
+        id: item.id,
+        propertyId: item.property.id,
+        propertyTitle: `${item.property.bedroomCount} BHK ${item.property.societyName}`,
+        locality: item.property.localityName,
+        city: item.property.city,
+        flatNumber: item.property.flatNumber,
+        ownerName: item.property.ownerName,
+        ownerMobile: item.property.ownerMobile,
+        keyHolder: primaryKeyHolder,
+        keyHolders:
+          item.property.keyHolders?.map((k) => ({
+            id: k.id,
+            name: k.name,
+            mobile: k.mobile,
+            persona: personaMap[k.persona] || "Other",
+            notes: k.notes || undefined,
+          })) || [],
+        photos:
+          item.property.media?.map((m) => ({
+            id: m.id,
+            url: m.url,
+            caption: m.caption || undefined,
+            displayOrder: m.displayOrder,
+          })) || [],
+        price: item.property.price ? Number(item.property.price) : undefined,
+        priceFormatted: item.property.price
+          ? `₹${Number(item.property.price).toLocaleString("en-IN")}`
           : undefined,
-    })),
+        area: item.property.area ? Number(item.property.area) : undefined,
+        areaType: item.property.areaType || undefined,
+        propertyType: item.property.propertyType || undefined,
+        furnishingStatus: item.property.furnishingStatus || undefined,
+        status:
+          item.status === "VISIT_DONE"
+            ? "Visit Done"
+            : item.status === "VISIT_NOT_DONE"
+            ? "Visit Not Done"
+            : "Pending",
+        reportedBy: item.reportedByUser?.name || undefined,
+        enteredBy: item.enteredByUser?.name || "Agent",
+        entryChannel:
+          item.entryChannel === "FIELD_AGENT_DIRECT"
+            ? "Field Agent Direct"
+            : "Telecaller on Behalf",
+        reportedAt: item.reportedOutcomeAt
+          ? new Date(item.reportedOutcomeAt).toLocaleDateString("en-IN")
+          : undefined,
+        agentNotes: item.agentTextNotes || undefined,
+        hasVoiceNote: !!item.voiceNoteUrl,
+        voiceNoteDuration: item.voiceNoteDurationSeconds
+          ? `${Math.floor(item.voiceNoteDurationSeconds / 60)}:${
+              item.voiceNoteDurationSeconds % 60
+            } min`
+          : undefined,
+        buyerFeedback: item.buyerFeedback || undefined,
+        buyerInterest:
+          item.buyerInterestLevel === "HIGH"
+            ? "High"
+            : item.buyerInterestLevel === "MEDIUM"
+            ? "Medium"
+            : item.buyerInterestLevel === "LOW"
+            ? "Low"
+            : item.buyerInterestLevel === "NOT_INTERESTED"
+            ? "Not Interested"
+            : undefined,
+      };
+    }),
     scheduleHistory:
       v.scheduleHistories?.map((h) => ({
         changedAt: new Date(h.createdAt).toLocaleDateString("en-IN"),
@@ -554,6 +652,59 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
         reason: h.reason,
         recordedBy: h.recordedByUser?.name || "User",
       })) || [],
+  };
+}
+
+/**
+ * Server-side sanitizer for buyer-facing views (PRD §7.2 / PRD §8.2).
+ * STRICT PRIVACY BOUNDARY:
+ * Strips flatNumber, ownerName, ownerMobile, and keyHolders entirely.
+ * Never leaks private owner/address data into buyer-facing payloads.
+ */
+export function serializeBuyerSafeItinerary(v: FullPrismaSiteVisit) {
+  return {
+    id: v.id,
+    buyerName: v.lead.name,
+    scheduledDate: new Date(v.scheduledDate).toLocaleDateString("en-IN", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }),
+    timeSlot: new Date(v.scheduledDate).toLocaleTimeString("en-IN", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+    status:
+      v.status === "CONFIRMED"
+        ? "Confirmed"
+        : v.status === "COMPLETED"
+        ? "Completed"
+        : v.status === "CANCELLED"
+        ? "Cancelled"
+        : "Tentative",
+    properties: v.items.map((item) => ({
+      id: item.property.id,
+      stopOrder: item.visitOrder,
+      societyName: item.property.societyName,
+      locality: item.property.localityName,
+      city: item.property.city,
+      bedroomCount: item.property.bedroomCount,
+      propertyType: item.property.propertyType || "Residential",
+      furnishingStatus: item.property.furnishingStatus || "Unfurnished",
+      area: item.property.area ? Number(item.property.area) : undefined,
+      areaType: item.property.areaType || "sq.ft",
+      priceFormatted: item.property.price
+        ? `₹${Number(item.property.price).toLocaleString("en-IN")}`
+        : undefined,
+      amenities: item.property.amenities || [],
+      photos:
+        item.property.media?.map((m) => ({
+          id: m.id,
+          url: m.url,
+          caption: m.caption || undefined,
+        })) || [],
+      // Explicitly NO flatNumber, NO ownerName, NO ownerMobile, NO keyHolders
+    })),
   };
 }
 

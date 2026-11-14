@@ -248,6 +248,14 @@ export interface SiteVisitItem {
   voiceNoteDuration?: string;
   buyerFeedback?: string;
   buyerInterest?: "High" | "Medium" | "Low" | "Not Interested";
+  photos?: Array<{ id: string; url: string; caption?: string; displayOrder: number }>;
+  price?: number;
+  priceFormatted?: string;
+  area?: number;
+  areaType?: string;
+  propertyType?: string;
+  furnishingStatus?: string;
+  keyHolders?: Array<{ id: string; name: string; mobile: string; persona: string; notes?: string }>;
 }
 
 export interface SiteVisit {
@@ -255,6 +263,8 @@ export interface SiteVisit {
   buyerId: string;
   buyerName: string;
   buyerPhone: string;
+  buyerAlternatePhone?: string;
+  buyerEmail?: string;
   assignedSalesAgent: string;
   assignedSalesAgentId?: string;
   telecallerName: string;
@@ -265,6 +275,12 @@ export interface SiteVisit {
   telecallerConfirmedBy?: string;
   cancellationReason?: string;
   notes?: string;
+  activeLink?: {
+    id: string;
+    expiresAt: string;
+    isRevoked: boolean;
+    accessedAt?: string;
+  };
   items: SiteVisitItem[];
   scheduleHistory: {
     changedAt: string;
