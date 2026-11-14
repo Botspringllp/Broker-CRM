@@ -231,13 +231,17 @@ describe("DV-09: Caller & Manager Dashboard Metrics & All 7 PRD Filters", () => 
   });
 
   it("3. getCallerDashboardMetrics calculates callbacks due today and overdue accurately", async () => {
-    vi.mocked(prisma.lead.count).mockResolvedValue(10);
-    vi.mocked(prisma.callLog.count).mockResolvedValue(5);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T10:00:00Z"));
 
-    const now = new Date();
-    const overdueDate = new Date(now.getTime() - 86400000 * 2); // 2 days ago (strictly before today)
-    const todayDate = new Date(now.getTime() + 1800000); // 30 min from now (today)
-    const futureDate = new Date(now.getTime() + 86400000 * 2); // 2 days later
+    try {
+      vi.mocked(prisma.lead.count).mockResolvedValue(10);
+      vi.mocked(prisma.callLog.count).mockResolvedValue(5);
+
+      const now = new Date("2026-05-15T10:00:00Z");
+      const overdueDate = new Date(now.getTime() - 86400000 * 2); // 2 days ago (strictly before today)
+      const todayDate = new Date(now.getTime() + 1800000); // 30 min from now (today)
+      const futureDate = new Date(now.getTime() + 86400000 * 2); // 2 days later
 
     const mockCallbackLogs = [
       {
@@ -290,7 +294,10 @@ describe("DV-09: Caller & Manager Dashboard Metrics & All 7 PRD Filters", () => 
 
     expect(metrics.callbacksOverdue).toBe(1);
     expect(metrics.callbacksDueToday).toBe(1);
-  });
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
   it("4. getCallerDashboardMetrics tracks unreachable attempts near the 3-attempt limit", async () => {
     (prisma.lead.count as any).mockImplementation(async (args: any) => {

@@ -845,11 +845,14 @@ describe("Property Matching Engine & Active Supply Pool", () => {
       expect(sortedNoBudget[0].lead.id).toBe("lead-no-budget-newer");
       expect(sortedNoBudget[1].lead.id).toBe("lead-with-budget-older");
 
-      // 17.4 Stable Lead ID tie-break when scores, budgets, and dates are identical
-      const sameDate = new Date("2026-05-01");
-      const mockLeadMatchesId: EvaluatedLeadMatch[] = [
+      // 17.4 Newer confirmedAt DESC ranks higher when scores and budgets tie
+      const mockLeadMatchesConfirmedAt: EvaluatedLeadMatch[] = [
         {
-          lead: { id: "lead-zzz", requirements: { minBudget: 15000000, maxBudget: 20000000 }, createdAt: sameDate } as any,
+          lead: {
+            id: "lead-confirmed-older",
+            requirements: { minBudget: 15000000, maxBudget: 20000000, confirmedAt: "2026-01-01T10:00:00Z" },
+            createdAt: new Date("2025-12-01"),
+          } as any,
           score: 100,
           isEligible: true,
           criteriaMatchedCount: 4,
@@ -859,7 +862,103 @@ describe("Property Matching Engine & Active Supply Pool", () => {
           visitStatus: "No Visits Yet",
         },
         {
-          lead: { id: "lead-aaa", requirements: { minBudget: 15000000, maxBudget: 20000000 }, createdAt: sameDate } as any,
+          lead: {
+            id: "lead-confirmed-newer",
+            requirements: { minBudget: 15000000, maxBudget: 20000000, confirmedAt: "2026-06-01T10:00:00Z" },
+            createdAt: new Date("2026-05-01"),
+          } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+      ];
+      expect(sortLeadMatches(mockLeadMatchesConfirmedAt, 17500000)[0].lead.id).toBe("lead-confirmed-newer");
+
+      // 17.5 Confirmed requirement ranks higher than unconfirmed requirement (confirmedAt: null)
+      const mockLeadMatchesNullConfirmedAt: EvaluatedLeadMatch[] = [
+        {
+          lead: {
+            id: "lead-unconfirmed",
+            requirements: { minBudget: 15000000, maxBudget: 20000000, confirmedAt: null },
+            createdAt: new Date("2026-01-01"),
+          } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+        {
+          lead: {
+            id: "lead-confirmed",
+            requirements: { minBudget: 15000000, maxBudget: 20000000, confirmedAt: "2026-05-01T10:00:00Z" },
+            createdAt: new Date("2025-01-01"),
+          } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+      ];
+      expect(sortLeadMatches(mockLeadMatchesNullConfirmedAt, 17500000)[0].lead.id).toBe("lead-confirmed");
+
+      // 17.6 When both confirmedAt are null, falls back deterministically to createdAt DESC
+      const mockLeadMatchesBothNullConfirmed: EvaluatedLeadMatch[] = [
+        {
+          lead: {
+            id: "lead-older-created",
+            requirements: { minBudget: 15000000, maxBudget: 20000000, confirmedAt: null },
+            createdAt: new Date("2026-01-01"),
+          } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+        {
+          lead: {
+            id: "lead-newer-created",
+            requirements: { minBudget: 15000000, maxBudget: 20000000, confirmedAt: null },
+            createdAt: new Date("2026-06-01"),
+          } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+      ];
+      expect(sortLeadMatches(mockLeadMatchesBothNullConfirmed, 17500000)[0].lead.id).toBe("lead-newer-created");
+
+      // 17.7 Stable Lead ID tie-break when scores, budgets, and dates are identical
+      const sameDate = new Date("2026-05-01");
+      const mockLeadMatchesId: EvaluatedLeadMatch[] = [
+        {
+          lead: { id: "lead-zzz", requirements: { minBudget: 15000000, maxBudget: 20000000, confirmedAt: null }, createdAt: sameDate } as any,
+          score: 100,
+          isEligible: true,
+          criteriaMatchedCount: 4,
+          criteriaEvaluatedCount: 4,
+          breakdown: {} as any,
+          unspecifiedCriteria: [],
+          visitStatus: "No Visits Yet",
+        },
+        {
+          lead: { id: "lead-aaa", requirements: { minBudget: 15000000, maxBudget: 20000000, confirmedAt: null }, createdAt: sameDate } as any,
           score: 100,
           isEligible: true,
           criteriaMatchedCount: 4,

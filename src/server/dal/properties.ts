@@ -309,6 +309,7 @@ export interface CreatePropertyInput {
   amenities?: string[];
   keyHolder?: KeyHolderInput | null;
   confirmDuplicate?: boolean;
+  validationStatus?: SupplyValidationStatus | "NOT_VALIDATED" | "IN_VALIDATION" | "VALIDATED";
 }
 
 function normalizeMobile(mobile: string): string {
@@ -426,6 +427,7 @@ export async function createProperty(context: TenantContext, data: CreatePropert
       isActiveSupply: false,
       entryChannel: "MANUAL",
       keyHolders: keyHolderCreate ? { create: keyHolderCreate } : undefined,
+      ...(data.validationStatus === "VALIDATED" ? { validatedAt: new Date() } : {}),
     },
     include: {
       keyHolders: true,
@@ -541,6 +543,7 @@ export interface EditPropertyInput {
   amenities?: string[];
   keyHolder?: KeyHolderInput | null;
   confirmDuplicate?: boolean;
+  validationStatus?: SupplyValidationStatus | "NOT_VALIDATED" | "IN_VALIDATION" | "VALIDATED";
 }
 
 /**
@@ -899,7 +902,10 @@ export async function logPropertyCall(context: TenantContext, input: LogProperty
         availabilityStatus: nextAvailabilityStatus,
         ownerWillingnessConfirmed: nextOwnerWillingness,
         isActiveSupply: computedIsActiveSupply,
-        ...(nextValidationStatus === SupplyValidationStatus.VALIDATED ? { validatedAt: new Date() } : {}),
+        ...(nextValidationStatus === SupplyValidationStatus.VALIDATED &&
+        (property.validationStatus !== SupplyValidationStatus.VALIDATED || !property.validatedAt)
+          ? { validatedAt: new Date() }
+          : {}),
       },
       include: {
         keyHolders: true,

@@ -275,6 +275,7 @@ export function LeadDetailsClient({
         enquiryId: lead.enquiries?.[0]?.id || undefined,
         isEnquiryVerified: isEnquiryVerifiedOnCall,
         enquiryVerificationNotes: enquiryVerificationNotesOnCall.trim() || undefined,
+        isRequirementsConfirmed: disposition === "CONNECTED" ? confirmRequirementsOnCall : undefined,
       });
 
       if (!res.success) {
@@ -285,6 +286,7 @@ export function LeadDetailsClient({
       setLead(res.lead);
       setCallNotes("");
       setCallbackDate("");
+      setConfirmRequirementsOnCall(false);
       setToastMessage("Call logged successfully.");
 
       // Refresh change history

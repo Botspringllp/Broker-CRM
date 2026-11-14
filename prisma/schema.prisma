@@ -603,13 +603,15 @@ model LeadRequirement {
   areaUnit              String          @default("sq.ft")
   areaType              AreaUnitType?
 
-  isConfirmed Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isConfirmed Boolean   @default(false)
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   localities LeadRequirementLocality[]
 
   @@index([tenantId, city, preference])
+  @@index([tenantId, confirmedAt])
   @@map("lead_requirements")
 }
 

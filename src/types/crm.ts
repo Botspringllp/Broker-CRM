@@ -191,6 +191,7 @@ export interface Lead {
     areaUnit?: string | null;
     areaType?: string | null;
     isConfirmed: boolean;
+    confirmedAt?: string | null;
   };
   currentDisposition: string;
   callHistory: CallLogItem[];

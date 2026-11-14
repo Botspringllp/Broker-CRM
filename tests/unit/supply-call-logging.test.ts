@@ -514,4 +514,84 @@ describe("Supply Validation - Call History Persistence & Active Pool Safety", ()
     expect(view.callHistory[0].callbackDate).toBeDefined();
     expect(view.callHistory[0].calledAt).toBeDefined();
   });
+
+  describe("9. Property Validation Timestamp (validatedAt) Lifecycle", () => {
+    it("sets validatedAt when property transitions into VALIDATED", async () => {
+      vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
+        ...mockAssignedProperty,
+        validationStatus: SupplyValidationStatus.NOT_VALIDATED,
+        validatedAt: null,
+      } as unknown as MockProperty);
+      vi.mocked(prisma.callLog.create).mockResolvedValueOnce({ id: "call-1" } as unknown as MockCallLog);
+      vi.mocked(prisma.property.update).mockResolvedValueOnce({} as unknown as MockProperty);
+
+      await logPropertyCall(tenantApexContext, {
+        propertyId: "prop-101",
+        disposition: PropertyCallingDisposition.PROPERTY_AVAILABLE,
+        confirmOwnerWillingness: true,
+      });
+
+      expect(prisma.property.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            validationStatus: SupplyValidationStatus.VALIDATED,
+            validatedAt: expect.any(Date),
+          }),
+        })
+      );
+    });
+
+    it("ordinary call logging on an already VALIDATED property preserves existing validatedAt", async () => {
+      const existingValidatedAt = new Date("2026-05-01T10:00:00Z");
+      vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
+        ...mockAssignedProperty,
+        validationStatus: SupplyValidationStatus.VALIDATED,
+        validatedAt: existingValidatedAt,
+      } as unknown as MockProperty);
+      vi.mocked(prisma.callLog.create).mockResolvedValueOnce({ id: "call-2" } as unknown as MockCallLog);
+      vi.mocked(prisma.property.update).mockResolvedValueOnce({} as unknown as MockProperty);
+
+      await logPropertyCall(tenantApexContext, {
+        propertyId: "prop-101",
+        disposition: PropertyCallingDisposition.PROPERTY_AVAILABLE,
+        confirmOwnerWillingness: true,
+      });
+
+      // Verify update did NOT overwrite validatedAt
+      expect(prisma.property.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.not.objectContaining({
+            validatedAt: expect.anything(),
+          }),
+        })
+      );
+    });
+
+    it("genuine revalidation after property left VALIDATED updates validatedAt", async () => {
+      // Property previously left VALIDATED (now IN_VALIDATION or MANDATE_DECLINED)
+      vi.mocked(prisma.property.findFirst).mockResolvedValueOnce({
+        ...mockAssignedProperty,
+        validationStatus: SupplyValidationStatus.IN_VALIDATION,
+        validatedAt: new Date("2026-01-01T10:00:00Z"), // Old validation date
+      } as unknown as MockProperty);
+      vi.mocked(prisma.callLog.create).mockResolvedValueOnce({ id: "call-3" } as unknown as MockCallLog);
+      vi.mocked(prisma.property.update).mockResolvedValueOnce({} as unknown as MockProperty);
+
+      await logPropertyCall(tenantApexContext, {
+        propertyId: "prop-101",
+        disposition: PropertyCallingDisposition.PROPERTY_AVAILABLE,
+        confirmOwnerWillingness: true,
+      });
+
+      // Since previous status was IN_VALIDATION, this is a genuine re-validation!
+      expect(prisma.property.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            validationStatus: SupplyValidationStatus.VALIDATED,
+            validatedAt: expect.any(Date),
+          }),
+        })
+      );
+    });
+  });
 });

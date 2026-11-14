@@ -181,9 +181,18 @@ export function sortLeadMatches(
     // Note: When either midA or midB is null, Tier 2 is skipped so buyers are not
     // penalized for unspecified budgets. Evaluation proceeds to Tier 3.
 
-    // 3. Intake / creation timestamp descending (deterministic fallback)
-    const timeA = a.lead.createdAt ? new Date(a.lead.createdAt).getTime() : 0;
-    const timeB = b.lead.createdAt ? new Date(b.lead.createdAt).getTime() : 0;
+    // 3. Buyer requirement confirmation date descending (LeadRequirement.confirmedAt DESC)
+    // Deterministic fallback: Lead.createdAt DESC when confirmedAt is null
+    const timeA = a.lead.requirements?.confirmedAt
+      ? new Date(a.lead.requirements.confirmedAt).getTime()
+      : a.lead.createdAt
+      ? new Date(a.lead.createdAt).getTime()
+      : 0;
+    const timeB = b.lead.requirements?.confirmedAt
+      ? new Date(b.lead.requirements.confirmedAt).getTime()
+      : b.lead.createdAt
+      ? new Date(b.lead.createdAt).getTime()
+      : 0;
     if (timeB !== timeA) {
       return timeB - timeA;
     }

@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { UserRole, LeadStatus, Prisma } from "@prisma/client";
 import { TenantContext } from "@/server/tenant-context";
-import { ValidationError } from "@/server/errors";
+import { ValidationError, ForbiddenError } from "@/server/errors";
 
 vi.mock("@/server/db", () => {
   const mockPrisma = {
@@ -58,6 +58,8 @@ import {
   editLead,
   getVerifiedLocalities,
   validateAreaRequirements,
+  confirmLeadRequirements,
+  updateLead,
 } from "@/server/dal/leads";
 import { mapPrismaLeadToView } from "@/server/dal/mappers";
 
@@ -677,6 +679,153 @@ describe("DV-06 Requirement Capture: Full Implementation", () => {
           source: "Housing.com",
         }),
       });
+    });
+  });
+
+  describe("7. Buyer Requirement Confirmation Lifecycle (confirmedAt)", () => {
+    it("sets confirmedAt and isConfirmed = true on first caller confirmation", async () => {
+      (prisma.lead.findFirst as any).mockResolvedValue(sampleLead);
+      (prisma.leadRequirement.update as any).mockResolvedValue({
+        ...sampleLead.requirement,
+        isConfirmed: true,
+        confirmedAt: new Date("2026-05-10T10:00:00Z"),
+      });
+      (prisma.lead.findUniqueOrThrow as any).mockResolvedValue({
+        ...sampleLead,
+        requirement: {
+          ...sampleLead.requirement,
+          isConfirmed: true,
+          confirmedAt: new Date("2026-05-10T10:00:00Z"),
+        },
+      });
+
+      await confirmLeadRequirements(brokerContext, "lead-200");
+
+      expect(prisma.leadRequirement.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { leadId: "lead-200" },
+          data: expect.objectContaining({
+            isConfirmed: true,
+            confirmedAt: expect.any(Date),
+          }),
+        })
+      );
+
+      expect(prisma.leadChangeLog.createMany).toHaveBeenCalledWith({
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            fieldName: "isConfirmed",
+            newValue: "true",
+          }),
+          expect.objectContaining({
+            fieldName: "confirmedAt",
+            previousValue: null,
+          }),
+        ]),
+      });
+    });
+
+    it("re-confirmation after requirement change updates confirmedAt to current timestamp", async () => {
+      const alreadyConfirmedLead = {
+        ...sampleLead,
+        requirement: {
+          ...sampleLead.requirement,
+          isConfirmed: true,
+          confirmedAt: new Date("2026-01-01T10:00:00Z"),
+        },
+      };
+
+      (prisma.lead.findFirst as any).mockResolvedValue(alreadyConfirmedLead);
+      (prisma.leadRequirement.update as any).mockResolvedValue({
+        ...alreadyConfirmedLead.requirement,
+        confirmedAt: new Date("2026-06-01T12:00:00Z"),
+      });
+      (prisma.lead.findUniqueOrThrow as any).mockResolvedValue(alreadyConfirmedLead);
+
+      await confirmLeadRequirements(brokerContext, "lead-200");
+
+      expect(prisma.leadRequirement.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { leadId: "lead-200" },
+          data: expect.objectContaining({
+            isConfirmed: true,
+            confirmedAt: expect.any(Date),
+          }),
+        })
+      );
+    });
+
+    it("ordinary requirement edit without caller verification does NOT update confirmedAt", async () => {
+      const confirmedLead = {
+        ...sampleLead,
+        requirement: {
+          ...sampleLead.requirement,
+          isConfirmed: true,
+          confirmedAt: new Date("2026-01-01T10:00:00Z"),
+        },
+      };
+
+      (prisma.lead.findFirst as any).mockResolvedValue(confirmedLead);
+      (prisma.leadRequirement.upsert as any).mockResolvedValue({
+        ...confirmedLead.requirement,
+        minBudget: new Prisma.Decimal("15000000"),
+      });
+      (prisma.lead.findUniqueOrThrow as any).mockResolvedValue(confirmedLead);
+      (prisma.lead.update as any).mockResolvedValue(confirmedLead);
+
+      await editLead(brokerContext, {
+        id: "lead-200",
+        name: "Sunita Sharma",
+        primaryPhone: "9811122233",
+        originalSource: "Direct Inquiry",
+        minBudget: 15000000,
+        maxBudget: 25000000,
+        city: "Gurugram",
+        preference: "SALE",
+      });
+
+      // Verify upsert update payload did NOT touch confirmedAt
+      expect(prisma.leadRequirement.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.not.objectContaining({
+            confirmedAt: expect.anything(),
+          }),
+        })
+      );
+    });
+
+    it("unrelated lead update does not update confirmedAt", async () => {
+      const confirmedLead = {
+        ...sampleLead,
+        requirement: {
+          ...sampleLead.requirement,
+          isConfirmed: true,
+          confirmedAt: new Date("2026-01-01T10:00:00Z"),
+        },
+      };
+
+      (prisma.lead.findFirst as any).mockResolvedValue(confirmedLead);
+      (prisma.lead.update as any).mockResolvedValue(confirmedLead);
+
+      await updateLead(brokerContext, "lead-200", {
+        name: "Sunita S. Sharma",
+        email: "sunita.new@example.com",
+      });
+
+      // Verify requirement table was not touched
+      expect(prisma.leadRequirement.update).not.toHaveBeenCalled();
+      expect(prisma.leadRequirement.upsert).not.toHaveBeenCalled();
+    });
+
+    it("unauthorized user lacking demand:log_call cannot confirm requirements", async () => {
+      const unauthorizedContext: TenantContext = {
+        ...brokerContext,
+        role: UserRole.FIELD_VERIFIER,
+      };
+
+      await expect(confirmLeadRequirements(unauthorizedContext, "lead-200")).rejects.toThrow(
+        ForbiddenError
+      );
     });
   });
 });

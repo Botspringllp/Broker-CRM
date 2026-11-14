@@ -4,6 +4,7 @@ import { requireTenantContext } from "@/server/tenant-context";
 import {
   createLead,
   editLead,
+  confirmLeadRequirements,
   logLeadCall,
   updateLeadStatus,
   getLeadById,
@@ -86,6 +87,25 @@ export async function updateLeadStatusAction(input: {
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to update lead status.";
+    return {
+      success: false as const,
+      error: message,
+    };
+  }
+}
+
+export async function confirmLeadRequirementsAction(leadId: string) {
+  try {
+    const context = await requireTenantContext();
+    const updated = await confirmLeadRequirements(context, leadId);
+    revalidatePath("/leads");
+    revalidatePath(`/leads/${leadId}`);
+    return {
+      success: true as const,
+      lead: mapPrismaLeadToView(updated),
+    };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Failed to confirm requirements.";
     return {
       success: false as const,
       error: message,

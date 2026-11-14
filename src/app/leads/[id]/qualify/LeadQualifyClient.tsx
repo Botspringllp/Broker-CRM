@@ -194,6 +194,7 @@ export function LeadQualifyClient({
         enquiryId: selectedEnquiryId ? selectedEnquiryId : undefined,
         isEnquiryVerified: Boolean(isEnquiryVerified),
         enquiryVerificationNotes: enquiryVerificationNotes.trim() || null,
+        isRequirementsConfirmed: confirmRequirements,
       });
 
       if (!res.success) {

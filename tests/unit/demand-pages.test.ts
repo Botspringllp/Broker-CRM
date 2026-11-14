@@ -558,7 +558,10 @@ describe("Demand Management: Dedicated Pages & Qualification Workspace Tests", (
       expect(prisma.leadRequirement.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { leadId: "lead-conf-1" },
-          data: { isConfirmed: true },
+          data: expect.objectContaining({
+            isConfirmed: true,
+            confirmedAt: expect.any(Date),
+          }),
         })
       );
 

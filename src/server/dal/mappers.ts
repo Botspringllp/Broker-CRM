@@ -421,6 +421,7 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
       areaUnit: l.requirement?.areaUnit || "sq.ft",
       areaType: l.requirement?.areaType || null,
       isConfirmed: Boolean(l.requirement?.isConfirmed),
+      confirmedAt: l.requirement?.confirmedAt ? l.requirement.confirmedAt.toISOString() : null,
     },
     currentDisposition: l.callLogs?.[0]?.leadDisposition?.replace(/_/g, " ") || "Not Called",
     callHistory:

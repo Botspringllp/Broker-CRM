@@ -52,6 +52,7 @@ export interface ValidatedPropertyRow {
   isDuplicate?: boolean;
   duplicateWarning?: string;
   isInternalDuplicate?: boolean;
+  validationStatus?: SupplyValidationStatus;
 }
 
 export interface BulkImportPreview {
@@ -820,6 +821,7 @@ export async function executeBulkPropertyImport(
           ownerWillingnessConfirmed: false, // STRICT PRD DEFAULT
           isActiveSupply: false, // STRICT PRD DEFAULT
           keyHolders: keyHolderCreate ? { create: keyHolderCreate } : undefined,
+          ...(row.validationStatus === SupplyValidationStatus.VALIDATED ? { validatedAt: new Date() } : {}),
         },
       });
 

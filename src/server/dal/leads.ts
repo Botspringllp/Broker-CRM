@@ -135,6 +135,7 @@ export interface EditLeadData {
   societies?: string[];
   assignedTelecallerId?: string | null;
   localities?: string[];
+  isRequirementsConfirmed?: boolean | null;
 }
 
 export interface UpdateLeadData {
@@ -155,6 +156,7 @@ export interface LogLeadCallInput {
   isEnquiryVerified?: boolean | null;
   enquiryVerificationNotes?: string | null;
   isDoNotContact?: boolean;
+  isRequirementsConfirmed?: boolean | null;
 }
 
 const FULL_LEAD_INCLUDE = {
@@ -1183,6 +1185,29 @@ export async function logLeadCall(context: TenantContext, input: LogLeadCallInpu
       });
     }
 
+    if (input.isRequirementsConfirmed && lead.requirement) {
+      const now = new Date();
+      if (!lead.requirement.isConfirmed) {
+        changes.push({
+          fieldName: "isConfirmed",
+          previousValue: false,
+          newValue: true,
+        });
+      }
+      changes.push({
+        fieldName: "confirmedAt",
+        previousValue: lead.requirement.confirmedAt ? lead.requirement.confirmedAt.toISOString() : null,
+        newValue: now.toISOString(),
+      });
+      await tx.leadRequirement.update({
+        where: { leadId: lead.id },
+        data: {
+          isConfirmed: true,
+          confirmedAt: now,
+        },
+      });
+    }
+
     if (changes.length > 0) {
       await recordLeadFieldChanges({
         tx,
@@ -1241,6 +1266,7 @@ export async function updateLeadStatus(
     }
 
     if (status === LeadStatus.ACTIVE && lead.requirement) {
+      const now = new Date();
       if (!lead.requirement.isConfirmed) {
         changes.push({
           fieldName: "isConfirmed",
@@ -1248,9 +1274,14 @@ export async function updateLeadStatus(
           newValue: true,
         });
       }
+      changes.push({
+        fieldName: "confirmedAt",
+        previousValue: lead.requirement.confirmedAt ? lead.requirement.confirmedAt.toISOString() : null,
+        newValue: now.toISOString(),
+      });
       await tx.leadRequirement.update({
         where: { leadId: lead.id },
-        data: { isConfirmed: true },
+        data: { isConfirmed: true, confirmedAt: now },
       });
     }
 
@@ -1401,6 +1432,7 @@ export async function updateLead(
   return prisma.$transaction(async (tx) => {
     // If activating lead, ensure requirement isConfirmed is synced and audited
     if (data.status === LeadStatus.ACTIVE && lead.requirement) {
+      const now = new Date();
       if (!lead.requirement.isConfirmed) {
         changes.push({
           fieldName: "isConfirmed",
@@ -1408,9 +1440,14 @@ export async function updateLead(
           newValue: true,
         });
       }
+      changes.push({
+        fieldName: "confirmedAt",
+        previousValue: lead.requirement.confirmedAt ? lead.requirement.confirmedAt.toISOString() : null,
+        newValue: now.toISOString(),
+      });
       await tx.leadRequirement.update({
         where: { leadId: lead.id },
-        data: { isConfirmed: true },
+        data: { isConfirmed: true, confirmedAt: now },
       });
     }
 
@@ -1705,6 +1742,23 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
       },
     });
 
+    const isCallerConfirming = Boolean(data.isRequirementsConfirmed);
+    const now = new Date();
+    if (isCallerConfirming) {
+      if (!lead.requirement?.isConfirmed) {
+        changes.push({
+          fieldName: "isConfirmed",
+          previousValue: false,
+          newValue: true,
+        });
+      }
+      changes.push({
+        fieldName: "confirmedAt",
+        previousValue: lead.requirement?.confirmedAt ? lead.requirement.confirmedAt.toISOString() : null,
+        newValue: now.toISOString(),
+      });
+    }
+
     const updatedReq = await tx.leadRequirement.upsert({
       where: { leadId: lead.id },
       create: {
@@ -1722,6 +1776,8 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
         maxArea: data.maxArea !== undefined ? (data.maxArea ? new Prisma.Decimal(data.maxArea) : null) : null,
         areaUnit: data.areaUnit !== undefined ? (data.areaUnit?.trim() || "sq.ft") : "sq.ft",
         areaType: data.areaType ?? null,
+        isConfirmed: isCallerConfirming,
+        confirmedAt: isCallerConfirming ? now : null,
       },
       update: {
         minBudget: new Prisma.Decimal(data.minBudget),
@@ -1736,6 +1792,7 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
         maxArea: data.maxArea !== undefined ? (data.maxArea ? new Prisma.Decimal(data.maxArea) : null) : undefined,
         areaUnit: data.areaUnit !== undefined ? (data.areaUnit?.trim() || "sq.ft") : undefined,
         areaType: data.areaType !== undefined ? data.areaType : undefined,
+        ...(isCallerConfirming ? { isConfirmed: true, confirmedAt: now } : {}),
       },
     });
 
@@ -1752,6 +1809,75 @@ export async function editLead(context: TenantContext, data: EditLeadData) {
         localities: data.localities,
       });
     }
+
+    return tx.lead.findUniqueOrThrow({
+      where: {
+        id_tenantId: {
+          id: lead.id,
+          tenantId: context.tenantId,
+        },
+      },
+      include: FULL_LEAD_INCLUDE,
+    });
+  });
+}
+
+/**
+ * Verifies and confirms buyer requirements.
+ * Enforces demand:log_call permission and telecaller assignment scoping via getLeadById.
+ * Sets isConfirmed: true and confirmedAt: new Date(), with atomic changelog audit.
+ */
+export async function confirmLeadRequirements(
+  context: TenantContext,
+  leadId: string
+) {
+  assertPermission(context, "demand:log_call");
+
+  if (!leadId?.trim()) {
+    throw new ValidationError("Lead ID is required.");
+  }
+
+  const lead = await getLeadById(context, leadId);
+
+  if (!lead.requirement) {
+    throw new ValidationError("Lead does not have any requirements to confirm.");
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const now = new Date();
+    const changes: FieldComparison[] = [];
+
+    if (!lead.requirement!.isConfirmed) {
+      changes.push({
+        fieldName: "isConfirmed",
+        previousValue: false,
+        newValue: true,
+      });
+    }
+    changes.push({
+      fieldName: "confirmedAt",
+      previousValue: lead.requirement!.confirmedAt
+        ? lead.requirement!.confirmedAt.toISOString()
+        : null,
+      newValue: now.toISOString(),
+    });
+
+    await recordLeadFieldChanges({
+      tx,
+      tenantId: context.tenantId,
+      leadId: lead.id,
+      changedByUserId: context.userId,
+      changeSource: "USER",
+      changes,
+    });
+
+    await tx.leadRequirement.update({
+      where: { leadId: lead.id },
+      data: {
+        isConfirmed: true,
+        confirmedAt: now,
+      },
+    });
 
     return tx.lead.findUniqueOrThrow({
       where: {
