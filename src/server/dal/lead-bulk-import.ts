@@ -851,6 +851,50 @@ export async function parseAndPreviewLeadImportFile(
 // BATCH TRANSACTIONAL EXECUTION
 // -------------------------------------------------------------
 
+function isTenantPhoneUniqueConflict(error: unknown): boolean {
+  if (
+    !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+    error.code !== "P2002"
+  ) {
+    return false;
+  }
+
+  const metaTarget = error.meta?.target;
+  if (Array.isArray(metaTarget)) {
+    const hasPhone = metaTarget.some(
+      (field) =>
+        typeof field === "string" &&
+        (field.includes("primaryPhone") ||
+          field.includes("primary_phone") ||
+          field.includes("leads_tenantId_primaryPhone_key") ||
+          field.includes("leads_tenant_id_primary_phone_key"))
+    );
+    if (hasPhone) return true;
+  } else if (typeof metaTarget === "string") {
+    if (
+      metaTarget.includes("primaryPhone") ||
+      metaTarget.includes("primary_phone") ||
+      metaTarget.includes("leads_tenantId_primaryPhone_key") ||
+      metaTarget.includes("leads_tenant_id_primary_phone_key")
+    ) {
+      return true;
+    }
+  }
+
+  if (typeof error.message === "string") {
+    if (
+      error.message.includes("leads_tenantId_primaryPhone_key") ||
+      error.message.includes("leads_tenant_id_primary_phone_key") ||
+      (error.message.includes("primaryPhone") && error.message.includes("tenantId")) ||
+      (error.message.includes("primary_phone") && error.message.includes("tenant_id"))
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export async function executeBulkLeadImport(
   context: TenantContext,
   input: BulkLeadImportExecutionInput
@@ -895,9 +939,13 @@ export async function executeBulkLeadImport(
     };
   }
 
-  // Execute entire import in a single Prisma interactive transaction
-  return await prisma.$transaction(
-    async (tx) => {
+  // Execute import in a single Prisma interactive transaction with bounded retry
+  // for concurrent duplicate phone collisions (P2002)
+  const MAX_IMPORT_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_IMPORT_RETRIES; attempt++) {
+    try {
+      return await prisma.$transaction(
+        async (tx) => {
       // 1. Preload candidate property UUIDs to avoid N+1 queries
       const candidatePropertyUuids = Array.from(
         new Set(
@@ -1151,4 +1199,15 @@ export async function executeBulkLeadImport(
     },
     { timeout: 30000, maxWait: 10000 }
   );
+    } catch (error) {
+      if (isTenantPhoneUniqueConflict(error) && attempt < MAX_IMPORT_RETRIES) {
+        const backoffMs = Math.floor(Math.random() * 50) + attempt * 25;
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw new Error("Bulk import failed: Maximum concurrency retries exceeded.");
 }
