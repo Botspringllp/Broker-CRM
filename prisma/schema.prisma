@@ -225,6 +225,19 @@ enum VerificationOccupancyState {
   OTHER
 }
 
+enum PortalProvider {
+  NINETY_NINE_ACRES @map("99ACRES")
+  MAGICBRICKS
+  NOBROKER
+}
+
+enum WebhookProcessingStatus {
+  PENDING
+  PROCESSED
+  FAILED
+  IGNORED
+}
+
 // ---------------------------------------------------------
 // 1. TENANT & IDENTITY
 // ---------------------------------------------------------
@@ -261,6 +274,8 @@ model Tenant {
   siteVisitAccessLinks      SiteVisitAccessLink[]
   userAuditLogs             UserAuditLog[]
   propertyVerifications     PropertyVerification[]
+  portalConfigs             TenantPortalConfig[]
+  portalWebhookEvents       PortalWebhookEvent[]
 
   @@map("tenants")
 }
@@ -919,4 +934,51 @@ model PropertyVerification {
   @@index([tenantId, propertyId, status])
   @@index([tenantId, status])
   @@map("property_verifications")
+}
+
+// ---------------------------------------------------------
+// 10. EXTERNAL PORTAL INTEGRATION DOMAIN (DV-14)
+// ---------------------------------------------------------
+
+model TenantPortalConfig {
+  id               String         @id @default(uuid())
+  tenantId         String
+  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider         PortalProvider
+  isEnabled        Boolean        @default(true)
+  webhookTokenHash String
+  tokenCreatedAt   DateTime       @default(now())
+  tokenRotatedAt   DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@unique([tenantId, provider])
+  @@index([webhookTokenHash])
+  @@index([tenantId, isEnabled])
+  @@map("tenant_portal_configs")
+}
+
+model PortalWebhookEvent {
+  id                    String                  @id @default(uuid())
+  tenantId              String
+  tenant                Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider              PortalProvider
+  externalEventId       String?
+  idempotencyKey        String
+  status                WebhookProcessingStatus @default(PENDING)
+  eventAction           String?
+  leadPhone             String?
+  leadEmail             String?
+  advertisedPropertyRef String?
+  rawPayload            Json?
+  errorMessage          String?
+  receivedAt            DateTime                @default(now())
+  processedAt           DateTime?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+
+  @@unique([tenantId, provider, idempotencyKey])
+  @@index([tenantId, status, receivedAt])
+  @@index([tenantId, provider, externalEventId])
+  @@map("portal_webhook_events")
 }

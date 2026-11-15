@@ -52,7 +52,7 @@ A template is maintained in `.env.test.example`.
    Automatically provisions `broker_crm_test` if missing and applies all Prisma migrations (`npx prisma migrate deploy`).
 
 ### Applied Migrations Inventory
-The integration test database (`broker_crm_test`) applies the exact 9 migrations present in `prisma/migrations/`:
+The integration test database (`broker_crm_test`) applies the exact 10 migrations present in `prisma/migrations/`:
 1. `20261026090118_init` — Phase 1 base schema (tenants, users, sessions, accounts, verifications)
 2. `20261026150051_add_team_hierarchy_and_user_audit` — Team leader hierarchy & audit logs
 3. `20261026164155_add_broker_hierarchy_and_tenant_seats` — Broker hierarchy and tenant seat limits
@@ -62,6 +62,7 @@ The integration test database (`broker_crm_test`) applies the exact 9 migrations
 7. `20261106092016_add_demand_validation_lead_and_area_fields` — Demand management & lead models
 8. `20261113050214_add_property_validated_at` — Property validation timestamp
 9. `20261113172720_add_lead_requirement_confirmed_at` — Lead requirement confirmation fields
+10. `20261115100000_add_tenant_portal_configs_and_events` — Tenant portal configs and webhook events (DV-14)
 
 ---
 

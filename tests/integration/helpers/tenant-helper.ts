@@ -77,6 +77,10 @@ export async function createTestTenant(
 
   const cleanup = async () => {
     try {
+      // 0. Delete portal integration records
+      await prisma.portalWebhookEvent.deleteMany({ where: { tenantId: tenant.id } });
+      await prisma.tenantPortalConfig.deleteMany({ where: { tenantId: tenant.id } });
+
       // 1. Delete operational site visit records
       await prisma.siteVisitItem.deleteMany({ where: { tenantId: tenant.id } });
       await prisma.siteVisitAccessLink.deleteMany({ where: { tenantId: tenant.id } });
