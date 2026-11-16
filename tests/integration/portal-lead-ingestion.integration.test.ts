@@ -647,7 +647,7 @@ describe("Live PostgreSQL Integration: Normalized Portal Lead Ingestion DAL (DV-
     });
   });
 
-  it("13. Transaction rollback on database failure: leaves zero partial records", async () => {
+  it("13. Transaction rollback on database failure: leaves zero partial records and persists FAILED event outside tx, allowing clean retry", async () => {
     const triggerPhone = "9810099881";
     const externalEventId = "99a_rollback_test_evt";
 
@@ -693,7 +693,7 @@ describe("Live PostgreSQL Integration: Normalized Portal Lead Ingestion DAL (DV-
         })
       ).rejects.toThrow(/Simulated database failure during enquiry insertion/);
 
-      // Verify ZERO partial records exist
+      // Verify ZERO partial business records exist
       const partialLead = await prisma.lead.findFirst({
         where: { tenantId: fixtureA.tenant.id, primaryPhone: triggerPhone },
       });
@@ -709,10 +709,49 @@ describe("Live PostgreSQL Integration: Normalized Portal Lead Ingestion DAL (DV-
       });
       expect(partialEnquiry).toBeNull();
 
-      const partialEvent = await prisma.portalWebhookEvent.findFirst({
-        where: { tenantId: fixtureA.tenant.id, externalEventId },
+      // Verify FAILED event is persisted outside the aborted transaction
+      const failedEvent = await prisma.portalWebhookEvent.findFirst({
+        where: {
+          tenantId: fixtureA.tenant.id,
+          externalEventId,
+          status: WebhookProcessingStatus.FAILED,
+        },
       });
-      expect(partialEvent).toBeNull();
+      expect(failedEvent).toBeDefined();
+      expect(failedEvent?.errorMessage).toMatch(/Simulated database failure during enquiry insertion/);
+      expect(failedEvent?.leadPhone).toBeNull(); // No customer PII retained in failure record
+
+      // Clean up failure trigger so subsequent retry can succeed
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS trg_test_portal_rollback ON enquiries;`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS test_fail_portal_enquiry();`);
+
+      // Subsequent retry of the EXACT SAME keyed event succeeds safely
+      const retryPayload = { ...payload, advertisedPropertyRef: null };
+      const resRetry = await ingestPortalLead({
+        tenantId: fixtureA.tenant.id,
+        provider: PortalProvider.NINETY_NINE_ACRES,
+        payload: retryPayload,
+      });
+
+      expect(resRetry.success).toBe(true);
+      expect(resRetry.isDuplicate).toBe(false);
+
+      // Verify Lead and Enquiry are now created
+      const createdLead = await prisma.lead.findFirst({
+        where: { tenantId: fixtureA.tenant.id, primaryPhone: triggerPhone },
+        include: { enquiries: true },
+      });
+      expect(createdLead).toBeDefined();
+      expect(createdLead?.enquiries.length).toBe(1);
+
+      // Verify BOTH the FAILED event and the PROCESSED event exist for this externalEventId
+      const events = await prisma.portalWebhookEvent.findMany({
+        where: { tenantId: fixtureA.tenant.id, externalEventId },
+        orderBy: { createdAt: "asc" },
+      });
+      expect(events.length).toBe(2);
+      expect(events[0].status).toBe(WebhookProcessingStatus.FAILED);
+      expect(events[1].status).toBe(WebhookProcessingStatus.PROCESSED);
     } finally {
       // Clean up temporary PostgreSQL trigger and function
       await prisma.$executeRawUnsafe(`
@@ -720,6 +759,133 @@ describe("Live PostgreSQL Integration: Normalized Portal Lead Ingestion DAL (DV-
       `);
       await prisma.$executeRawUnsafe(`
         DROP FUNCTION IF EXISTS test_fail_portal_enquiry();
+      `);
+    }
+  });
+
+  it("14. Unrelated unique constraint errors propagate and are not converted into duplicate deliveries", async () => {
+    // Inject a trigger that raises an error on an unrelated constraint
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION test_fail_unrelated_constraint()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW."name" = 'FAIL_UNRELATED_CONSTRAINT' THEN
+          RAISE EXCEPTION 'Unique constraint failed on the fields: (unrelated_key)';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      DROP TRIGGER IF EXISTS trg_test_unrelated_constraint ON leads;
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER trg_test_unrelated_constraint
+      BEFORE INSERT ON leads
+      FOR EACH ROW EXECUTE FUNCTION test_fail_unrelated_constraint();
+    `);
+
+    try {
+      await expect(
+        ingestPortalLead({
+          tenantId: fixtureA.tenant.id,
+          provider: PortalProvider.NINETY_NINE_ACRES,
+          payload: {
+            externalEventId: "unrelated_constraint_evt",
+            name: "FAIL_UNRELATED_CONSTRAINT",
+            mobile: "9810077112",
+            city: "Gurugram",
+            preference: "SALE",
+          },
+        })
+      ).rejects.toThrow(/unrelated_key/);
+    } finally {
+      await prisma.$executeRawUnsafe(`
+        DROP TRIGGER IF EXISTS trg_test_unrelated_constraint ON leads;
+      `);
+      await prisma.$executeRawUnsafe(`
+        DROP FUNCTION IF EXISTS test_fail_unrelated_constraint();
+      `);
+    }
+  });
+
+  it("15. Best-effort failure logging: persistence failure of FAILED event does not mask original error", async () => {
+    // Inject trigger on enquiries causing original error
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION test_fail_original_error()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW."advertisedPropertyRef" = 'FAIL_ORIGINAL_ERROR' THEN
+          RAISE EXCEPTION 'The original transaction error';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      DROP TRIGGER IF EXISTS trg_test_fail_original ON enquiries;
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER trg_test_fail_original
+      BEFORE INSERT ON enquiries
+      FOR EACH ROW EXECUTE FUNCTION test_fail_original_error();
+    `);
+
+    // Inject trigger on portal_webhook_events failing when status = FAILED
+    await prisma.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION test_fail_webhook_event()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.status = 'FAILED' AND NEW."eventAction" = 'PORTAL_INGESTION_FAILED' THEN
+          RAISE EXCEPTION 'Simulated failure recording error';
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      DROP TRIGGER IF EXISTS trg_test_fail_webhook_event ON portal_webhook_events;
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE TRIGGER trg_test_fail_webhook_event
+      BEFORE INSERT ON portal_webhook_events
+      FOR EACH ROW EXECUTE FUNCTION test_fail_webhook_event();
+    `);
+
+    try {
+      // Must rethrow 'The original transaction error', NOT 'Simulated failure recording error'
+      await expect(
+        ingestPortalLead({
+          tenantId: fixtureA.tenant.id,
+          provider: PortalProvider.NINETY_NINE_ACRES,
+          payload: {
+            externalEventId: "masking_test_evt",
+            name: "Masking Prospect",
+            mobile: "9810099443",
+            city: "Gurugram",
+            preference: "SALE",
+            advertisedPropertyRef: "FAIL_ORIGINAL_ERROR",
+          },
+        })
+      ).rejects.toThrow(/The original transaction error/);
+    } finally {
+      await prisma.$executeRawUnsafe(`
+        DROP TRIGGER IF EXISTS trg_test_fail_original ON enquiries;
+      `);
+      await prisma.$executeRawUnsafe(`
+        DROP FUNCTION IF EXISTS test_fail_original_error();
+      `);
+      await prisma.$executeRawUnsafe(`
+        DROP TRIGGER IF EXISTS trg_test_fail_webhook_event ON portal_webhook_events;
+      `);
+      await prisma.$executeRawUnsafe(`
+        DROP FUNCTION IF EXISTS test_fail_webhook_event();
       `);
     }
   });

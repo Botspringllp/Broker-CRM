@@ -24,6 +24,22 @@ import {
 const MAX_INGESTION_RETRIES = 3;
 
 /**
+ * Sanitizes an error message for operational auditing, truncating length
+ * and stripping any sensitive database credentials or connection URIs.
+ */
+function sanitizeErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    const rawMsg = err.message || "Unknown error";
+    const sanitized = rawMsg.replace(/postgresql:\/\/[^@\s]+@/gi, "postgresql://[redacted]@");
+    return sanitized.slice(0, 1000);
+  }
+  if (typeof err === "string") {
+    return err.slice(0, 1000);
+  }
+  return "An unexpected error occurred during lead ingestion.";
+}
+
+/**
  * Checks if a Prisma error represents a unique constraint conflict on the portal webhook event idempotency key.
  */
 function isIdempotencyKeyUniqueConflict(error: unknown): boolean {
@@ -204,8 +220,14 @@ export async function ingestPortalLead(
           provider,
           idempotencyKey: `failed_${crypto.randomUUID()}`,
           status: WebhookProcessingStatus.FAILED,
+          eventAction: "PORTAL_VALIDATION_FAILED",
           errorMessage: parseResult.error,
-          rawPayload: (input.payload as Prisma.InputJsonValue) ?? null,
+          rawPayload: {
+            _metadata: {
+              failedAt: new Date().toISOString(),
+              failureReason: "VALIDATION_ERROR",
+            },
+          },
         },
       });
     } catch {
@@ -552,7 +574,7 @@ export async function ingestPortalLead(
           },
         });
 
-        if (existingEvent) {
+        if (existingEvent && existingEvent.status === WebhookProcessingStatus.PROCESSED) {
           const existingLead = await prisma.lead.findFirst({
             where: { tenantId, primaryPhone: existingEvent.leadPhone! },
             select: { id: true, status: true, assignedTelecallerId: true },
@@ -584,6 +606,32 @@ export async function ingestPortalLead(
       // Safe retry for concurrent primaryPhone conflicts
       if (isTenantPhoneUniqueConflict(err) && attempt < MAX_INGESTION_RETRIES) {
         continue;
+      }
+
+      // Best-effort failure audit record outside the aborted transaction
+      try {
+        await prisma.portalWebhookEvent.create({
+          data: {
+            tenantId,
+            provider,
+            externalEventId: normalized.externalEventId?.trim() || null,
+            idempotencyKey: `failed_${crypto.randomUUID()}`,
+            status: WebhookProcessingStatus.FAILED,
+            eventAction: "PORTAL_INGESTION_FAILED",
+            errorMessage: sanitizeErrorMessage(err),
+            rawPayload: {
+              _metadata: {
+                payloadFingerprint,
+                deduplicationGuarantee,
+                isKeyed: hasExternalId,
+                failedAt: new Date().toISOString(),
+                attempt,
+              },
+            },
+          },
+        });
+      } catch {
+        // Best-effort failure recording: never mask or replace the original ingestion error
       }
 
       throw err;
