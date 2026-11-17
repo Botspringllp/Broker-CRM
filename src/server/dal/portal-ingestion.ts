@@ -299,6 +299,8 @@ export async function ingestPortalLead(
   }
 
   // Check for duplicate candidate in unkeyed deliveries (observability)
+  // An unkeyed delivery is a duplicate candidate if another PROCESSED event exists for this tenant, provider, and leadPhone
+  // with an identical canonical payload fingerprint.
   let isDuplicateCandidate = false;
   if (!hasExternalId) {
     const priorCandidate = await prisma.portalWebhookEvent.findFirst({
@@ -307,6 +309,10 @@ export async function ingestPortalLead(
         provider,
         leadPhone: normalized.mobile,
         status: WebhookProcessingStatus.PROCESSED,
+        rawPayload: {
+          path: ["_metadata", "payloadFingerprint"],
+          equals: payloadFingerprint,
+        },
       },
       select: { id: true },
     });

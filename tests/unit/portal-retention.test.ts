@@ -6,6 +6,7 @@ import {
 import { verifyCronAuthorization, GET, POST } from "@/app/api/cron/cleanup-webhooks/route";
 import { NextRequest } from "next/server";
 import * as retentionDal from "@/server/dal/portal-retention";
+import { prisma } from "@/server/db";
 
 describe("Portal Webhook Retention: Unit Tests & Authorization", () => {
   const originalEnv = process.env.CRON_SECRET;
@@ -153,6 +154,41 @@ describe("Portal Webhook Retention: Unit Tests & Authorization", () => {
       const body = await res.json();
       expect(body.success).toBe(false);
       expect(body.error).toContain("Database connection timeout during cleanup");
+    });
+  });
+
+  describe("4. Final Deletion Criteria Re-validation", () => {
+    it("ensures deleteMany query revalidates IDs, receivedAt <= cutoff, terminal status, and optional tenantId", async () => {
+      const now = new Date("2026-11-15T12:00:00.000Z");
+      const mockEligible = [
+        { id: "event-1" },
+        { id: "event-2" },
+      ] as unknown as Awaited<ReturnType<typeof prisma.portalWebhookEvent.findMany>>;
+
+      vi.spyOn(prisma.portalWebhookEvent, "findMany")
+        .mockResolvedValueOnce(mockEligible)
+        .mockResolvedValueOnce([]);
+
+      const deleteManySpy = vi.spyOn(prisma.portalWebhookEvent, "deleteMany").mockResolvedValue({
+        count: 2,
+      });
+
+      const result = await retentionDal.cleanupExpiredWebhookEvents({
+        now,
+        tenantId: "tenant-alpha",
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.deletedCount).toBe(2);
+
+      expect(deleteManySpy).toHaveBeenCalledWith({
+        where: {
+          id: { in: ["event-1", "event-2"] },
+          receivedAt: { lte: result.cutoffDate },
+          status: { in: retentionDal.TERMINAL_WEBHOOK_STATUSES },
+          tenantId: "tenant-alpha",
+        },
+      });
     });
   });
 });

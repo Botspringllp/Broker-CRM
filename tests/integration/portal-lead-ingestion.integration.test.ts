@@ -571,12 +571,43 @@ describe("Live PostgreSQL Integration: Normalized Portal Lead Ingestion DAL (DV-
     expect(res2.isExistingBuyer).toBe(true);
     expect(res2.isDuplicateCandidate).toBe(true); // Flagged for observability
 
-    // Exactly 1 buyer with 2 enquiries in DB
+    // Both unkeyed requests receive unique receipt IDs and unique idempotency keys
+    expect(res1.eventId).not.toBe(res2.eventId);
+    expect(res1.idempotencyKey).not.toBe(res2.idempotencyKey);
+    expect(res1.enquiryId).not.toBe(res2.enquiryId);
+    expect(res1.isDuplicate).toBe(false);
+    expect(res2.isDuplicate).toBe(false);
+
+    // Third submission with DIFFERENT content for the same buyer (different notes/locality/budget)
+    const differentUnkeyedPayload = {
+      ...unkeyedPayload,
+      locality: "Sector 62",
+      enquiryNotes: "Looking for commercial office space",
+      minBudget: 5000000,
+      maxBudget: 10000000,
+    };
+    const res3 = await ingestPortalLead({
+      tenantId: fixtureA.tenant.id,
+      provider: PortalProvider.NINETY_NINE_ACRES,
+      payload: differentUnkeyedPayload,
+    });
+
+    expect(res3.success).toBe(true);
+    expect(res3.deduplicationGuarantee).toBe("WEAK_UNKEYED");
+    expect(res3.isExistingBuyer).toBe(true);
+    expect(res3.isDuplicateCandidate).toBe(false); // Different payload -> NOT a duplicate candidate!
+    expect(res3.isDuplicate).toBe(false);
+    expect(res3.eventId).not.toBe(res1.eventId);
+    expect(res3.eventId).not.toBe(res2.eventId);
+    expect(res3.enquiryId).not.toBe(res1.enquiryId);
+    expect(res3.enquiryId).not.toBe(res2.enquiryId);
+
+    // Exactly 1 buyer with 3 enquiries in DB
     const lead = await prisma.lead.findUnique({
       where: { id: res1.leadId },
       include: { enquiries: true },
     });
-    expect(lead?.enquiries.length).toBe(2);
+    expect(lead?.enquiries.length).toBe(3);
   });
 
   it("11. Rejects invalid payloads: missing fields throw ValidationError and log FAILED event", async () => {

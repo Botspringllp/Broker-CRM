@@ -9,6 +9,7 @@ import {
   UserRole,
 } from "@prisma/client";
 import { getTestPrisma, disconnectTestDb } from "./helpers/db-client";
+import { prisma as serverPrisma } from "@/server/db";
 import {
   createTestTenant,
   createTestUser,
@@ -459,5 +460,138 @@ describe("Live PostgreSQL Integration: 90-Day Portal Webhook Retention & Automat
     await expect(
       cleanupExpiredWebhookEvents({ batchSize: -10 })
     ).rejects.toThrow("Batch size must be a positive integer.");
+  });
+
+  it("Test 11: race-condition safety: preserves a record whose status transitions to PENDING after candidate selection before deletion", async () => {
+    const event = await prisma.portalWebhookEvent.create({
+      data: {
+        tenantId: fixtureA.tenant.id,
+        provider: PortalProvider.NINETY_NINE_ACRES,
+        idempotencyKey: `test11-race-status-${Date.now()}`,
+        status: WebhookProcessingStatus.PROCESSED,
+        receivedAt: expiredDate,
+        processedAt: expiredDate,
+      },
+    });
+
+    const genuineFindMany = serverPrisma.portalWebhookEvent.findMany;
+    serverPrisma.portalWebhookEvent.findMany = (async (
+      ...args: Parameters<typeof genuineFindMany>
+    ) => {
+      const result = await genuineFindMany.apply(serverPrisma.portalWebhookEvent, args);
+      // Deterministic race injection: mutate the status in the live DB right after selection before deleteMany
+      if (result.some((r) => r.id === event.id)) {
+        await prisma.portalWebhookEvent.update({
+          where: { id: event.id },
+          data: { status: WebhookProcessingStatus.PENDING },
+        });
+      }
+      return result;
+    }) as typeof genuineFindMany;
+
+    try {
+      const result = await cleanupExpiredWebhookEvents({
+        now: referenceNow,
+        tenantId: fixtureA.tenant.id,
+      });
+
+      expect(result.success).toBe(true);
+
+      // deleteMany rechecks status in TERMINAL_WEBHOOK_STATUSES, so it refuses to delete the now-PENDING record
+      const found = await prisma.portalWebhookEvent.findUnique({
+        where: { id: event.id },
+      });
+      expect(found).not.toBeNull();
+      expect(found?.status).toBe(WebhookProcessingStatus.PENDING);
+    } finally {
+      serverPrisma.portalWebhookEvent.findMany = genuineFindMany;
+    }
+  });
+
+  it("Test 12: race-condition safety: preserves a record whose receivedAt becomes newer than cutoff after candidate selection before deletion", async () => {
+    const event = await prisma.portalWebhookEvent.create({
+      data: {
+        tenantId: fixtureA.tenant.id,
+        provider: PortalProvider.MAGICBRICKS,
+        idempotencyKey: `test12-race-date-${Date.now()}`,
+        status: WebhookProcessingStatus.PROCESSED,
+        receivedAt: expiredDate,
+        processedAt: expiredDate,
+      },
+    });
+
+    const genuineFindMany = serverPrisma.portalWebhookEvent.findMany;
+    serverPrisma.portalWebhookEvent.findMany = (async (
+      ...args: Parameters<typeof genuineFindMany>
+    ) => {
+      const result = await genuineFindMany.apply(serverPrisma.portalWebhookEvent, args);
+      // Deterministic race injection: mutate receivedAt to recentDate in DB right after selection before deleteMany
+      if (result.some((r) => r.id === event.id)) {
+        await prisma.portalWebhookEvent.update({
+          where: { id: event.id },
+          data: { receivedAt: recentDate },
+        });
+      }
+      return result;
+    }) as typeof genuineFindMany;
+
+    try {
+      const result = await cleanupExpiredWebhookEvents({
+        now: referenceNow,
+        tenantId: fixtureA.tenant.id,
+      });
+
+      expect(result.success).toBe(true);
+
+      // deleteMany rechecks receivedAt <= cutoffDate, so it refuses to delete the now-recent record
+      const found = await prisma.portalWebhookEvent.findUnique({
+        where: { id: event.id },
+      });
+      expect(found).not.toBeNull();
+      expect(found?.receivedAt.toISOString()).toBe(recentDate.toISOString());
+    } finally {
+      serverPrisma.portalWebhookEvent.findMany = genuineFindMany;
+    }
+  });
+
+  it("Test 13: race-condition safety: tenant-scoped cleanup does not delete another tenant's record even if its ID was selected in a candidate batch", async () => {
+    // Create an expired event in Tenant Beta
+    const eventBeta = await prisma.portalWebhookEvent.create({
+      data: {
+        tenantId: fixtureB.tenant.id,
+        provider: PortalProvider.NOBROKER,
+        idempotencyKey: `test13-tenant-cross-${Date.now()}`,
+        status: WebhookProcessingStatus.PROCESSED,
+        receivedAt: expiredDate,
+        processedAt: expiredDate,
+      },
+    });
+
+    const genuineFindMany = serverPrisma.portalWebhookEvent.findMany;
+    // Inject Beta event ID into candidate selection of Alpha's cleanup
+    serverPrisma.portalWebhookEvent.findMany = (async (
+      ...args: Parameters<typeof genuineFindMany>
+    ) => {
+      const result = await genuineFindMany.apply(serverPrisma.portalWebhookEvent, args);
+      return [...result, { id: eventBeta.id }];
+    }) as typeof genuineFindMany;
+
+    try {
+      const result = await cleanupExpiredWebhookEvents({
+        now: referenceNow,
+        tenantId: fixtureA.tenant.id,
+      });
+
+      expect(result.success).toBe(true);
+
+      // deleteMany rechecks tenantId: fixtureA.tenant.id, so it refuses to delete Tenant Beta's event
+      const foundBeta = await prisma.portalWebhookEvent.findUnique({
+        where: { id: eventBeta.id },
+      });
+      expect(foundBeta).not.toBeNull();
+      expect(foundBeta?.tenantId).toBe(fixtureB.tenant.id);
+    } finally {
+      serverPrisma.portalWebhookEvent.findMany = genuineFindMany;
+    }
   });
 });

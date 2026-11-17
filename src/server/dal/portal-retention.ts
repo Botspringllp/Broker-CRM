@@ -89,10 +89,14 @@ export async function cleanupExpiredWebhookEvents(
 
       const idsToDelete = eligible.map((item) => item.id);
 
-      // 2. Delete strictly by the fetched IDs to maintain bounded batch execution
+      // 2. Delete strictly by the fetched IDs while re-validating all eligibility criteria
+      // at execution time to guard against concurrent status transitions or modifications.
       const deleteResult = await prisma.portalWebhookEvent.deleteMany({
         where: {
           id: { in: idsToDelete },
+          receivedAt: { lte: cutoffDate },
+          status: { in: TERMINAL_WEBHOOK_STATUSES },
+          ...(options?.tenantId ? { tenantId: options.tenantId } : {}),
         },
       });
 
