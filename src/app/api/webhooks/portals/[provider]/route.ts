@@ -63,20 +63,23 @@ export function resolveRoutePortalProvider(param: string): PortalProvider | null
  * Extracts the client IP address from proxy headers or the request environment.
  */
 export function getClientIp(request: NextRequest | Request): string {
-  const xForwardedFor = request.headers.get("x-forwarded-for");
-  if (xForwardedFor) {
-    const firstIp = xForwardedFor.split(",")[0].trim();
-    if (firstIp) return firstIp;
+  // 1. NextRequest.ip (provided by Next.js runtime from socket / Vercel Edge)
+  if ("ip" in request && typeof (request as { ip?: string }).ip === "string") {
+    const ip = (request as { ip?: string }).ip?.trim();
+    if (ip) return ip;
   }
 
+  // 2. x-real-ip (guaranteed by Vercel Edge proxy; client cannot prepend)
   const xRealIp = request.headers.get("x-real-ip");
   if (xRealIp && xRealIp.trim().length > 0) {
     return xRealIp.trim();
   }
 
-  if ("ip" in request && typeof (request as { ip?: string }).ip === "string") {
-    const ip = (request as { ip?: string }).ip;
-    if (ip) return ip;
+  // 3. x-forwarded-for fallback (for local reverse proxies)
+  const xForwardedFor = request.headers.get("x-forwarded-for");
+  if (xForwardedFor) {
+    const firstIp = xForwardedFor.split(",")[0].trim();
+    if (firstIp) return firstIp;
   }
 
   return "127.0.0.1";
@@ -277,7 +280,11 @@ export async function POST(
   let ipLimit: RateLimitResult;
   try {
     ipLimit = await rateLimiter.checkIpRateLimit(clientIp);
-  } catch {
+  } catch (err: unknown) {
+    console.error("[Portal Webhook Security] Pre-auth IP rate limiter check failed:", {
+      errorType: err instanceof Error ? err.name : typeof err,
+      clientIp: "[MASKED]",
+    });
     return NextResponse.json(
       { error: "Service Unavailable: Rate limiter error." },
       { status: 503, headers: { "Retry-After": "60" } }
@@ -323,7 +330,11 @@ export async function POST(
     }
   } catch (err: unknown) {
     // Fail-open policy for authenticated requests if cache encounters transient error (DEC-R-11)
-    console.warn("[Portal Webhook Warning] Authenticated rate limit check failed, failing open:", err);
+    console.warn("[Portal Webhook Warning] Authenticated rate limit check failed, failing open:", {
+      provider: validatedProvider,
+      tenantId,
+      errorType: err instanceof Error ? err.name : typeof err,
+    });
   }
 
   // 7. Enforce 256 KB Body Size & Parse JSON
