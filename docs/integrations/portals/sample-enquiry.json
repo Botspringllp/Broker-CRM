@@ -1,0 +1,16 @@
+{
+  "$comment": "PROPOSED COMMON CONTRACT: Canonical Generic Mock format for Broker CRM external portal lead ingestion. This is a proposed reference contract for technical alignment, NOT an official provider payload from 99acres, Magicbricks, or NoBroker.",
+  "externalEventId": "evt_sample_987654",
+  "name": "Aman Verma",
+  "mobile": "9810011223",
+  "email": "aman.verma@example.com",
+  "city": "Gurugram",
+  "locality": "Sector 54",
+  "preference": "SALE",
+  "minBudget": 15000000,
+  "maxBudget": 25000000,
+  "propertyType": "APARTMENT",
+  "bedroomConfiguration": "3 BHK",
+  "advertisedPropertyRef": "prop-ref-101",
+  "enquiryNotes": "Looking for ready-to-move 3 BHK apartment near metro station."
+}

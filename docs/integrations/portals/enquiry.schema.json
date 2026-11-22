@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://broker-crm.internal/schemas/portals/enquiry.schema.json",
+  "title": "PortalEnquiryPayload",
+  "description": "JSON Schema (Draft 2020-12) for the Broker CRM Canonical Portal Inbound Webhook Payload (Generic Mock Contract). This schema serves as a proposed common technical standard, NOT an official specification from 99acres, Magicbricks, or NoBroker.",
+  "type": "object",
+  "required": [
+    "name",
+    "mobile",
+    "city"
+  ],
+  "properties": {
+    "$comment": {
+      "type": "string",
+      "description": "Optional comment or documentation annotation."
+    },
+    "externalEventId": {
+      "type": "string",
+      "description": "Unique external query, enquiry, or event identifier from the portal. Required to enable strong idempotent deduplication.",
+      "minLength": 1,
+      "maxLength": 255,
+      "examples": ["99a_qry_554433", "mb_lead_9988", "nb_evt_1122"]
+    },
+    "name": {
+      "type": "string",
+      "description": "Full name of the prospect/buyer submitting the enquiry.",
+      "minLength": 1,
+      "maxLength": 255,
+      "examples": ["Aman Verma"]
+    },
+    "mobile": {
+      "type": "string",
+      "description": "Primary mobile number of the prospect. Must resolve to a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9. The schema pattern accepts standard unseparated 10 digits ('9810011223'), country prefix ('+91', '91') or trunk prefix ('0'), and optional 5-digit block spacing ('+91 98100 11223', '+91-9810011223'). (Note: At runtime, normalizeIndianMobile() further tolerates parentheses and dots, but callers should format per schema).",
+      "pattern": "^(?:(?:\\+?91|0)[\\s\\-\\.]?)?[6-9]\\d{4}[\\s\\-\\.]?\\d{5}$",
+      "examples": ["9810011223", "+91 98100 11223", "+91-9810011223"]
+    },
+    "email": {
+      "type": "string",
+      "description": "Optional email address of the prospective buyer.",
+      "format": "email",
+      "maxLength": 255,
+      "examples": ["aman.verma@example.com"]
+    },
+    "city": {
+      "type": "string",
+      "description": "Target city name where the prospect is searching for property.",
+      "minLength": 1,
+      "maxLength": 100,
+      "examples": ["Gurugram", "Noida", "Bengaluru", "Mumbai", "Delhi"]
+    },
+    "locality": {
+      "type": "string",
+      "description": "Preferred locality, sector, or micro-market within the city.",
+      "maxLength": 255,
+      "examples": ["Sector 54", "Golf Course Road", "Whitefield", "Indiranagar"]
+    },
+    "preference": {
+      "type": "string",
+      "description": "Transaction preference. Canonical values are SALE (Buy) and RENT. Synonyms (BUY, PURCHASE, RENTAL) are normalized automatically. Defaults to SALE if omitted in generic ingestion. (Note: In the unverified NoBroker stub adapter, omitted preferences default to RENT).",
+      "enum": ["SALE", "RENT", "BUY", "PURCHASE", "RENTAL"],
+      "default": "SALE",
+      "examples": ["SALE", "RENT"]
+    },
+    "minBudget": {
+      "type": "number",
+      "description": "Minimum budget in Indian Rupees (INR). Must be a non-negative number.",
+      "minimum": 0,
+      "examples": [15000000]
+    },
+    "maxBudget": {
+      "type": "number",
+      "description": "Maximum budget in Indian Rupees (INR). Must be a non-negative number and greater than or equal to minBudget if both are provided. (Note: Validated server-side at the DAL layer; JSON Schema Draft 2020-12 lacks native cross-property arithmetic comparison operators).",
+      "minimum": 0,
+      "examples": [25000000]
+    },
+    "propertyType": {
+      "type": "string",
+      "description": "Type of property requested, mapped to internal CRM PropertyType enum.",
+      "enum": [
+        "APARTMENT",
+        "INDEPENDENT_HOUSE",
+        "VILLA",
+        "BUILDER_FLOOR",
+        "PLOT",
+        "COMMERCIAL",
+        "OTHER"
+      ],
+      "examples": ["APARTMENT", "BUILDER_FLOOR", "VILLA"]
+    },
+    "bedroomConfiguration": {
+      "type": "string",
+      "description": "Preferred bedroom count or BHK configuration string.",
+      "maxLength": 100,
+      "examples": ["2 BHK", "3 BHK", "4 BHK", "Studio"]
+    },
+    "advertisedPropertyRef": {
+      "type": "string",
+      "description": "External listing code or property advertisement identifier from the portal. If matched against a brokerage property listing, the enquiry is automatically linked.",
+      "maxLength": 255,
+      "examples": ["prop_99_12", "mb_prop_55", "nb_prop_8877"]
+    },
+    "enquiryNotes": {
+      "type": "string",
+      "description": "Free-form prospect enquiry text, comments, or portal-generated criteria notes.",
+      "maxLength": 2000,
+      "examples": ["Looking for ready-to-move 3 BHK apartment near metro station."]
+    }
+  },
+  "additionalProperties": true
+}

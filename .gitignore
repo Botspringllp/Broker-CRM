@@ -11,6 +11,9 @@
 !.yarn/versions
 /docs/*
 !/docs/testing.md
+!/docs/integrations/
+/docs/integrations/*
+!/docs/integrations/portals/
 
 # testing
 /coverage

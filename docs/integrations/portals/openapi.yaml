@@ -1,0 +1,485 @@
+openapi: 3.1.0
+info:
+  title: Broker CRM - External Property Portal Inbound Webhook API
+  version: 0.1.0-draft
+  license:
+    name: Proprietary
+    identifier: Proprietary
+  description: |
+    # Inbound Property Portal Webhook Specification
+    
+    > **DRAFT / PROPOSED COMMON SPECIFICATION**  
+    > This OpenAPI specification defines the inbound webhook contract implemented by Broker CRM for real-time lead ingestion from external property portals (99acres, Magicbricks, NoBroker).
+    >
+    > **Important Verification Status:**
+    > - The live endpoint `/api/webhooks/portals/{provider}` enforces a security guard checking `isVerified`.
+    > - Provider adapters for `99acres`, `magicbricks`, and `nobroker` are currently **unverified (`isVerified: false`)** and will return `HTTP 400 Bad Request` until official partner documentation, API keys, and signed payload samples are verified.
+    > - The generic payload format documented below is based on the verified `GenericMockPortalAdapter` and serves as the proposed standard contract for technical alignment.
+servers:
+  - url: https://{brokerDomain}
+    description: Production Broker Deployment (Configure with your brokerage custom domain)
+    variables:
+      brokerDomain:
+        default: crm.yourbrokerage.com
+        description: Fully-qualified domain name of the subscribing broker CRM instance
+  - url: http://localhost:3000
+    description: Local Development and Sandbox Testing Server
+
+paths:
+  /api/webhooks/portals/{provider}:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        description: |
+          The identifier of the portal provider pushing the lead.
+          - `99acres`: 99acres lead push (Currently Unverified)
+          - `magicbricks`: Magicbricks lead delivery (Currently Unverified)
+          - `nobroker`: NoBroker webhook push (Currently Unverified)
+        schema:
+          type: string
+          enum:
+            - 99acres
+            - magicbricks
+            - nobroker
+        example: 99acres
+    post:
+      summary: Ingest property lead enquiry from external portal
+      description: |
+        Receives an incoming lead or enquiry pushed from an external property portal.
+        Authenticates the request using a tenant-specific Bearer token, enforces two-tier rate limits,
+        normalizes the payload, deduplicates via external event ID or canonical JSON hashing,
+        and atomically registers the lead and enquiry into the brokerage's CRM database.
+      operationId: ingestPortalWebhook
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        description: |
+          JSON-encoded lead enquiry payload. Payload size must not exceed 256 KB (262,144 bytes).
+          Payloads exceeding 256 KB are rejected with HTTP 413.
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PortalEnquiryPayload'
+            examples:
+              completeEnquiry:
+                summary: Complete Valid Enquiry (Proposed Generic Format)
+                value:
+                  externalEventId: "evt_sample_987654"
+                  name: "Aman Verma"
+                  mobile: "9810011223"
+                  email: "aman.verma@example.com"
+                  city: "Gurugram"
+                  locality: "Sector 54"
+                  preference: "SALE"
+                  minBudget: 15000000
+                  maxBudget: 25000000
+                  propertyType: "APARTMENT"
+                  bedroomConfiguration: "3 BHK"
+                  advertisedPropertyRef: "prop-ref-101"
+                  enquiryNotes: "Looking for ready-to-move 3 BHK apartment near metro station."
+              minimalEnquiry:
+                summary: Minimal Required Fields
+                value:
+                  name: "Pooja Sharma"
+                  mobile: "+91 98765 43210"
+                  city: "Noida"
+                  preference: "RENT"
+
+      responses:
+        '200':
+          description: |
+            Lead or enquiry successfully ingested, or existing duplicate acknowledged without error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookSuccessResponse'
+              examples:
+                newBuyerSuccess:
+                  summary: New Buyer Created & Assigned
+                  value:
+                    success: true
+                    eventId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                    leadId: "7b2e9c12-3a4b-4f5d-8a1e-123456789abc"
+                    enquiryId: "8c3f0d23-4b5c-5e6f-9b2f-234567890bcd"
+                    isDuplicate: false
+                    isExistingBuyer: false
+                    deduplicationGuarantee: "STRONG_KEYED"
+                    isDuplicateCandidate: false
+                existingBuyerSuccess:
+                  summary: Existing Buyer Re-Enquiry Attached
+                  value:
+                    success: true
+                    eventId: "a12bc34d-58cc-4372-a567-0e02b2c3d480"
+                    leadId: "7b2e9c12-3a4b-4f5d-8a1e-123456789abc"
+                    enquiryId: "9d4e1f34-4b5c-5e6f-9b2f-345678901cde"
+                    isDuplicate: false
+                    isExistingBuyer: true
+                    deduplicationGuarantee: "STRONG_KEYED"
+                    isDuplicateCandidate: false
+                duplicateEventAcknowledged:
+                  summary: Duplicate Event Replay Handled Safely
+                  value:
+                    success: true
+                    eventId: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+                    leadId: "7b2e9c12-3a4b-4f5d-8a1e-123456789abc"
+                    enquiryId: "8c3f0d23-4b5c-5e6f-9b2f-234567890bcd"
+                    isDuplicate: true
+                    isExistingBuyer: true
+                    deduplicationGuarantee: "STRONG_KEYED"
+                    isDuplicateCandidate: false
+
+        '400':
+          description: |
+            Bad Request: Payload validation failure, malformed JSON, missing mandatory fields,
+            or provider adapter is unverified.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                unverifiedProvider:
+                  summary: Unverified Provider Guard Active
+                  value:
+                    error: "Provider integration for 'NINETY_NINE_ACRES' is unverified. Webhook ingestion is disabled pending official partner API documentation."
+                invalidPhone:
+                  summary: Invalid Indian Mobile
+                  value:
+                    error: "Invalid Indian mobile number \"12345\". Indian mobile numbers must start with 6, 7, 8, or 9."
+                missingName:
+                  summary: Missing Required Name
+                  value:
+                    error: "Missing required buyer name in payload."
+
+        '401':
+          description: |
+            Unauthorized: Missing, invalid, or mismatched Bearer token, or integration disabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missingToken:
+                  summary: Missing Authorization Header
+                  value:
+                    error: "Missing Authorization header."
+                invalidToken:
+                  summary: Invalid Bearer Secret
+                  value:
+                    error: "Unauthorized: Invalid webhook token."
+                providerMismatch:
+                  summary: Token Configured for Different Provider
+                  value:
+                    error: "Unauthorized: Webhook token is not configured for provider 'NINETY_NINE_ACRES'."
+                integrationDisabled:
+                  summary: Integration Disabled in Brokerage Settings
+                  value:
+                    error: "Unauthorized: Portal integration for provider 'NINETY_NINE_ACRES' is disabled for this tenant."
+
+        '404':
+          description: |
+            Not Found: Unknown provider route parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Unsupported portal provider route: 'unknown_portal'."
+
+        '405':
+          description: |
+            Method Not Allowed: Only HTTP POST is supported.
+          headers:
+            Allow:
+              schema:
+                type: string
+                example: "POST"
+              description: Permitted HTTP method for this endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Method Not Allowed. Only POST requests are supported."
+
+        '413':
+          description: |
+            Payload Too Large: Webhook body exceeds the strict 256 KB (262,144 bytes) limit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Payload exceeds 256 KB limit."
+
+        '415':
+          description: |
+            Unsupported Media Type: Content-Type must be 'application/json'.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Unsupported Content-Type. Expected 'application/json'."
+
+        '429':
+          description: |
+            Too Many Requests: Rate limit exceeded (Tier 1: 60 req/min per IP, or Tier 2: 120 req/min per tenant).
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                example: 60
+              description: Number of seconds to defer subsequent dispatches.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                ipRateLimit:
+                  summary: Pre-Auth IP Rate Limit Exceeded
+                  value:
+                    error: "Too Many Requests: Client IP rate limit exceeded."
+                tenantRateLimit:
+                  summary: Tenant Delivery Burst Limit Exceeded
+                  value:
+                    error: "Too Many Requests: Portal delivery rate limit exceeded."
+
+        '500':
+          description: |
+            Internal Server Error: Unexpected runtime error. Internal details are safely redacted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "An unexpected error occurred while processing lead."
+
+        '503':
+          description: |
+            Service Unavailable: Distributed rate limiting service is unconfigured or unreachable.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                example: 60
+              description: Number of seconds to wait before retrying.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Service Unavailable: Distributed rate limiting service is unconfigured."
+
+    get:
+      summary: Disallowed HTTP method
+      description: Returns 405 Method Not Allowed. GET is not supported for inbound webhook ingestion.
+      operationId: getWebhookMethodNotAllowed
+      security: []
+      responses:
+        '405':
+          description: Method Not Allowed. Only POST requests are supported.
+          headers:
+            Allow:
+              schema:
+                type: string
+                example: "POST"
+              description: Permitted HTTP method for this endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Method Not Allowed. Only POST requests are supported."
+    put:
+      summary: Disallowed HTTP method
+      description: Returns 405 Method Not Allowed. PUT is not supported for inbound webhook ingestion.
+      operationId: putWebhookMethodNotAllowed
+      security: []
+      responses:
+        '405':
+          description: Method Not Allowed. Only POST requests are supported.
+          headers:
+            Allow:
+              schema:
+                type: string
+                example: "POST"
+              description: Permitted HTTP method for this endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Method Not Allowed. Only POST requests are supported."
+    delete:
+      summary: Disallowed HTTP method
+      description: Returns 405 Method Not Allowed. DELETE is not supported for inbound webhook ingestion.
+      operationId: deleteWebhookMethodNotAllowed
+      security: []
+      responses:
+        '405':
+          description: Method Not Allowed. Only POST requests are supported.
+          headers:
+            Allow:
+              schema:
+                type: string
+                example: "POST"
+              description: Permitted HTTP method for this endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Method Not Allowed. Only POST requests are supported."
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Hex (64-char)
+      description: |
+        Tenant-scoped webhook secret token generated by the broker administrator
+        in the Broker CRM Portal Settings UI (`/settings/portals`).
+        Plaintext token is 64 hex characters (256 bits of entropy).
+        Passed in the `Authorization` header as `Bearer <token>`.
+
+  schemas:
+    PortalEnquiryPayload:
+      type: object
+      required:
+        - name
+        - mobile
+        - city
+      properties:
+        externalEventId:
+          type: string
+          description: Portal's unique lead/query ID for idempotent deduplication.
+          example: "99a_qry_554433"
+        name:
+          type: string
+          description: Prospect/buyer full name.
+          example: "Aman Verma"
+        mobile:
+          type: string
+          description: |
+            Prospect mobile number. Must resolve to a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.
+            Supports standard country prefix (+91, 91), trunk prefix (0), and optional 5-digit block separation.
+          pattern: "^(?:(?:\\+?91|0)[\\s\\-\\.]?)?[6-9]\\d{4}[\\s\\-\\.]?\\d{5}$"
+          example: "9810011223"
+        email:
+          type: string
+          format: email
+          description: Prospect email address.
+          example: "aman.verma@example.com"
+        city:
+          type: string
+          description: Target city where prospect is searching for property.
+          example: "Gurugram"
+        locality:
+          type: string
+          description: Preferred locality or sector.
+          example: "Sector 54"
+        preference:
+          type: string
+          enum: [SALE, RENT, BUY, PURCHASE, RENTAL]
+          default: SALE
+          description: |
+            Transaction preference. Canonical values are SALE and RENT. Synonyms (BUY, PURCHASE, RENTAL)
+            are normalized automatically. Defaults to SALE if omitted in generic ingestion.
+            (Note: In the unverified NoBroker stub adapter, omitted preferences default to RENT).
+          example: "SALE"
+        minBudget:
+          type: number
+          minimum: 0
+          description: Minimum budget in INR.
+          example: 15000000
+        maxBudget:
+          type: number
+          minimum: 0
+          description: |
+            Maximum budget in INR. Must be greater than or equal to minBudget if both are provided.
+            (Note: Enforced server-side at the DAL layer; JSON Schema Draft 2020-12 lacks native cross-property comparison operators).
+          example: 25000000
+        propertyType:
+          type: string
+          enum:
+            - APARTMENT
+            - INDEPENDENT_HOUSE
+            - VILLA
+            - BUILDER_FLOOR
+            - PLOT
+            - COMMERCIAL
+            - OTHER
+          description: Property type category.
+          example: "APARTMENT"
+        bedroomConfiguration:
+          type: string
+          description: BHK or bedroom count string.
+          example: "3 BHK"
+        advertisedPropertyRef:
+          type: string
+          description: External listing code or property advertisement identifier.
+          example: "prop_99_12"
+        enquiryNotes:
+          type: string
+          description: Prospect message or comments.
+          example: "Looking for ready-to-move 3 BHK apartment near metro station."
+
+    WebhookSuccessResponse:
+      type: object
+      required:
+        - success
+        - eventId
+        - leadId
+        - enquiryId
+        - isDuplicate
+        - isExistingBuyer
+        - deduplicationGuarantee
+      properties:
+        success:
+          type: boolean
+          example: true
+        eventId:
+          type: string
+          format: uuid
+          description: Unique audit event record ID in Broker CRM.
+          example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+        leadId:
+          type: string
+          format: uuid
+          description: Matched or newly created Lead record ID.
+          example: "7b2e9c12-3a4b-4f5d-8a1e-123456789abc"
+        enquiryId:
+          type: string
+          format: uuid
+          description: Created Enquiry record ID.
+          example: "8c3f0d23-4b5c-5e6f-9b2f-234567890bcd"
+        isDuplicate:
+          type: boolean
+          description: True if this event was previously processed with an identical external event ID.
+          example: false
+        isExistingBuyer:
+          type: boolean
+          description: True if the prospect's mobile already existed in the brokerage database.
+          example: false
+        deduplicationGuarantee:
+          type: string
+          enum: [STRONG_KEYED, WEAK_UNKEYED]
+          description: STRONG_KEYED when externalEventId was provided; WEAK_UNKEYED when unkeyed.
+          example: "STRONG_KEYED"
+        isDuplicateCandidate:
+          type: boolean
+          description: Set to true on unkeyed requests if an identical payload fingerprint was previously processed.
+          example: false
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Sanitized human-readable error explanation.
+          example: "Unauthorized: Invalid webhook token."
