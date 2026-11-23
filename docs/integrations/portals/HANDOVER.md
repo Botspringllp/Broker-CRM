@@ -433,9 +433,11 @@ For distributed rate limiting to function in production, the following environme
 
 To transition the portal integration from the current development/staging state to live production:
 
-### 1. Database Migrations Execution
-- **Action:** Run `npx prisma migrate deploy` against the production Supabase database.
-- **Scope:** Applies 10 migrations including `tenant_portal_configs` and `portal_webhook_events`.
+### 1. Database Migrations Status (Confirmed Deployed)
+- **Production Supabase Status:** Verified complete. According to the November 17, 2026 production verification audit record, all 10 Prisma migrations (`20261026090118_init` through `20261115100000_add_tenant_portal_configs_and_events`) have been successfully applied to the production Supabase PostgreSQL cluster.
+- **Database Objects Live:** The `tenant_portal_configs` and `portal_webhook_events` tables, along with custom enums (`PortalProvider`, `WebhookProcessingStatus`), unique constraints, foreign keys, and indexes, are already fully deployed in production.
+- **Deployment Requirement:** No additional database migration deployment (`npx prisma migrate deploy`) is currently required for the existing portal integration schema.
+- **Local vs. Production Disambiguation:** The local Docker PostgreSQL environment maintains a separate development migration state (where Migration 10 was not applied locally due to offline Docker status) and must not be confused with the live production Supabase database.
 
 ### 2. Environment Variables Configuration
 Populate the following production secrets in Vercel:
