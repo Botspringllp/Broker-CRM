@@ -182,10 +182,10 @@ export function SupplyValidationClient({
   const [duplicateWarning, setDuplicateWarning] = useState<{
     message: string;
     existing: {
-      societyName: string;
-      flatNumber: string;
-      bedroomCount: number;
-      propertyType: string;
+      societyName?: string | null;
+      flatNumber?: string | null;
+      bedroomCount?: number | null;
+      propertyType?: string | null;
     };
   } | null>(null);
   const [confirmDuplicate, setConfirmDuplicate] = useState(false);
@@ -407,10 +407,10 @@ export function SupplyValidationClient({
     return properties.filter((prop) => {
       // Search
       const searchMatch =
-        prop.societyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        prop.locality.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        prop.ownerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        prop.city.toLowerCase().includes(searchTerm.toLowerCase());
+        (prop.societyName || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (prop.locality || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (prop.ownerName || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (prop.city || "").toLowerCase().includes(searchTerm.toLowerCase());
 
       if (!searchMatch) return false;
 
@@ -436,8 +436,8 @@ export function SupplyValidationClient({
 
       // BHK
       if (bhkFilter !== "All") {
-        if (bhkFilter === "4+" && prop.bedroomCount < 4) return false;
-        if (bhkFilter !== "4+" && prop.bedroomCount.toString() !== bhkFilter) return false;
+        if (bhkFilter === "4+" && (prop.bedroomCount ?? 0) < 4) return false;
+        if (bhkFilter !== "4+" && (prop.bedroomCount ?? "").toString() !== bhkFilter) return false;
       }
 
       // Assignment Filter
@@ -1110,16 +1110,16 @@ export function SupplyValidationClient({
 
                           {/* Specs */}
                           <td className="px-3 py-3 text-crm-muted">
-                            <div>{prop.bedroomCount} BHK {prop.propertyType}</div>
+                            <div>{prop.bedroomCount ? `${prop.bedroomCount} BHK ` : ""}{prop.propertyType || "Property"}</div>
                             <div className="text-[11px]">
-                              {prop.area.toLocaleString()} sq.ft ({prop.areaType})
+                              {prop.area ? `${prop.area.toLocaleString()} sq.ft (${prop.areaType || "sq.ft"})` : "—"}
                             </div>
                           </td>
 
                           {/* Price */}
                           <td className="px-3 py-3 font-semibold text-crm-text">
                             <div>{prop.priceFormatted}</div>
-                            <StatusBadge status={prop.preference} />
+                            {prop.preference && <StatusBadge status={prop.preference} />}
                           </td>
 
                           {/* Owner Contact */}
@@ -1250,9 +1250,9 @@ export function SupplyValidationClient({
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-base font-bold text-crm-text">
-                      {selectedProperty.societyName}
+                      {selectedProperty.societyName || "Property Intake"}
                     </h3>
-                    <StatusBadge status={selectedProperty.preference} />
+                    {selectedProperty.preference && <StatusBadge status={selectedProperty.preference} />}
                   </div>
                   <p className="text-xs text-crm-muted mt-0.5">
                     {selectedProperty.flatNumber} • {selectedProperty.locality}, {selectedProperty.city}

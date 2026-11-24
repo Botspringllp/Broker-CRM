@@ -80,6 +80,11 @@ export function NewLeadClient({
   const [stepError, setStepError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [duplicateMatch, setDuplicateMatch] = useState<{
+    id: string;
+    name: string;
+    phone: string;
+  } | null>(null);
 
   // Step 1: Basic Information
   const [name, setName] = useState("");
@@ -311,15 +316,24 @@ export function NewLeadClient({
       }
 
       if (res.isExistingBuyer) {
+        setIsSubmitting(false);
+        setDuplicateMatch({
+          id: res.lead.id,
+          name: res.lead.name,
+          phone: res.lead.primaryPhone,
+        });
         setToastMessage(
-          `Existing buyer profile matched for ${res.lead.name}. New enquiry logged under existing record!`
+          `Existing buyer profile matched for ${res.lead.name}. New enquiry logged under existing record.`
         );
+        router.refresh();
       } else {
+        setDuplicateMatch(null);
         setToastMessage(`Prospect "${res.lead.name}" successfully registered!`);
+        router.refresh();
+        setTimeout(() => {
+          router.push(`/leads/${res.lead.id}`);
+        }, 1000);
       }
-      setTimeout(() => {
-        router.push(`/leads/${res.lead.id}`);
-      }, 1000);
     } catch (err: unknown) {
       setStepError(err instanceof Error ? err.message : "Failed to register lead.");
       setIsSubmitting(false);
@@ -358,6 +372,58 @@ export function NewLeadClient({
             Capture prospective buyer and tenant requirements with strict validation and phone deduplication (PRD §5).
           </p>
         </div>
+
+        {/* Persistent Duplicate Notice Banner (Issue 4 / PRD §5.1) */}
+        {duplicateMatch && (
+          <div className="p-5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-950 shadow-xs space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">ℹ️</span>
+                <div>
+                  <h3 className="font-bold text-base text-indigo-950">
+                    Existing Buyer Profile Matched
+                  </h3>
+                  <p className="text-xs text-indigo-800 mt-1 leading-relaxed">
+                    A buyer with primary mobile number <strong>+91 {duplicateMatch.phone}</strong> already exists in the CRM as <strong>{duplicateMatch.name}</strong>.
+                  </p>
+                  <p className="text-xs text-indigo-700 mt-1 leading-relaxed">
+                    Per CRM deduplication rules (PRD §5.1), a duplicate contact was not created. Instead, this new requirement enquiry has been automatically linked to their existing profile.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDuplicateMatch(null)}
+                className="text-indigo-600 hover:text-indigo-900 text-xs font-semibold px-2 py-1 rounded hover:bg-indigo-100 cursor-pointer"
+              >
+                ✕ Dismiss
+              </button>
+            </div>
+            <div className="flex items-center gap-3 pt-2 border-t border-indigo-200">
+              <Link
+                href={`/leads/${duplicateMatch.id}`}
+                className="px-4 py-2 text-xs font-bold rounded bg-indigo-600 hover:bg-indigo-700 text-white shadow-2xs inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <span>👤</span> View Existing Buyer Profile
+              </Link>
+              <button
+                type="button"
+                onClick={() => {
+                  setDuplicateMatch(null);
+                  setName("");
+                  setPrimaryPhone("");
+                  setAlternatePhone("");
+                  setEmail("");
+                  setNotes("");
+                  setCurrentStep(1);
+                }}
+                className="px-3.5 py-2 text-xs font-medium rounded border border-indigo-300 bg-white text-indigo-900 hover:bg-indigo-50 shadow-2xs cursor-pointer"
+              >
+                Register Another Prospect
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Step Progress Tracker */}
         <div className="bg-crm-surface border border-crm-border rounded-lg p-3 shadow-2xs">

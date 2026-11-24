@@ -29,7 +29,7 @@ import {
 
 describe("Supply Validation - Manual Property Entry & Active Pool Safety", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   const tenantContext: TenantContext = {
@@ -132,26 +132,64 @@ describe("Supply Validation - Manual Property Entry & Active Pool Safety", () =>
   });
 
   // 2. Required-field and invalid-input rejection
-  it("rejects property creation when required fields are missing", async () => {
-    await expect(
-      createProperty(tenantContext, { ...validPropertyInput, societyName: "" })
-    ).rejects.toThrow(ValidationError);
-
-    await expect(
-      createProperty(tenantContext, { ...validPropertyInput, flatNumber: "   " })
-    ).rejects.toThrow(ValidationError);
-
-    await expect(
-      createProperty(tenantContext, { ...validPropertyInput, localityName: "" })
-    ).rejects.toThrow(ValidationError);
-
-    await expect(
-      createProperty(tenantContext, { ...validPropertyInput, city: "" })
-    ).rejects.toThrow(ValidationError);
-
+  it("rejects property creation when mandatory fields (ownerName, ownerMobile) are missing", async () => {
     await expect(
       createProperty(tenantContext, { ...validPropertyInput, ownerName: "" })
     ).rejects.toThrow(ValidationError);
+
+    await expect(
+      createProperty(tenantContext, { ...validPropertyInput, ownerName: "   " })
+    ).rejects.toThrow(ValidationError);
+
+    await expect(
+      createProperty(tenantContext, { ...validPropertyInput, ownerMobile: "" })
+    ).rejects.toThrow(ValidationError);
+  });
+
+  it("successfully creates an incomplete intake property with only ownerName and ownerMobile", async () => {
+    vi.mocked(prisma.property.create).mockResolvedValueOnce({
+      id: "prop-intake-1",
+      tenantId: "tenant-apex",
+      ownerName: "Harsh Vardhan",
+      ownerMobile: "9812345678",
+      societyName: null,
+      flatNumber: null,
+      localityName: null,
+      city: null,
+      price: null,
+      bedroomCount: null,
+      validationStatus: "NOT_VALIDATED",
+      availabilityStatus: "AVAILABLE",
+      isActiveSupply: false,
+      entryChannel: "MANUAL",
+      keyHolders: [],
+      media: [],
+    } as unknown as Awaited<ReturnType<typeof prisma.property.create>>);
+
+    const result = await createProperty(tenantContext, {
+      ownerName: "Harsh Vardhan",
+      ownerMobile: "9812345678",
+    });
+
+    expect(result.id).toBe("prop-intake-1");
+    expect(prisma.property.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          tenantId: "tenant-apex",
+          submittingAgentId: "agent-vikrant",
+          ownerName: "Harsh Vardhan",
+          ownerMobile: "9812345678",
+          societyName: null,
+          flatNumber: null,
+          localityName: null,
+          city: null,
+          price: null,
+          validationStatus: "NOT_VALIDATED",
+          isActiveSupply: false,
+          entryChannel: "MANUAL",
+        }),
+      })
+    );
   });
 
   it("rejects invalid Indian mobile numbers and invalid numeric inputs", async () => {

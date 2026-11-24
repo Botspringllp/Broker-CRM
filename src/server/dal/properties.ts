@@ -20,6 +20,7 @@ import {
   CallTargetType,
   SupplyValidationStatus,
   PropertyAvailabilityStatus,
+  PropertyEntryChannel,
   AssignmentStatus,
   AssignmentTargetType,
 } from "@prisma/client";
@@ -290,26 +291,27 @@ export interface KeyHolderInput {
 }
 
 export interface CreatePropertyInput {
-  societyName: string;
-  flatNumber: string;
-  localityName: string;
-  city: string;
-  preference: TransactionType | "SALE" | "RENT";
-  propertyType: PropertyType | "APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT" | "COMMERCIAL" | "OTHER";
-  furnishingStatus: FurnishingStatus | "UNFURNISHED" | "SEMI_FURNISHED" | "FURNISHED";
-  constructionStatus: ConstructionStatus | "READY_TO_MOVE" | "UNDER_CONSTRUCTION";
-  bedroomCount: number;
-  bathroomCount: number;
-  balconyCount?: number;
-  area: number;
-  areaType: AreaUnitType | "CARPET" | "BUILT_UP" | "SUPER_BUILT_UP";
-  price: number;
+  societyName?: string | null;
+  flatNumber?: string | null;
+  localityName?: string | null;
+  city?: string | null;
+  preference?: TransactionType | "SALE" | "RENT" | null;
+  propertyType?: PropertyType | "APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT" | "COMMERCIAL" | "OTHER" | null;
+  furnishingStatus?: FurnishingStatus | "UNFURNISHED" | "SEMI_FURNISHED" | "FURNISHED" | null;
+  constructionStatus?: ConstructionStatus | "READY_TO_MOVE" | "UNDER_CONSTRUCTION" | null;
+  bedroomCount?: number | null;
+  bathroomCount?: number | null;
+  balconyCount?: number | null;
+  area?: number | null;
+  areaType?: AreaUnitType | "CARPET" | "BUILT_UP" | "SUPER_BUILT_UP" | null;
+  price?: number | null;
   ownerName: string;
   ownerMobile: string;
   amenities?: string[];
   keyHolder?: KeyHolderInput | null;
   confirmDuplicate?: boolean;
   validationStatus?: SupplyValidationStatus | "NOT_VALIDATED" | "IN_VALIDATION" | "VALIDATED";
+  entryChannel?: PropertyEntryChannel | "MANUAL" | "BULK_UPLOAD" | "WHATSAPP";
 }
 
 function normalizeMobile(mobile: string): string {
@@ -335,11 +337,7 @@ function normalizeMobile(mobile: string): string {
 export async function createProperty(context: TenantContext, data: CreatePropertyInput) {
   assertPermission(context, "supply:create");
 
-  // Field validation
-  if (!data.societyName?.trim()) throw new ValidationError("Society name is required.");
-  if (!data.flatNumber?.trim()) throw new ValidationError("Flat number is required.");
-  if (!data.localityName?.trim()) throw new ValidationError("Locality is required.");
-  if (!data.city?.trim()) throw new ValidationError("City is required.");
+  // Mandatory intake fields: Owner Name and Owner Mobile
   if (!data.ownerName?.trim()) throw new ValidationError("Owner name is required.");
   if (!data.ownerMobile?.trim()) throw new ValidationError("Owner mobile number is required.");
 
@@ -348,24 +346,33 @@ export async function createProperty(context: TenantContext, data: CreatePropert
     throw new ValidationError("Owner mobile must be a valid 10-digit Indian mobile number.");
   }
 
-  if (typeof data.bedroomCount !== "number" || data.bedroomCount < 0) {
-    throw new ValidationError("Bedroom count must be a non-negative number.");
+  // Optional fields validation: only validate constraints when values are provided
+  if (data.bedroomCount !== undefined && data.bedroomCount !== null) {
+    if (typeof data.bedroomCount !== "number" || data.bedroomCount < 0) {
+      throw new ValidationError("Bedroom count must be a non-negative number.");
+    }
   }
-  if (typeof data.bathroomCount !== "number" || data.bathroomCount < 0) {
-    throw new ValidationError("Bathroom count must be a non-negative number.");
+  if (data.bathroomCount !== undefined && data.bathroomCount !== null) {
+    if (typeof data.bathroomCount !== "number" || data.bathroomCount < 0) {
+      throw new ValidationError("Bathroom count must be a non-negative number.");
+    }
   }
-  if (typeof data.area !== "number" || data.area <= 0) {
-    throw new ValidationError("Property area must be greater than zero.");
+  if (data.area !== undefined && data.area !== null) {
+    if (typeof data.area !== "number" || data.area <= 0) {
+      throw new ValidationError("Property area must be greater than zero.");
+    }
   }
-  if (typeof data.price !== "number" || data.price <= 0) {
-    throw new ValidationError("Property price must be greater than zero.");
+  if (data.price !== undefined && data.price !== null) {
+    if (typeof data.price !== "number" || data.price <= 0) {
+      throw new ValidationError("Property price must be greater than zero.");
+    }
   }
 
-  // Duplicate check: check within tenant unless explicitly confirmed
-  if (!data.confirmDuplicate) {
+  // Duplicate check: check within tenant only if society and flat are provided, unless explicitly confirmed
+  if (data.societyName?.trim() && data.flatNumber?.trim() && !data.confirmDuplicate) {
     const dupCheck = await checkDuplicateProperty(context, {
-      societyName: data.societyName,
-      flatNumber: data.flatNumber,
+      societyName: data.societyName.trim(),
+      flatNumber: data.flatNumber.trim(),
     });
     if (dupCheck.isDuplicate && dupCheck.duplicate) {
       throw new DuplicatePropertyError(
@@ -403,20 +410,20 @@ export async function createProperty(context: TenantContext, data: CreatePropert
     data: {
       tenantId: context.tenantId,
       submittingAgentId: context.userId,
-      societyName: data.societyName.trim(),
-      flatNumber: data.flatNumber.trim(),
-      localityName: data.localityName.trim(),
-      city: data.city.trim(),
-      preference: data.preference as TransactionType,
-      propertyType: data.propertyType as PropertyType,
-      furnishingStatus: data.furnishingStatus as FurnishingStatus,
-      constructionStatus: data.constructionStatus as ConstructionStatus,
-      bedroomCount: Math.floor(data.bedroomCount),
-      bathroomCount: Math.floor(data.bathroomCount),
-      balconyCount: data.balconyCount ? Math.floor(data.balconyCount) : 0,
-      area: new Prisma.Decimal(data.area),
-      areaType: data.areaType as AreaUnitType,
-      price: new Prisma.Decimal(data.price),
+      societyName: data.societyName?.trim() || null,
+      flatNumber: data.flatNumber?.trim() || null,
+      localityName: data.localityName?.trim() || null,
+      city: data.city?.trim() || null,
+      preference: (data.preference as TransactionType) || null,
+      propertyType: (data.propertyType as PropertyType) || null,
+      furnishingStatus: (data.furnishingStatus as FurnishingStatus) || null,
+      constructionStatus: (data.constructionStatus as ConstructionStatus) || null,
+      bedroomCount: data.bedroomCount !== undefined && data.bedroomCount !== null ? Math.floor(data.bedroomCount) : null,
+      bathroomCount: data.bathroomCount !== undefined && data.bathroomCount !== null ? Math.floor(data.bathroomCount) : null,
+      balconyCount: data.balconyCount !== undefined && data.balconyCount !== null ? Math.floor(data.balconyCount) : null,
+      area: data.area !== undefined && data.area !== null ? new Prisma.Decimal(data.area) : null,
+      areaType: (data.areaType as AreaUnitType) || null,
+      price: data.price !== undefined && data.price !== null ? new Prisma.Decimal(data.price) : null,
       ownerName: data.ownerName.trim(),
       ownerMobile: normalizedOwnerMobile,
       amenities: data.amenities ?? [],
@@ -425,7 +432,7 @@ export async function createProperty(context: TenantContext, data: CreatePropert
       validationStatus: "NOT_VALIDATED",
       availabilityStatus: "AVAILABLE",
       isActiveSupply: false,
-      entryChannel: "MANUAL",
+      entryChannel: data.entryChannel || "MANUAL",
       keyHolders: keyHolderCreate ? { create: keyHolderCreate } : undefined,
       ...(data.validationStatus === "VALIDATED" ? { validatedAt: new Date() } : {}),
     },
@@ -604,8 +611,8 @@ export async function editProperty(context: TenantContext, data: EditPropertyInp
   // 4. Duplicate detection if society or flat changed
   const trimmedSociety = data.societyName.trim();
   const trimmedFlat = data.flatNumber.trim();
-  const societyChanged = trimmedSociety.toLowerCase() !== existing.societyName.toLowerCase();
-  const flatChanged = trimmedFlat.toLowerCase() !== existing.flatNumber.toLowerCase();
+  const societyChanged = trimmedSociety.toLowerCase() !== (existing.societyName || "").toLowerCase();
+  const flatChanged = trimmedFlat.toLowerCase() !== (existing.flatNumber || "").toLowerCase();
 
   if ((societyChanged || flatChanged) && !data.confirmDuplicate) {
     const dupCheck = await prisma.property.findFirst({

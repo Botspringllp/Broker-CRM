@@ -35,9 +35,9 @@ export function MatchingResultsClient({
 
       // Search
       const searchMatch =
-        prop.societyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        prop.locality.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        prop.city.toLowerCase().includes(searchTerm.toLowerCase());
+        (prop.societyName || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (prop.locality || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (prop.city || "").toLowerCase().includes(searchTerm.toLowerCase());
       if (!searchMatch) return false;
 
       // Score filter
@@ -47,8 +47,8 @@ export function MatchingResultsClient({
 
       // BHK filter
       if (bhkFilter !== "All") {
-        if (bhkFilter === "4+" && prop.bedroomCount < 4) return false;
-        if (bhkFilter !== "4+" && prop.bedroomCount.toString() !== bhkFilter) return false;
+        if (bhkFilter === "4+" && (prop.bedroomCount ?? 0) < 4) return false;
+        if (bhkFilter !== "4+" && (prop.bedroomCount ?? "").toString() !== bhkFilter) return false;
       }
 
       return true;

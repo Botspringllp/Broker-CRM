@@ -194,12 +194,12 @@ export function CallWorkspaceClient({
             <div>
               <div className="flex items-center gap-2.5 flex-wrap">
                 <span className="px-2.5 py-1 text-xs font-bold rounded-md bg-stone-100 text-crm-text border border-crm-border">
-                  Unit #{property.flatNumber}
+                  Unit #{property.flatNumber || "—"}
                 </span>
                 <h1 className="text-xl font-bold text-crm-text">
-                  {property.societyName}
+                  {property.societyName || "Property Intake"}
                 </h1>
-                <StatusBadge status={property.preference} />
+                {property.preference && <StatusBadge status={property.preference} />}
                 <StatusBadge status={property.validationStatus} />
                 <StatusBadge status={property.availabilityStatus} />
                 {property.isActiveSupply ? (
@@ -305,7 +305,7 @@ export function CallWorkspaceClient({
                 <div>
                   <span className="text-crm-muted block text-[11px]">Area & Unit</span>
                   <span className="font-medium text-crm-text block">
-                    {property.area.toLocaleString()} sq.ft ({property.areaType})
+                    {property.area ? `${property.area.toLocaleString()} sq.ft (${property.areaType || "sq.ft"})` : "—"}
                   </span>
                 </div>
 

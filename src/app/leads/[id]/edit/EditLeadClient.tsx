@@ -222,6 +222,7 @@ export function EditLeadClient({
       }
 
       setToastMessage(`Prospect "${res.lead.name}" updated successfully.`);
+      router.refresh();
       setTimeout(() => {
         router.push(`/leads/${lead.id}`);
       }, 700);

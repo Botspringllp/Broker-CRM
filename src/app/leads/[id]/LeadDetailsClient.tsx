@@ -128,6 +128,15 @@ export function LeadDetailsClient({
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [isActivating, setIsActivating] = useState(false);
 
+  const [prevInitialLead, setPrevInitialLead] = useState(initialLead);
+  if (prevInitialLead !== initialLead) {
+    setPrevInitialLead(initialLead);
+    setLead(initialLead);
+    setTopMatches(initialTopMatches);
+    setSiteVisits(initialSiteVisits);
+    setChangeHistory(initialChangeHistory);
+  }
+
   // Column 3: Site Visit Scheduling Modal State
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [scheduleInitialPropertyIds, setScheduleInitialPropertyIds] = useState<string[]>([]);
@@ -177,6 +186,7 @@ export function LeadDetailsClient({
 
   // Column 1: DNC Modal State
   const [isDncModalOpen, setIsDncModalOpen] = useState(false);
+  const [isReactivateDncModalOpen, setIsReactivateDncModalOpen] = useState(false);
   const [dncReason, setDncReason] = useState("");
   const [isSubmittingDnc, setIsSubmittingDnc] = useState(false);
 
@@ -249,7 +259,14 @@ export function LeadDetailsClient({
         return;
       }
       setLead(res.lead);
-      setToastMessage(`Lead ${res.lead.name} marked ACTIVE.`);
+      if (res.lead.isDoNotContact) {
+        setToastMessage(
+          `Lead ${res.lead.name} marked ACTIVE in demand pool. Note: Outbound calling remains blocked under Do Not Contact (DNC) policy.`
+        );
+      } else {
+        setToastMessage(`Lead ${res.lead.name} marked ACTIVE. Do Not Contact restrictions removed.`);
+      }
+      router.refresh();
       // Refresh change history
       if (canViewChangelog) {
         const histRes = await getLeadChangeHistoryAction(lead.id);
@@ -259,6 +276,7 @@ export function LeadDetailsClient({
       setToastMessage(err instanceof Error ? err.message : "Failed to activate lead.");
     } finally {
       setIsActivating(false);
+      setIsReactivateDncModalOpen(false);
     }
   };
 
@@ -274,6 +292,7 @@ export function LeadDetailsClient({
       }
       setLead(res.lead);
       setToastMessage(`Lead ${res.lead.name} marked INACTIVE.`);
+      router.refresh();
       if (canViewChangelog) {
         const histRes = await getLeadChangeHistoryAction(lead.id);
         if (histRes.success) setChangeHistory(histRes.history);
@@ -317,6 +336,7 @@ export function LeadDetailsClient({
       setCallbackDate("");
       setConfirmRequirementsOnCall(false);
       setToastMessage("Call logged successfully.");
+      router.refresh();
 
       // Refresh change history
       if (canViewChangelog) {
@@ -375,6 +395,7 @@ export function LeadDetailsClient({
       setLead(res.lead);
       setIsDncModalOpen(false);
       setToastMessage("Prospect marked as Do Not Contact (DNC). All calling is now disabled.");
+      router.refresh();
       if (canViewChangelog) {
         const histRes = await getLeadChangeHistoryAction(lead.id);
         if (histRes.success) setChangeHistory(histRes.history);
@@ -403,6 +424,7 @@ export function LeadDetailsClient({
       setLead(res.lead);
       setToastMessage(`Lead assigned to ${res.lead.assignedTelecaller}.`);
       setAssignModalOpen(false);
+      router.refresh();
       if (canViewChangelog) {
         const histRes = await getLeadChangeHistoryAction(lead.id);
         if (histRes.success) setChangeHistory(histRes.history);
@@ -429,6 +451,7 @@ export function LeadDetailsClient({
       setLead(res.lead);
       setToastMessage(`Auto-assigned to ${res.lead.assignedTelecaller} via round-robin.`);
       setAssignModalOpen(false);
+      router.refresh();
       if (canViewChangelog) {
         const histRes = await getLeadChangeHistoryAction(lead.id);
         if (histRes.success) setChangeHistory(histRes.history);
@@ -501,6 +524,7 @@ export function LeadDetailsClient({
       setLead(res.lead);
       setIsEditModalOpen(false);
       setToastMessage("Requirements updated successfully.");
+      router.refresh();
 
       // Refresh top 3 matching properties dynamically (DV-11)
       if (canViewMatches) {
@@ -630,6 +654,16 @@ export function LeadDetailsClient({
 
           {/* Action Toolbar */}
           <div className="flex items-center gap-2 flex-wrap">
+            {canEdit && (
+              <Link
+                href={`/leads/${lead.id}/edit`}
+                className="px-3.5 py-1.5 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 transition-all flex items-center gap-1.5 shadow-2xs"
+                title="Edit Buyer Profile & Search Criteria"
+              >
+                <span>✏️</span> Edit Profile
+              </Link>
+            )}
+
             <Link
               href={`/matching/${lead.id}`}
               className="px-3.5 py-1.5 text-xs font-bold rounded border border-crm-primary bg-crm-primary/10 text-crm-primary hover:bg-crm-primary hover:text-white transition-all flex items-center gap-1.5 shadow-2xs"
@@ -639,12 +673,23 @@ export function LeadDetailsClient({
 
             {canLogCall && (
               lead.isDoNotContact ? (
-                <span
-                  className="px-3.5 py-1.5 text-xs font-semibold rounded bg-stone-100 text-stone-400 border border-stone-200 cursor-not-allowed"
-                  title="Calling blocked: Prospect marked Do Not Contact"
-                >
-                  🛑 DNC (Calling Blocked)
-                </span>
+                canActivate ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsReactivateDncModalOpen(true)}
+                    className="px-3.5 py-1.5 text-xs font-semibold rounded border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                    title="Click to remove Do Not Contact restriction and activate prospect"
+                  >
+                    <span>🛑 DNC (Calling Blocked)</span>
+                  </button>
+                ) : (
+                  <span
+                    className="px-3.5 py-1.5 text-xs font-semibold rounded bg-stone-100 text-stone-400 border border-stone-200 cursor-not-allowed"
+                    title="Calling blocked: Prospect marked Do Not Contact"
+                  >
+                    🛑 DNC (Calling Blocked)
+                  </span>
+                )
               ) : (
                 <Link
                   href={`/leads/${lead.id}/qualify`}
@@ -655,11 +700,11 @@ export function LeadDetailsClient({
               )
             )}
 
-            {canActivate && lead.status !== "Active" && (
+            {canActivate && (lead.status !== "Active" || lead.isDoNotContact) && (
               <button
                 type="button"
                 onClick={handleActivate}
-                disabled={isActivating || lead.isDoNotContact}
+                disabled={isActivating}
                 className="px-4 py-1.5 text-xs font-bold rounded bg-crm-success text-white hover:bg-emerald-700 transition-all shadow-2xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
               >
                 {isActivating ? (
@@ -677,9 +722,10 @@ export function LeadDetailsClient({
               <button
                 type="button"
                 onClick={() => setIsDncModalOpen(true)}
-                className="px-3 py-1.5 text-xs font-medium rounded border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-all cursor-pointer"
+                className="px-3 py-1.5 text-xs font-medium rounded border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
+                title="Mark prospect as Do Not Contact"
               >
-                Set DNC
+                <span>🛑</span> Set DNC
               </button>
             )}
           </div>
@@ -691,10 +737,12 @@ export function LeadDetailsClient({
             <div className="flex items-center gap-2">
               <span className="text-lg">🛑</span>
               <span>
-                DO NOT CONTACT (DNC): This prospect has requested no further contact. All calling is strictly disabled.
+                DO NOT CONTACT (DNC): This prospect has requested no further contact. All outbound calling is strictly disabled.
               </span>
             </div>
-            <span className="text-[11px] font-normal text-rose-800">Status: Inactive</span>
+            <span className="text-[11px] font-normal text-rose-800">
+              Status: {lead.status === "Active" ? "Active (Demand Pool)" : lead.status}
+            </span>
           </div>
         )}
 
@@ -717,81 +765,135 @@ export function LeadDetailsClient({
         )}
 
         {/* ========================================================================= */}
-        {/* THREE-COLUMN WORKSPACE (PRD §5.7)                                         */}
+        {/* REORGANIZED HIGH-DENSITY CRM WORKSPACE (SECTIONS B, C, D, E, F)           */}
         {/* ========================================================================= */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
           {/* ===================================================================== */}
-          {/* COLUMN 1: Buyer Details + Requirements (Width: 4/12 on desktop)       */}
+          {/* MAIN COLUMN: Buyer Profile, Requirements, Outreach & Site Visits     */}
           {/* ===================================================================== */}
-          <div className="lg:col-span-4 space-y-5" data-testid="column-1-details-requirements">
-            {/* Card 1: Contact & Profile */}
-            <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
-              <div className="px-4 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
-                <h3 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
-                  <span>👤</span> Buyer Profile & Attribution
-                </h3>
-                <span className="text-[10px] text-crm-muted">PRD §5.3</span>
-              </div>
-
-              <div className="p-4 space-y-3 text-xs">
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-crm-muted block">Prospect Name</span>
-                  <strong className="text-crm-text text-sm">{lead.name}</strong>
+          <div className="lg:col-span-8 space-y-5">
+            {/* SECTION B & D: Buyer Information & Requirements */}
+            <div
+              className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden"
+              data-testid="column-1-details-requirements"
+            >
+              <div className="px-5 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
+                    <span>👤</span> Buyer Profile &amp; Attribution
+                  </h2>
+                  <span className="text-[10px] text-crm-muted">PRD §5.3, §5.4 &amp; §5.6</span>
                 </div>
-
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-crm-muted block">Primary Mobile</span>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <a
-                      href={`tel:${lead.primaryPhone}`}
-                      className="text-crm-primary font-bold text-sm hover:underline"
-                    >
-                      +91 {lead.primaryPhone}
-                    </a>
+                <div className="flex items-center gap-2">
+                  {canAssignTelecaller && (
                     <button
                       type="button"
-                      onClick={handleCopyPhone}
-                      className="text-[10px] font-semibold text-crm-muted hover:text-crm-text px-1.5 py-0.5 rounded border border-crm-border bg-stone-50 cursor-pointer"
+                      onClick={() => setAssignModalOpen(true)}
+                      className="px-2.5 py-1 text-xs font-semibold rounded border border-crm-border bg-white text-crm-text hover:bg-stone-50 cursor-pointer"
                     >
-                      {copiedPhone ? "Copied" : "Copy"}
+                      Reassign →
                     </button>
+                  )}
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => setIsEditModalOpen(true)}
+                      className="px-2.5 py-1 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer flex items-center gap-1"
+                    >
+                      <span>✏️</span> Edit Requirements
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-5 space-y-5 text-xs">
+                {/* Core Contact & Operational Assignment (Section D) */}
+                <div>
+                  <h3 className="text-[11px] font-bold text-crm-muted uppercase tracking-wider mb-2.5">
+                    Contact &amp; Assignment
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5 bg-stone-50/50 p-3.5 rounded-lg border border-crm-border">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">Full Name</span>
+                      <strong className="text-crm-text text-sm">{lead.name}</strong>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">Primary Mobile</span>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <a
+                          href={`tel:${lead.primaryPhone}`}
+                          className="text-crm-primary font-bold text-sm hover:underline"
+                        >
+                          +91 {lead.primaryPhone}
+                        </a>
+                        <button
+                          type="button"
+                          onClick={handleCopyPhone}
+                          className="text-[10px] font-semibold text-crm-muted hover:text-crm-text px-1.5 py-0.5 rounded border border-crm-border bg-white cursor-pointer"
+                        >
+                          {copiedPhone ? "Copied" : "Copy"}
+                        </button>
+                      </div>
+                      <span className="text-[10px] text-crm-muted block mt-0.5">🔒 Immutable (PRD §5.3)</span>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">Alternate Phone</span>
+                      <span className="text-crm-text">{lead.alternatePhone || "—"}</span>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">Email Address</span>
+                      {lead.email ? (
+                        <a href={`mailto:${lead.email}`} className="text-crm-link hover:underline">
+                          {lead.email}
+                        </a>
+                      ) : (
+                        <span className="text-crm-muted italic">—</span>
+                      )}
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">Source &amp; Ingestion</span>
+                      <span className="font-semibold text-crm-text">{lead.originalSource}</span>
+                      <span className="text-[10px] text-crm-muted block">{lead.sourceCreatedAt}</span>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">
+                        Operational Assignment
+                      </span>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="text-crm-muted text-[11px]">Assigned Telecaller:</span>
+                        <strong className="text-crm-text">{lead.assignedTelecaller}</strong>
+                        {lead.currentAssignment?.assignmentMethod && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded font-semibold bg-stone-100 text-crm-muted border border-crm-border">
+                            {lead.currentAssignment.assignmentMethod}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <span className="text-[10px] text-crm-muted block mt-0.5">🔒 Immutable (PRD §5.3)</span>
                 </div>
 
-                {lead.alternatePhone && (
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-crm-muted block">Alternate Phone</span>
-                    <span className="text-crm-text">{lead.alternatePhone}</span>
-                  </div>
-                )}
-
-                {lead.email && (
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-crm-muted block">Email Address</span>
-                    <a href={`mailto:${lead.email}`} className="text-crm-link hover:underline">
-                      {lead.email}
-                    </a>
-                  </div>
-                )}
-
-                <div className="pt-2 border-t border-crm-border">
-                  <span className="text-[10px] uppercase font-bold text-crm-muted block">Original Source</span>
-                  <div className="flex items-center justify-between mt-0.5">
-                    <span className="font-semibold text-crm-text">{lead.originalSource}</span>
-                    <span className="text-[10px] text-crm-muted">{lead.sourceCreatedAt}</span>
-                  </div>
-                </div>
-
+                {/* Advertised Property Inquiry Attribution */}
                 {lead.advertisedPropertyRef && (
-                  <div className="p-2.5 rounded bg-stone-50 border border-crm-border space-y-1">
-                    <span className="text-[10px] uppercase font-bold text-crm-muted block">
-                      Advertised Inquiry Reference (PRD §5.1)
-                    </span>
-                    <span className="font-bold text-crm-text">{lead.advertisedPropertyRef}</span>
-                    <div className="flex items-center gap-1.5 pt-0.5">
+                  <div className="p-3 rounded-lg bg-stone-50 border border-crm-border flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">
+                        Advertised Portal Reference (PRD §5.1)
+                      </span>
+                      <strong className="text-crm-text">{lead.advertisedPropertyRef}</strong>
+                      {lead.advertisedPropertyNotes && (
+                        <p className="text-[11px] text-crm-muted italic mt-0.5">
+                          &ldquo;{lead.advertisedPropertyNotes}&rdquo;
+                        </p>
+                      )}
+                    </div>
+                    <div>
                       <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                        className={`text-[10px] px-2 py-0.5 rounded font-bold ${
                           lead.advertisedPropertyVerified
                             ? "bg-emerald-100 text-emerald-800"
                             : "bg-amber-100 text-amber-800"
@@ -802,54 +904,23 @@ export function LeadDetailsClient({
                     </div>
                   </div>
                 )}
-              </div>
-            </div>
 
-            {/* Card 2: Assignment & Telecaller Scoping */}
-            <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
-              <div className="px-4 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
-                <h3 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
-                  <span>💼</span> Operational Assignment
-                </h3>
-                {canAssignTelecaller && (
-                  <button
-                    type="button"
-                    onClick={() => setAssignModalOpen(true)}
-                    className="text-xs font-bold text-crm-primary hover:underline cursor-pointer"
-                  >
-                    Reassign →
-                  </button>
-                )}
-              </div>
-
-              <div className="p-4 space-y-3 text-xs">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-crm-muted block">Assigned Telecaller</span>
-                    <strong className="text-crm-text text-sm">{lead.assignedTelecaller}</strong>
-                  </div>
-                  {lead.currentAssignment?.assignmentMethod && (
-                    <span className="text-[10px] px-2 py-0.5 rounded font-semibold bg-stone-100 text-crm-muted border border-crm-border">
-                      {lead.currentAssignment.assignmentMethod}
-                    </span>
-                  )}
-                </div>
-
+                {/* Assignment Audit Trail */}
                 {lead.assignmentHistory && lead.assignmentHistory.length > 0 && (
-                  <details className="pt-2 border-t border-crm-border text-xs group">
+                  <details className="text-xs group border border-crm-border rounded-lg p-2.5 bg-stone-50/30">
                     <summary className="font-semibold text-crm-link hover:underline cursor-pointer list-none flex items-center justify-between text-[11px]">
-                      <span>Assignment Audit History ({lead.assignmentHistory.length})</span>
+                      <span>View Assignment Audit History ({lead.assignmentHistory.length})</span>
                       <span className="text-crm-muted text-[10px] group-open:rotate-180 transition-transform">▼</span>
                     </summary>
-                    <div className="mt-2 space-y-2 max-h-48 overflow-y-auto pr-1">
+                    <div className="mt-2 space-y-2 max-h-40 overflow-y-auto pr-1">
                       {lead.assignmentHistory.map((asgn) => (
                         <div
                           key={asgn.id}
-                          className="p-2 rounded bg-stone-50 border border-crm-border text-[11px] space-y-1"
+                          className="p-2 rounded bg-white border border-crm-border text-[11px] space-y-1"
                         >
                           <div className="flex items-center justify-between">
                             <span className="font-bold text-crm-text">{asgn.assignedUserName}</span>
-                            <span className="text-crm-muted">{asgn.assignedAt}</span>
+                            <span className="text-crm-muted text-[10px]">{asgn.assignedAt}</span>
                           </div>
                           <p className="text-crm-muted text-[10px]">
                             By {asgn.assignedByUserName || "System"} • {asgn.assignmentMethod} ({asgn.status})
@@ -860,139 +931,141 @@ export function LeadDetailsClient({
                     </div>
                   </details>
                 )}
-              </div>
-            </div>
 
-            {/* Card 3: Requirements & Specifications */}
-            <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
-              <div className="px-4 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
-                <h3 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
-                  <span>📋</span> Requirements & Budget
-                </h3>
-                {canEdit && (
-                  <button
-                    type="button"
-                    onClick={() => setIsEditModalOpen(true)}
-                    className="text-xs font-bold text-crm-primary hover:underline cursor-pointer flex items-center gap-1"
-                  >
-                    <span>✏️</span> Edit
-                  </button>
-                )}
-              </div>
+                {/* Property Search Requirements (Section B) */}
+                <div className="pt-2 border-t border-crm-border">
+                  <h3 className="text-[11px] font-bold text-crm-muted uppercase tracking-wider mb-2.5">
+                    Requirements &amp; Budget Criteria
+                  </h3>
 
-              <div className="p-4 space-y-3.5 text-xs">
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-crm-muted block">Budget Range (INR)</span>
-                  <strong className="text-sm font-bold text-crm-primary">
-                    {lead.requirements.budgetFormatted}
-                  </strong>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 pt-1 border-t border-crm-border">
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-crm-muted block">Transaction</span>
-                    <div className="mt-0.5">
+                  {/* Prominent Budget Banner */}
+                  <div className="p-3.5 rounded-lg bg-teal-50/60 border border-teal-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-teal-800 block">
+                        Verified Budget Range (INR)
+                      </span>
+                      <span className="text-xl font-bold text-teal-900">
+                        {lead.requirements.budgetFormatted}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
                       <StatusBadge status={lead.requirements.preference} />
+                      <span className="px-2 py-1 rounded bg-white text-crm-text font-semibold text-xs border border-teal-200">
+                        {lead.requirements.city}
+                      </span>
                     </div>
                   </div>
 
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-crm-muted block">Target City</span>
-                    <strong className="text-crm-text mt-0.5 block">{lead.requirements.city}</strong>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-crm-border">
-                  <span className="text-[10px] uppercase font-bold text-crm-muted block">Bedroom Configurations</span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {lead.requirements.bedroomConfigurations.length > 0 ? (
-                      lead.requirements.bedroomConfigurations.map((bhk, i) => (
-                        <span
-                          key={i}
-                          className="px-2 py-0.5 rounded bg-stone-100 text-crm-text font-semibold text-[11px] border border-crm-border"
-                        >
-                          {bhk}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-crm-muted italic text-[11px]">Any BHK</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-crm-border">
-                  <span className="text-[10px] uppercase font-bold text-crm-muted block">Property Types</span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {lead.requirements.propertyTypes.length > 0 ? (
-                      lead.requirements.propertyTypes.map((pt, i) => (
-                        <span
-                          key={i}
-                          className="px-2 py-0.5 rounded bg-teal-50 text-crm-primary font-medium text-[11px] border border-teal-200"
-                        >
-                          {pt.replace(/_/g, " ")}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-crm-muted italic text-[11px]">Any Residential</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-crm-border">
-                  <span className="text-[10px] uppercase font-bold text-crm-muted block">Verified Localities</span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {lead.requirements.localities.length > 0 ? (
-                      lead.requirements.localities.map((loc, i) => (
-                        <span
-                          key={i}
-                          className="px-2 py-0.5 rounded bg-stone-100 text-crm-text font-medium text-[11px] border border-crm-border"
-                        >
-                          {loc}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-crm-muted italic text-[11px]">No specific localities restricted</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-crm-border">
-                  <span className="text-[10px] uppercase font-bold text-crm-muted block">Preferred Societies</span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {lead.requirements.societies && lead.requirements.societies.length > 0 ? (
-                      lead.requirements.societies.map((soc, i) => (
-                        <span
-                          key={i}
-                          className="px-2 py-0.5 rounded bg-stone-100 text-crm-text font-medium text-[11px] border border-crm-border"
-                        >
-                          {soc}
-                        </span>
-                      ))
-                    ) : (
-                      <span className="text-crm-muted italic text-[11px]">No societies specified</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-crm-border">
-                  <span className="text-[10px] uppercase font-bold text-crm-muted block">Area Specifications</span>
-                  <div className="mt-1 text-xs">
-                    {lead.requirements.minArea != null || lead.requirements.maxArea != null ? (
-                      <span className="font-semibold text-crm-text">
-                        {lead.requirements.minArea != null ? lead.requirements.minArea : "–"} to{" "}
-                        {lead.requirements.maxArea != null ? lead.requirements.maxArea : "–"}{" "}
-                        {lead.requirements.areaUnit || "sq.ft"}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* BHK Configurations */}
+                    <div className="p-3 rounded-lg border border-crm-border bg-stone-50/40 space-y-1.5">
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">
+                        Bedroom Configurations (BHK)
                       </span>
-                    ) : lead.requirements.targetArea ? (
-                      <span className="font-semibold text-crm-text">
-                        Target: {lead.requirements.targetArea} {lead.requirements.areaUnit || "sq.ft"}
-                      </span>
-                    ) : (
-                      <span className="text-crm-muted italic">Not specified</span>
-                    )}
+                      <div className="flex flex-wrap gap-1.5">
+                        {lead.requirements.bedroomConfigurations.length > 0 ? (
+                          lead.requirements.bedroomConfigurations.map((bhk, i) => (
+                            <span
+                              key={i}
+                              className="px-2.5 py-0.5 rounded-md bg-white text-crm-text font-bold text-xs border border-crm-border shadow-2xs"
+                            >
+                              {bhk}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-crm-muted italic">Any BHK</span>
+                        )}
+                      </div>
+                    </div>
 
+                    {/* Property Types */}
+                    <div className="p-3 rounded-lg border border-crm-border bg-stone-50/40 space-y-1.5">
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">
+                        Acceptable Property Types
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {lead.requirements.propertyTypes.length > 0 ? (
+                          lead.requirements.propertyTypes.map((pt, i) => (
+                            <span
+                              key={i}
+                              className="px-2.5 py-0.5 rounded-md bg-teal-50 text-crm-primary font-semibold text-xs border border-teal-200"
+                            >
+                              {pt.replace(/_/g, " ")}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-crm-muted italic">Any Residential</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Verified Localities */}
+                    <div className="p-3 rounded-lg border border-crm-border bg-stone-50/40 space-y-1.5">
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">
+                        Target Localities
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {lead.requirements.localities.length > 0 ? (
+                          lead.requirements.localities.map((loc, i) => (
+                            <span
+                              key={i}
+                              className="px-2.5 py-0.5 rounded-md bg-white text-crm-text font-medium text-xs border border-crm-border shadow-2xs"
+                            >
+                              {loc}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-crm-muted italic">No locality restrictions</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Preferred Societies */}
+                    <div className="p-3 rounded-lg border border-crm-border bg-stone-50/40 space-y-1.5">
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">
+                        Preferred Societies
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {lead.requirements.societies && lead.requirements.societies.length > 0 ? (
+                          lead.requirements.societies.map((soc, i) => (
+                            <span
+                              key={i}
+                              className="px-2.5 py-0.5 rounded-md bg-white text-crm-text font-medium text-xs border border-crm-border shadow-2xs"
+                            >
+                              {soc}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-crm-muted italic">No specific societies restricted</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Area Specifications */}
+                  <div className="mt-3.5 p-3 rounded-lg border border-crm-border bg-stone-50/40 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-crm-muted block">
+                        Area Range &amp; Specification
+                      </span>
+                      <div className="mt-0.5 font-semibold text-crm-text">
+                        {lead.requirements.minArea != null || lead.requirements.maxArea != null ? (
+                          <span>
+                            {lead.requirements.minArea != null ? lead.requirements.minArea : "–"} to{" "}
+                            {lead.requirements.maxArea != null ? lead.requirements.maxArea : "–"}{" "}
+                            {lead.requirements.areaUnit || "sq.ft"}
+                          </span>
+                        ) : lead.requirements.targetArea ? (
+                          <span>
+                            Target: {lead.requirements.targetArea} {lead.requirements.areaUnit || "sq.ft"}
+                          </span>
+                        ) : (
+                          <span className="text-crm-muted italic font-normal">Not specified</span>
+                        )}
+                      </div>
+                    </div>
                     {lead.requirements.areaType && (
-                      <span className="ml-2 px-1.5 py-0.5 rounded bg-stone-100 text-crm-muted text-[10px] font-medium border border-crm-border">
+                      <span className="px-2.5 py-1 rounded bg-stone-100 text-crm-muted text-xs font-semibold border border-crm-border">
                         {lead.requirements.areaType.replace(/_/g, " ")}
                       </span>
                     )}
@@ -1000,92 +1073,114 @@ export function LeadDetailsClient({
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* ===================================================================== */}
-          {/* COLUMN 2: Calling Controls + Calling History (Width: 4/12 on desktop) */}
-          {/* ===================================================================== */}
-          <div className="lg:col-span-4 space-y-5" data-testid="column-2-calling-history">
-            {/* Card 1: Embedded Calling Controls (PRD §5.7 Middle Column) */}
-            <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
-              <div className="px-4 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
-                <h3 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
-                  <span>📞</span> Calling Controls & Outreach
-                </h3>
-                <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-teal-50 text-teal-800 border border-teal-200">
-                  PRD §5.7 Middle
-                </span>
+            {/* SECTION C: Calling Outreach & Interaction History */}
+            <div
+              className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden"
+              data-testid="column-2-calling-history"
+            >
+              <div className="px-5 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
+                    <span>📞</span> Calling Controls &amp; Outreach
+                  </h2>
+                  <span className="text-[10px] text-crm-muted">PRD §5.7 Middle</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-crm-muted">
+                    Disposition: <strong className="text-crm-text">{lead.currentDisposition}</strong>
+                  </span>
+                </div>
               </div>
 
-              <div className="p-4 space-y-3.5 text-xs">
+              <div className="p-5 space-y-5 text-xs">
+                {/* Embedded Calling Controls */}
                 {lead.isDoNotContact ? (
-                  <div className="p-4 rounded bg-rose-50 border border-rose-200 text-rose-800 text-center space-y-1">
-                    <p className="font-bold">🛑 Calling Blocked</p>
-                    <p className="text-[11px]">
-                      This prospect is marked Do Not Contact. Outbound calling is strictly disabled.
+                  <div className="p-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-900 text-center space-y-1">
+                    <p className="font-bold text-sm">🛑 Outbound Calling Blocked</p>
+                    <p className="text-xs text-rose-800">
+                      This prospect requested Do Not Contact (DNC). All calling workflows are disabled per privacy and compliance policy.
                     </p>
                   </div>
                 ) : !canLogCall ? (
-                  <div className="p-4 rounded bg-stone-50 border border-crm-border text-center text-crm-muted text-xs">
+                  <div className="p-4 rounded-lg bg-stone-50 border border-crm-border text-center text-crm-muted text-xs">
                     You do not have permission to log calls on this lead.
                   </div>
                 ) : (
-                  <form onSubmit={handleLogCall} className="space-y-3">
+                  <form onSubmit={handleLogCall} className="space-y-3.5 bg-stone-50/40 p-4 rounded-lg border border-crm-border">
+                    <div className="flex items-center justify-between border-b border-crm-border pb-2">
+                      <span className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
+                        Quick Call Logger (Telecaller outreach)
+                      </span>
+                      <a
+                        href={`tel:${lead.primaryPhone}`}
+                        className="text-xs font-bold text-crm-primary hover:underline flex items-center gap-1"
+                      >
+                        <span>📞</span> Dial +91 {lead.primaryPhone}
+                      </a>
+                    </div>
+
                     {callFormError && (
                       <div className="p-2.5 rounded bg-rose-50 border border-rose-200 text-rose-800 text-[11px]">
                         {callFormError}
                       </div>
                     )}
 
-                    {/* Disposition Selection */}
-                    <div>
-                      <label className="block text-[11px] font-bold text-crm-text mb-1 uppercase tracking-wider">
-                        Call Outcome / Disposition *
-                      </label>
-                      <select
-                        value={disposition}
-                        onChange={(e) => setDisposition(e.target.value as LeadDispositionValue)}
-                        className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
-                      >
-                        {DISPOSITION_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-[10px] text-crm-muted mt-1">
-                        {DISPOSITION_OPTIONS.find((d) => d.value === disposition)?.description}
-                      </p>
-                    </div>
-
-                    {/* Conditional Callback Date Picker */}
-                    {disposition === "CALL_BACK" && (
-                      <div className="p-2.5 rounded bg-amber-50/60 border border-amber-200 space-y-1">
-                        <label className="block text-[11px] font-bold text-amber-900">
-                          Scheduled Callback Date & Time *
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Disposition Selection */}
+                      <div>
+                        <label className="block text-[11px] font-bold text-crm-text mb-1">
+                          Call Outcome / Disposition *
                         </label>
-                        <input
-                          type="datetime-local"
-                          value={callbackDate}
-                          onChange={(e) => setCallbackDate(e.target.value)}
-                          required
-                          className="w-full px-2.5 py-1.5 text-xs rounded border border-amber-300 bg-white focus:outline-hidden focus:border-amber-600"
-                        />
-                        <p className="text-[10px] text-amber-800">
-                          Adds prospect to your pending callback queue.
+                        <select
+                          value={disposition}
+                          onChange={(e) => setDisposition(e.target.value as LeadDispositionValue)}
+                          className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
+                        >
+                          {DISPOSITION_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-crm-muted mt-1">
+                          {DISPOSITION_OPTIONS.find((d) => d.value === disposition)?.description}
                         </p>
                       </div>
-                    )}
+
+                      {/* Conditional Callback Date Picker */}
+                      {disposition === "CALL_BACK" ? (
+                        <div className="p-2 rounded bg-amber-50/60 border border-amber-200 space-y-1">
+                          <label className="block text-[11px] font-bold text-amber-900">
+                            Scheduled Callback Date &amp; Time *
+                          </label>
+                          <input
+                            type="datetime-local"
+                            value={callbackDate}
+                            onChange={(e) => setCallbackDate(e.target.value)}
+                            required
+                            className="w-full px-2.5 py-1 text-xs rounded border border-amber-300 bg-white"
+                          />
+                          <p className="text-[10px] text-amber-800">
+                            Adds prospect to your pending callback queue.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="flex items-center text-xs text-crm-muted p-2 bg-white rounded border border-crm-border">
+                          Select &quot;Call Back Requested&quot; if the buyer asked to be contacted at a future date/time.
+                        </div>
+                      )}
+                    </div>
 
                     {/* Advertised Property Verification Checkbox on CONNECTED */}
                     {disposition === "CONNECTED" && lead.advertisedPropertyRef && (
-                      <div className="p-2.5 rounded bg-stone-50 border border-crm-border space-y-2">
+                      <div className="p-2.5 rounded bg-white border border-crm-border space-y-2">
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input
                             type="checkbox"
                             checked={isEnquiryVerifiedOnCall}
                             onChange={(e) => setIsEnquiryVerifiedOnCall(e.target.checked)}
-                            className="rounded border-crm-border text-crm-primary focus:ring-0"
+                            className="rounded border-crm-border text-crm-primary"
                           />
                           <span className="text-[11px] font-semibold text-crm-text">
                             Verify Advertised Ad ({lead.advertisedPropertyRef})
@@ -1094,10 +1189,10 @@ export function LeadDetailsClient({
                         {isEnquiryVerifiedOnCall && (
                           <input
                             type="text"
-                            placeholder="Verification notes (e.g. buyer called about 3 BHK unit)..."
+                            placeholder="Verification notes (e.g. buyer confirmed interest in 3 BHK unit)..."
                             value={enquiryVerificationNotesOnCall}
                             onChange={(e) => setEnquiryVerificationNotesOnCall(e.target.value)}
-                            className="w-full px-2 py-1 text-xs rounded border border-crm-border bg-white"
+                            className="w-full px-2.5 py-1 text-xs rounded border border-crm-border bg-stone-50"
                           />
                         )}
                       </div>
@@ -1105,13 +1200,13 @@ export function LeadDetailsClient({
 
                     {/* Requirements Confirmation on CONNECTED Call */}
                     {disposition === "CONNECTED" && (
-                      <div className="p-2.5 rounded bg-emerald-50/50 border border-emerald-200">
+                      <div className="p-2 rounded bg-emerald-50/50 border border-emerald-200">
                         <label className="flex items-center gap-2 cursor-pointer">
                           <input
                             type="checkbox"
                             checked={confirmRequirementsOnCall}
                             onChange={(e) => setConfirmRequirementsOnCall(e.target.checked)}
-                            className="rounded border-crm-border text-crm-primary focus:ring-0"
+                            className="rounded border-crm-border text-crm-primary"
                           />
                           <span className="text-[11px] font-semibold text-emerald-950">
                             Confirm buyer requirements verified on this call
@@ -1122,20 +1217,20 @@ export function LeadDetailsClient({
 
                     {/* Call Notes */}
                     <div>
-                      <label className="block text-[11px] font-bold text-crm-text mb-1 uppercase tracking-wider">
-                        Call Notes & Discussion
+                      <label className="block text-[11px] font-bold text-crm-text mb-1">
+                        Call Notes &amp; Discussion Summary
                       </label>
                       <textarea
                         rows={2}
                         value={callNotes}
                         onChange={(e) => setCallNotes(e.target.value)}
-                        placeholder="Key conversation points, timeline, feedback..."
+                        placeholder="Key conversation points, verified budget, preferred sector, timeline to purchase..."
                         className="w-full px-2.5 py-1.5 text-xs rounded border border-crm-border bg-white focus:outline-hidden focus:border-crm-primary"
                       />
                     </div>
 
                     {/* Submit Actions */}
-                    <div className="pt-1 flex items-center justify-between gap-2">
+                    <div className="flex items-center justify-end gap-2 pt-1 border-t border-crm-border">
                       <a
                         href={`tel:${lead.primaryPhone}`}
                         className="px-3 py-1.5 text-xs font-semibold rounded border border-crm-border bg-stone-50 hover:bg-stone-100 text-crm-text flex items-center gap-1"
@@ -1152,303 +1247,202 @@ export function LeadDetailsClient({
                     </div>
                   </form>
                 )}
-              </div>
-            </div>
 
-            {/* Card 2: Tabbed Activity Feed (Call History + Change History + Enquiry History) */}
-            <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
-              <div className="px-3 py-2 bg-stone-50 border-b border-crm-border flex items-center justify-between">
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setActivityTab("calls")}
-                    className={`px-2.5 py-1 text-xs font-bold rounded transition-colors cursor-pointer ${
-                      activityTab === "calls"
-                        ? "bg-white text-crm-primary border border-crm-border shadow-2xs"
-                        : "text-crm-muted hover:text-crm-text"
-                    }`}
-                  >
-                    Calls ({lead.callHistory.length})
-                  </button>
-
-                  {canViewChangelog && (
-                    <button
-                      type="button"
-                      onClick={() => setActivityTab("changelog")}
-                      className={`px-2.5 py-1 text-xs font-bold rounded transition-colors cursor-pointer ${
-                        activityTab === "changelog"
-                          ? "bg-white text-crm-primary border border-crm-border shadow-2xs"
-                          : "text-crm-muted hover:text-crm-text"
-                      }`}
-                    >
-                      Audit Log ({changeHistory.length})
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => setActivityTab("enquiries")}
-                    className={`px-2.5 py-1 text-xs font-bold rounded transition-colors cursor-pointer ${
-                      activityTab === "enquiries"
-                        ? "bg-white text-crm-primary border border-crm-border shadow-2xs"
-                        : "text-crm-muted hover:text-crm-text"
-                    }`}
-                  >
-                    Enquiries ({lead.enquiries?.length || 0})
-                  </button>
-                </div>
-
-                {activityTab === "changelog" && canViewChangelog && (
-                  <button
-                    type="button"
-                    onClick={handleRefreshHistory}
-                    disabled={isRefreshingHistory}
-                    className="text-[11px] text-crm-muted hover:text-crm-text px-2 py-0.5 rounded border border-crm-border bg-white cursor-pointer"
-                    title="Refresh Changelog"
-                  >
-                    ↻
-                  </button>
-                )}
-              </div>
-
-              <div className="p-4">
-                {/* Tab 1: Call History */}
-                {activityTab === "calls" && (
-                  <div className="space-y-2.5">
-                    {lead.callHistory.length === 0 ? (
-                      <div className="p-6 text-center text-crm-muted text-xs border border-dashed border-crm-border rounded bg-stone-50/50">
-                        No calls logged yet. Use calling controls above to record interaction.
-                      </div>
-                    ) : (
-                      <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
-                        {lead.callHistory.map((call) => (
-                          <div
-                            key={call.id}
-                            className="p-3 rounded-lg border border-crm-border bg-stone-50/40 text-xs space-y-1.5"
-                          >
-                            <div className="flex items-center justify-between gap-2 flex-wrap">
-                              <StatusBadge status={call.disposition} />
-                              <span className="text-[11px] text-crm-muted">{call.calledAt}</span>
-                            </div>
-                            <p className="text-[11px] text-crm-muted">
-                              Caller: <strong className="text-crm-text">{call.callerName}</strong>
-                            </p>
-                            {call.notes && (
-                              <p className="p-2 rounded bg-white border border-crm-border text-crm-text text-[11px] leading-relaxed">
-                                {call.notes}
-                              </p>
-                            )}
-                            {call.callbackDate && (
-                              <div className="p-1.5 rounded bg-amber-50 border border-amber-200 text-amber-900 text-[10px] font-semibold flex items-center gap-1">
-                                <span>⏰ Scheduled Callback:</span>
-                                <span>{call.callbackDate}</span>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Tab 2: Change History (DV-05) */}
-                {activityTab === "changelog" && canViewChangelog && (
-                  <div className="space-y-2.5">
-                    {changeHistory.length === 0 ? (
-                      <div className="p-6 text-center text-crm-muted text-xs border border-dashed border-crm-border rounded bg-stone-50/50">
-                        No changelog records recorded yet.
-                      </div>
-                    ) : (
-                      <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-                        {changeHistory.map((log) => (
-                          <div
-                            key={log.id}
-                            className="p-2.5 rounded border border-crm-border bg-stone-50/50 text-[11px] space-y-1"
-                          >
-                            <div className="flex items-center justify-between text-crm-muted">
-                              <span className="font-bold text-crm-text uppercase tracking-wider text-[10px]">
-                                {log.fieldName}
-                              </span>
-                              <span className="text-[10px]">{log.changedAt}</span>
-                            </div>
-                            <div className="flex items-center gap-1.5 font-mono text-[10px] bg-white p-1 rounded border border-crm-border break-all">
-                              <span className="text-rose-700 line-through truncate max-w-[120px]">
-                                {log.previousValue || "none"}
-                              </span>
-                              <span className="text-crm-muted">→</span>
-                              <span className="text-emerald-700 font-bold truncate max-w-[120px]">
-                                {log.newValue || "none"}
-                              </span>
-                            </div>
-                            <p className="text-[10px] text-crm-muted">
-                              By <strong className="text-crm-text">{log.actorName}</strong> ({log.changeSource})
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Tab 3: Enquiry History (DV-04) */}
-                {activityTab === "enquiries" && (
-                  <div className="space-y-2.5">
-                    {!lead.enquiries || lead.enquiries.length === 0 ? (
-                      <div className="p-6 text-center text-crm-muted text-xs border border-dashed border-crm-border rounded bg-stone-50/50">
-                        No additional portal inquiries recorded.
-                      </div>
-                    ) : (
-                      <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-                        {lead.enquiries.map((enq) => (
-                          <div
-                            key={enq.id}
-                            className="p-2.5 rounded border border-crm-border bg-stone-50/50 text-[11px] space-y-1"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-bold text-crm-text">{enq.source}</span>
-                              <span className="text-crm-muted text-[10px]">{enq.enquiryDate}</span>
-                            </div>
-                            {enq.advertisedPropertyRef && (
-                              <p className="text-[10px] text-crm-muted">
-                                Ad Ref: <strong className="text-crm-text">{enq.advertisedPropertyRef}</strong>
-                              </p>
-                            )}
-                            <div className="flex items-center gap-1.5 pt-0.5">
-                              <span
-                                className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
-                                  enq.isVerifiedByCaller
-                                    ? "bg-emerald-100 text-emerald-800"
-                                    : "bg-amber-100 text-amber-800"
-                                }`}
-                              >
-                                {enq.isVerifiedByCaller ? "✓ Verified" : "Pending Verification"}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* ===================================================================== */}
-          {/* COLUMN 3: Matching Properties + Site Visits (Width: 4/12 on desktop)  */}
-          {/* ===================================================================== */}
-          <div className="lg:col-span-4 space-y-5" data-testid="column-3-matches-visits">
-            {/* Card 1: Top 3 Matching Properties (PRD §5.7 Right Column) */}
-            {canViewMatches && (
-              <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
-                <div className="px-4 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
-                      <span>🎯</span> Top 3 Matching Properties
-                      {isRefreshingMatches && (
-                        <span className="text-[10px] lowercase text-crm-primary font-normal">
-                          (updating matches...)
-                        </span>
-                      )}
-                    </h3>
-                    <span className="text-[10px] text-crm-muted">PRD §5.7 Active Supply</span>
-                  </div>
-                  <Link
-                    href={`/matching/${lead.id}`}
-                    className="text-xs font-bold text-crm-primary hover:underline"
-                  >
-                    All Matches →
-                  </Link>
-                </div>
-
-                <div className="p-4 space-y-3 text-xs">
-                  {topMatches.length === 0 ? (
-                    <div className="p-6 text-center text-crm-muted text-xs border border-dashed border-crm-border rounded bg-stone-50/50 space-y-1">
-                      <p className="font-semibold text-crm-text">No Matching Properties Found</p>
-                      <p className="text-[11px]">
-                        No active validated properties match the preference ({lead.requirements.preference}) and criteria.
-                      </p>
-                      <Link
-                        href={`/matching/${lead.id}`}
-                        className="inline-block mt-2 px-3 py-1 text-xs font-bold rounded bg-crm-primary text-white"
+                {/* Tabbed Activity Feed (Calls + Changelog + Enquiries) */}
+                <div className="border border-crm-border rounded-lg overflow-hidden bg-white">
+                  <div className="px-3 py-2 bg-stone-50 border-b border-crm-border flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setActivityTab("calls")}
+                        className={`px-3 py-1 text-xs font-bold rounded transition-colors cursor-pointer ${
+                          activityTab === "calls"
+                            ? "bg-white text-crm-primary border border-crm-border shadow-2xs"
+                            : "text-crm-muted hover:text-crm-text"
+                        }`}
                       >
-                        Inspect Criteria Workspace
-                      </Link>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {topMatches.map((m) => (
-                        <div
-                          key={m.property.id}
-                          className="p-3 rounded-lg border border-crm-border bg-stone-50/40 space-y-2 hover:bg-stone-50 transition-colors"
+                        Call History ({lead.callHistory.length})
+                      </button>
+
+                      {canViewChangelog && (
+                        <button
+                          type="button"
+                          onClick={() => setActivityTab("changelog")}
+                          className={`px-3 py-1 text-xs font-bold rounded transition-colors cursor-pointer ${
+                            activityTab === "changelog"
+                              ? "bg-white text-crm-primary border border-crm-border shadow-2xs"
+                              : "text-crm-muted hover:text-crm-text"
+                          }`}
                         >
-                          <div className="flex items-center justify-between gap-1 flex-wrap">
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-900 border border-teal-200">
-                              {m.score}% Match ({m.criteriaMatchedCount}/{m.criteriaEvaluatedCount})
-                            </span>
-                            <StatusBadge status={m.property.preference} />
-                          </div>
+                          Audit Log ({changeHistory.length})
+                        </button>
+                      )}
 
-                          <div>
-                            <Link
-                              href={`/supply/${m.property.id}`}
-                              className="font-bold text-crm-text text-sm hover:text-crm-primary hover:underline block"
-                            >
-                              {m.property.societyName}
-                            </Link>
-                            <div className="text-[11px] text-crm-muted mt-0.5">
-                              {m.property.bedroomCount} BHK • {m.property.area} {m.property.areaType} •{" "}
-                              {m.property.locality}, {m.property.city}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between pt-1 border-t border-crm-border">
-                            <span className="font-bold text-crm-primary text-xs">
-                              {m.property.priceFormatted}
-                            </span>
-                            <div className="flex items-center gap-1.5">
-                              {canScheduleVisits && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenScheduleModal([m.property.id])}
-                                  className="px-2.5 py-1 text-[11px] font-bold rounded bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 shadow-2xs cursor-pointer transition-colors"
-                                >
-                                  Schedule Visit
-                                </button>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => handleShareProperty(m.property.id)}
-                                disabled={sharingPropertyId === m.property.id}
-                                className="px-2.5 py-1 text-[11px] font-bold rounded bg-white hover:bg-stone-100 text-crm-primary border border-crm-border shadow-2xs cursor-pointer disabled:opacity-50"
-                              >
-                                {sharingPropertyId === m.property.id ? "Sharing..." : "Share Details →"}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setActivityTab("enquiries")}
+                        className={`px-3 py-1 text-xs font-bold rounded transition-colors cursor-pointer ${
+                          activityTab === "enquiries"
+                            ? "bg-white text-crm-primary border border-crm-border shadow-2xs"
+                            : "text-crm-muted hover:text-crm-text"
+                        }`}
+                      >
+                        Enquiries ({lead.enquiries?.length || 0})
+                      </button>
                     </div>
-                  )}
+
+                    {activityTab === "changelog" && canViewChangelog && (
+                      <button
+                        type="button"
+                        onClick={handleRefreshHistory}
+                        disabled={isRefreshingHistory}
+                        className="text-[11px] text-crm-muted hover:text-crm-text px-2 py-0.5 rounded border border-crm-border bg-white cursor-pointer"
+                        title="Refresh Changelog"
+                      >
+                        ↻ Refresh
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="p-4">
+                    {/* Tab 1: Call History */}
+                    {activityTab === "calls" && (
+                      <div className="space-y-2.5">
+                        {lead.callHistory.length === 0 ? (
+                          <div className="p-6 text-center text-crm-muted text-xs border border-dashed border-crm-border rounded bg-stone-50/50">
+                            No calls logged yet. Use calling controls above to record interaction.
+                          </div>
+                        ) : (
+                          <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                            {lead.callHistory.map((call) => (
+                              <div
+                                key={call.id}
+                                className="p-3 rounded-lg border border-crm-border bg-stone-50/40 text-xs space-y-1.5"
+                              >
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                  <StatusBadge status={call.disposition} />
+                                  <span className="text-[11px] text-crm-muted">{call.calledAt}</span>
+                                </div>
+                                <p className="text-[11px] text-crm-muted">
+                                  Caller: <strong className="text-crm-text">{call.callerName}</strong>
+                                </p>
+                                {call.notes && (
+                                  <p className="p-2 rounded bg-white border border-crm-border text-crm-text text-[11px] leading-relaxed">
+                                    {call.notes}
+                                  </p>
+                                )}
+                                {call.callbackDate && (
+                                  <div className="p-1.5 rounded bg-amber-50 border border-amber-200 text-amber-900 text-[10px] font-semibold flex items-center gap-1">
+                                    <span>⏰ Scheduled Callback:</span>
+                                    <span>{call.callbackDate}</span>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Tab 2: Change History */}
+                    {activityTab === "changelog" && canViewChangelog && (
+                      <div className="space-y-2.5">
+                        {changeHistory.length === 0 ? (
+                          <div className="p-6 text-center text-crm-muted text-xs border border-dashed border-crm-border rounded bg-stone-50/50">
+                            No changelog records recorded yet.
+                          </div>
+                        ) : (
+                          <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                            {changeHistory.map((log) => (
+                              <div
+                                key={log.id}
+                                className="p-2.5 rounded border border-crm-border bg-stone-50/50 text-[11px] space-y-1"
+                              >
+                                <div className="flex items-center justify-between text-crm-muted">
+                                  <span className="font-bold text-crm-text uppercase tracking-wider text-[10px]">
+                                    {log.fieldName}
+                                  </span>
+                                  <span className="text-[10px]">{log.changedAt}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5 font-mono text-[10px] bg-white p-1 rounded border border-crm-border break-all">
+                                  <span className="text-rose-700 line-through truncate max-w-[140px]">
+                                    {log.previousValue || "none"}
+                                  </span>
+                                  <span className="text-crm-muted">→</span>
+                                  <span className="text-emerald-700 font-bold truncate max-w-[140px]">
+                                    {log.newValue || "none"}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-crm-muted">
+                                  By <strong className="text-crm-text">{log.actorName}</strong> ({log.changeSource})
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Tab 3: Enquiry History */}
+                    {activityTab === "enquiries" && (
+                      <div className="space-y-2.5">
+                        {!lead.enquiries || lead.enquiries.length === 0 ? (
+                          <div className="p-6 text-center text-crm-muted text-xs border border-dashed border-crm-border rounded bg-stone-50/50">
+                            No additional portal inquiries recorded.
+                          </div>
+                        ) : (
+                          <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                            {lead.enquiries.map((enq) => (
+                              <div
+                                key={enq.id}
+                                className="p-2.5 rounded border border-crm-border bg-stone-50/50 text-[11px] space-y-1"
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="font-bold text-crm-text">{enq.source}</span>
+                                  <span className="text-crm-muted text-[10px]">{enq.enquiryDate}</span>
+                                </div>
+                                {enq.advertisedPropertyRef && (
+                                  <p className="text-[10px] text-crm-muted">
+                                    Ad Ref: <strong className="text-crm-text">{enq.advertisedPropertyRef}</strong>
+                                  </p>
+                                )}
+                                <div className="flex items-center gap-1.5 pt-0.5">
+                                  <span
+                                    className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                                      enq.isVerifiedByCaller
+                                        ? "bg-emerald-100 text-emerald-800"
+                                        : "bg-amber-100 text-amber-800"
+                                    }`}
+                                  >
+                                    {enq.isVerifiedByCaller ? "✓ Verified" : "Pending Verification"}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            )}
+            </div>
 
-            {/* Card 2: Site Visit History (PRD §5.7 Right Column) */}
+            {/* SECTION F: Site Visit History */}
             <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
-              <div className="px-4 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
+              <div className="px-5 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
                 <div>
-                  <h3 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
-                    <span>🚗</span> Site Visit History
-                  </h3>
-                  <span className="text-[10px] text-crm-muted">PRD §5.7 Past Itineraries</span>
+                  <h2 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
+                    <span>🚗</span> Site Visit History &amp; Itineraries
+                  </h2>
+                  <span className="text-[10px] text-crm-muted">PRD §5.7 &amp; §8 Field Tours</span>
                 </div>
                 <div className="flex items-center gap-3">
                   {canScheduleVisits && (
                     <button
                       type="button"
                       onClick={() => handleOpenScheduleModal([])}
-                      className="px-2.5 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer transition-colors"
+                      className="px-3 py-1 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs cursor-pointer transition-colors"
                     >
                       + Schedule Visit
                     </button>
@@ -1459,7 +1453,7 @@ export function LeadDetailsClient({
                 </div>
               </div>
 
-              <div className="p-4 space-y-3 text-xs">
+              <div className="p-5 space-y-3 text-xs">
                 {siteVisits.length === 0 ? (
                   <div className="p-6 text-center text-crm-muted text-xs border border-dashed border-crm-border rounded bg-stone-50/50">
                     No site visits recorded yet for this prospect.
@@ -1469,17 +1463,17 @@ export function LeadDetailsClient({
                     {siteVisits.map((visit) => (
                       <div
                         key={visit.id}
-                        className="p-3 rounded-lg border border-crm-border bg-stone-50/40 space-y-2 text-xs"
+                        className="p-3.5 rounded-lg border border-crm-border bg-stone-50/40 space-y-2 text-xs"
                       >
                         <div className="flex items-center justify-between gap-1 flex-wrap">
-                          <span className="font-bold text-crm-text">
+                          <span className="font-bold text-crm-text text-sm">
                             📅 {visit.scheduledDate} ({visit.timeSlot})
                           </span>
                           <StatusBadge status={visit.status} />
                         </div>
 
                         <p className="text-[11px] text-crm-muted">
-                          Agent: <strong className="text-crm-text">{visit.assignedSalesAgent}</strong>
+                          Field Agent: <strong className="text-crm-text">{visit.assignedSalesAgent}</strong>
                         </p>
 
                         {visit.items && visit.items.length > 0 && (
@@ -1523,6 +1517,188 @@ export function LeadDetailsClient({
                         )}
                       </div>
                     ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* ===================================================================== */}
+          {/* SIDEBAR COLUMN: Matching Properties & Health Summary                 */}
+          {/* ===================================================================== */}
+          <div className="lg:col-span-4 space-y-5">
+            {/* SECTION E: Matching Properties (Active Supply Pool) */}
+            {canViewMatches && (
+              <div
+                className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden"
+                data-testid="column-3-matches-visits"
+              >
+                <div className="px-4 py-3 bg-stone-50 border-b border-crm-border flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
+                      <span>🎯</span> Top 3 Matching Properties
+                      {isRefreshingMatches && (
+                        <span className="text-[10px] lowercase text-crm-primary font-normal">
+                          (updating...)
+                        </span>
+                      )}
+                    </h2>
+                    <span className="text-[10px] text-crm-muted">PRD §5.7 Active Supply</span>
+                  </div>
+                  <Link
+                    href={`/matching/${lead.id}`}
+                    className="text-xs font-bold text-crm-primary hover:underline"
+                  >
+                    All Matches →
+                  </Link>
+                </div>
+
+                <div className="p-4 space-y-3 text-xs">
+                  {topMatches.length === 0 ? (
+                    <div className="p-6 text-center text-crm-muted text-xs border border-dashed border-crm-border rounded bg-stone-50/50 space-y-1">
+                      <p className="font-semibold text-crm-text">No Matching Properties Found</p>
+                      <p className="text-[11px]">
+                        No active properties currently match the preference ({lead.requirements.preference}) and budget.
+                      </p>
+                      <Link
+                        href={`/matching/${lead.id}`}
+                        className="inline-block mt-2 px-3 py-1 text-xs font-bold rounded bg-crm-primary text-white"
+                      >
+                        Inspect Match Workspace
+                      </Link>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {topMatches.map((m) => (
+                        <div
+                          key={m.property.id}
+                          className="p-3 rounded-lg border border-crm-border bg-stone-50/40 space-y-2 hover:bg-stone-50 transition-colors"
+                        >
+                          <div className="flex items-center justify-between gap-1 flex-wrap">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-900 border border-teal-200">
+                              {m.score}% Match ({m.criteriaMatchedCount}/{m.criteriaEvaluatedCount})
+                            </span>
+                            {m.property.preference && <StatusBadge status={m.property.preference} />}
+                          </div>
+
+                          <div>
+                            <Link
+                              href={`/supply/${m.property.id}`}
+                              className="font-bold text-crm-text text-sm hover:text-crm-primary hover:underline block"
+                            >
+                              {m.property.societyName || "Property Intake"}
+                            </Link>
+                            <div className="text-[11px] text-crm-muted mt-0.5">
+                              {m.property.bedroomCount} BHK • {m.property.area} {m.property.areaType} •{" "}
+                              {m.property.locality}, {m.property.city}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-1 border-t border-crm-border">
+                            <span className="font-bold text-crm-primary text-xs">
+                              {m.property.priceFormatted}
+                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {canScheduleVisits && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenScheduleModal([m.property.id])}
+                                  className="px-2 py-0.5 text-[10px] font-bold rounded bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 shadow-2xs cursor-pointer transition-colors"
+                                >
+                                  Schedule Visit
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleShareProperty(m.property.id)}
+                                disabled={sharingPropertyId === m.property.id}
+                                className="px-2 py-0.5 text-[10px] font-bold rounded bg-white hover:bg-stone-100 text-crm-primary border border-crm-border shadow-2xs cursor-pointer disabled:opacity-50"
+                              >
+                                {sharingPropertyId === m.property.id ? "Sharing..." : "Share Details →"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+
+                      <Link
+                        href={`/matching/${lead.id}`}
+                        className="w-full py-2 text-xs font-bold rounded bg-teal-50 hover:bg-teal-100 text-teal-900 border border-teal-200 text-center block transition-colors"
+                      >
+                        Inspect Full Match Workspace →
+                      </Link>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Quick Operational Status & Health Card */}
+            <div className="bg-crm-surface border border-crm-border rounded-lg shadow-2xs overflow-hidden">
+              <div className="px-4 py-3 bg-stone-50 border-b border-crm-border">
+                <h2 className="text-xs font-bold text-crm-text uppercase tracking-wider flex items-center gap-1.5">
+                  <span>📊</span> Lead Health &amp; Operational Status
+                </h2>
+              </div>
+
+              <div className="p-4 space-y-3.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-crm-muted font-medium">Status in CRM:</span>
+                  <StatusBadge status={lead.status} />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-crm-muted font-medium">Search Preference:</span>
+                  <StatusBadge status={lead.requirements.preference} />
+                </div>
+
+                <div className="pt-2 border-t border-crm-border space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-crm-muted font-medium">Calling Outreach:</span>
+                    <strong className={lead.unreachableCount >= 3 ? "text-rose-700 font-bold" : "text-crm-text"}>
+                      {lead.unreachableCount} / 3 Attempts
+                    </strong>
+                  </div>
+                  <div className="w-full bg-stone-100 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      className={`h-full transition-all ${
+                        lead.unreachableCount >= 3
+                          ? "bg-rose-600"
+                          : lead.unreachableCount > 0
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                      }`}
+                      style={{ width: `${Math.min((lead.unreachableCount / 3) * 100, 100)}%` }}
+                    />
+                  </div>
+                  {lead.unreachableCount >= 3 && lead.status !== "Inactive" && (
+                    <p className="text-[10px] text-amber-800 pt-1">
+                      3 attempts reached. Eligible to be marked Inactive per PRD §5.5.
+                    </p>
+                  )}
+                </div>
+
+                <div className="pt-2 border-t border-crm-border flex items-center justify-between">
+                  <span className="text-crm-muted font-medium">DNC Privacy:</span>
+                  {lead.isDoNotContact ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                      🛑 Marked DNC
+                    </span>
+                  ) : (
+                    <span className="text-emerald-700 font-semibold text-[11px]">
+                      ✓ Allowed Outbound
+                    </span>
+                  )}
+                </div>
+
+                {hasScheduledCallback && (
+                  <div className="p-2.5 rounded bg-amber-50 border border-amber-200 text-amber-900 space-y-0.5">
+                    <div className="font-bold text-[11px] flex items-center gap-1">
+                      <span>⏰</span> Pending Callback Scheduled
+                    </div>
+                    <div className="text-[10px]">
+                      {lead.callHistory.find((c) => !!c.callbackDate)?.callbackDate}
+                    </div>
                   </div>
                 )}
               </div>
@@ -1966,8 +2142,41 @@ export function LeadDetailsClient({
       </Modal>
 
       {/* ========================================================================= */}
-      {/* SCHEDULE VISIT MODAL (PRD §5.7 & §8)                                      */}
+      {/* REACTIVATE DNC MODAL                                                      */}
       {/* ========================================================================= */}
+      <Modal
+        isOpen={isReactivateDncModalOpen}
+        onClose={() => setIsReactivateDncModalOpen(false)}
+        title="Remove Do Not Contact (DNC) & Activate"
+      >
+        <div className="space-y-4 text-xs">
+          <div className="p-3 rounded bg-amber-50 border border-amber-200 text-amber-900 space-y-1">
+            <p className="font-bold">Reactivate Prospect Calling</p>
+            <p className="text-[11px] leading-relaxed">
+              This prospect is currently marked as Do Not Contact with outbound calling blocked.
+              Activating will remove the DNC restriction, restore the lead to Active status, and enable outbound calling and follow-ups.
+            </p>
+          </div>
+
+          <div className="pt-2 border-t border-crm-border flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsReactivateDncModalOpen(false)}
+              className="px-3 py-2 text-xs font-medium rounded border border-crm-border text-crm-muted hover:bg-stone-50 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleActivate}
+              disabled={isActivating}
+              className="px-4 py-2 text-xs font-bold rounded bg-crm-success hover:bg-emerald-700 text-white shadow-2xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {isActivating ? "Activating..." : "✓ Confirm & Remove DNC"}
+            </button>
+          </div>
+        </div>
+      </Modal>
       {canScheduleVisits && (
         <ScheduleVisitModal
           isOpen={isScheduleModalOpen}

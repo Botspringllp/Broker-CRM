@@ -296,12 +296,12 @@ export function PropertyDetailsClient({
             <div className="space-y-1">
               <div className="flex items-center gap-2.5 flex-wrap">
                 <h1 className="text-2xl font-bold text-crm-text">
-                  {property.societyName}
+                  {property.societyName || "Property Intake"}
                 </h1>
                 <span className="px-2.5 py-1 text-xs font-bold rounded-md bg-stone-100 text-crm-text border border-crm-border">
-                  Unit #{property.flatNumber}
+                  Unit #{property.flatNumber || "—"}
                 </span>
-                <StatusBadge status={property.preference} />
+                {property.preference && <StatusBadge status={property.preference} />}
                 <StatusBadge status={property.validationStatus} />
                 <StatusBadge status={property.availabilityStatus} />
                 {property.isActiveSupply ? (
@@ -427,22 +427,22 @@ export function PropertyDetailsClient({
                 <div>
                   <span className="text-crm-muted block text-[11px]">Configuration</span>
                   <span className="text-crm-text font-semibold">
-                    {property.bedroomCount} BHK • {property.bathroomCount} Baths • {property.balconyCount} Balconies
+                    {property.bedroomCount ?? "—"} BHK • {property.bathroomCount ?? "—"} Baths • {property.balconyCount} Balconies
                   </span>
                 </div>
                 <div>
                   <span className="text-crm-muted block text-[11px]">Super / Carpet Area</span>
                   <span className="text-crm-text font-semibold">
-                    {property.area.toLocaleString()} sq.ft ({property.areaType})
+                    {property.area ? `${property.area.toLocaleString()} sq.ft (${property.areaType || "sq.ft"})` : "—"}
                   </span>
                 </div>
                 <div>
                   <span className="text-crm-muted block text-[11px]">Furnishing Status</span>
-                  <span className="text-crm-text font-semibold">{property.furnishingStatus}</span>
+                  <span className="text-crm-text font-semibold">{property.furnishingStatus || "—"}</span>
                 </div>
                 <div>
                   <span className="text-crm-muted block text-[11px]">Construction Status</span>
-                  <span className="text-crm-text font-semibold">{property.constructionStatus}</span>
+                  <span className="text-crm-text font-semibold">{property.constructionStatus || "—"}</span>
                 </div>
                 <div>
                   <span className="text-crm-muted block text-[11px]">Site Visit Activity</span>

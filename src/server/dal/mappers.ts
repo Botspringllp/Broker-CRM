@@ -54,24 +54,26 @@ type FullPrismaProperty = PrismaProperty & {
 };
 
 export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
-  const priceNum = Number(p.price);
-  const areaNum = Number(p.area);
+  const priceNum = p.price !== null ? Number(p.price) : null;
+  const areaNum = p.area !== null ? Number(p.area) : null;
 
   const keyHolderData = p.keyHolders && p.keyHolders.length > 0 ? p.keyHolders[0] : null;
 
   return {
     id: p.id,
-    flatNumber: p.flatNumber,
-    societyName: p.societyName,
-    locality: p.localityName,
-    city: p.city,
-    preference: p.preference === "SALE" ? "Sale" : "Rent",
+    flatNumber: p.flatNumber ?? null,
+    societyName: p.societyName ?? null,
+    locality: p.localityName ?? null,
+    city: p.city ?? null,
+    preference: p.preference === "SALE" ? "Sale" : p.preference === "RENT" ? "Rent" : null,
     furnishingStatus:
       p.furnishingStatus === "FURNISHED"
         ? "Furnished"
         : p.furnishingStatus === "SEMI_FURNISHED"
         ? "Semi-furnished"
-        : "Unfurnished",
+        : p.furnishingStatus === "UNFURNISHED"
+        ? "Unfurnished"
+        : null,
     propertyType:
       p.propertyType === "INDEPENDENT_HOUSE"
         ? "Independent House"
@@ -81,22 +83,30 @@ export function mapPrismaPropertyToView(p: FullPrismaProperty): Property {
         ? "Apartment"
         : p.propertyType === "VILLA"
         ? "Villa"
-        : "Plot",
+        : p.propertyType === "PLOT"
+        ? "Plot"
+        : null,
     area: areaNum,
     areaType:
       p.areaType === "BUILT_UP"
         ? "Built-up"
         : p.areaType === "SUPER_BUILT_UP"
         ? "Super built-up"
-        : "Carpet",
-    bedroomCount: p.bedroomCount,
-    bathroomCount: p.bathroomCount,
-    balconyCount: p.balconyCount,
+        : p.areaType === "CARPET"
+        ? "Carpet"
+        : null,
+    bedroomCount: p.bedroomCount ?? null,
+    bathroomCount: p.bathroomCount ?? null,
+    balconyCount: p.balconyCount ?? 0,
     price: priceNum,
-    priceFormatted: formatIndianCurrency(priceNum, p.preference === "RENT"),
-    amenities: p.amenities,
+    priceFormatted: priceNum !== null ? formatIndianCurrency(priceNum, p.preference === "RENT") : "Price not set",
+    amenities: p.amenities ?? [],
     constructionStatus:
-      p.constructionStatus === "READY_TO_MOVE" ? "Ready to Move" : "Under Construction",
+      p.constructionStatus === "READY_TO_MOVE"
+        ? "Ready to Move"
+        : p.constructionStatus === "UNDER_CONSTRUCTION"
+        ? "Under Construction"
+        : null,
     ownerName: p.ownerName,
     ownerMobile: p.ownerMobile,
     ownerWillingnessConfirmed: p.ownerWillingnessConfirmed ?? false,
@@ -443,6 +453,41 @@ export function mapPrismaLeadToView(l: FullPrismaLead): Lead {
   };
 }
 
+export interface SiteVisitKeyHolderItem {
+  id: string;
+  name: string;
+  mobile: string;
+  persona: string;
+  notes?: string | null;
+}
+
+export interface SiteVisitMediaItem {
+  id: string;
+  url: string;
+  caption?: string | null;
+  displayOrder?: number;
+}
+
+export interface SiteVisitPropertyItem {
+  id: string;
+  societyName?: string | null;
+  localityName?: string | null;
+  city?: string | null;
+  bedroomCount?: number | null;
+  flatNumber?: string | null;
+  ownerName: string;
+  ownerMobile: string;
+  preference?: string | null;
+  propertyType?: string | null;
+  furnishingStatus?: string | null;
+  area?: Prisma.Decimal | number | null;
+  areaType?: string | null;
+  price?: Prisma.Decimal | number | null;
+  amenities?: string[];
+  keyHolders?: SiteVisitKeyHolderItem[];
+  media?: SiteVisitMediaItem[];
+}
+
 export type FullPrismaSiteVisit = PrismaSiteVisit & {
   lead: {
     id: string;
@@ -451,39 +496,10 @@ export type FullPrismaSiteVisit = PrismaSiteVisit & {
     alternatePhone?: string | null;
     email?: string | null;
   };
-  assignedSalesAgent: { id: string; name: string; email: string };
+  assignedSalesAgent?: { id: string; name: string; email: string } | null;
   telecallerConfirmedByUser?: { id: string; name: string; role?: string } | null;
   items: (PrismaSiteVisitItem & {
-    property: {
-      id: string;
-      societyName: string;
-      localityName: string;
-      city: string;
-      bedroomCount: number;
-      flatNumber: string;
-      ownerName: string;
-      ownerMobile: string;
-      preference?: string;
-      propertyType?: string;
-      furnishingStatus?: string;
-      area?: Prisma.Decimal | number | null;
-      areaType?: string;
-      price?: Prisma.Decimal | number | null;
-      amenities?: string[];
-      keyHolders?: Array<{
-        id: string;
-        name: string;
-        mobile: string;
-        persona: string;
-        notes?: string | null;
-      }>;
-      media?: Array<{
-        id: string;
-        url: string;
-        caption?: string | null;
-        displayOrder: number;
-      }>;
-    };
+    property: SiteVisitPropertyItem;
     reportedByUser?: { id: string; name: string; role?: string } | null;
     enteredByUser?: { id: string; name: string; role?: string } | null;
   })[];
@@ -576,15 +592,17 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
       return {
         id: item.id,
         propertyId: item.property.id,
-        propertyTitle: `${item.property.bedroomCount} BHK ${item.property.societyName}`,
-        locality: item.property.localityName,
-        city: item.property.city,
-        flatNumber: item.property.flatNumber,
+        propertyTitle: item.property.bedroomCount && item.property.societyName
+          ? `${item.property.bedroomCount} BHK ${item.property.societyName}`
+          : item.property.societyName || "Property Intake",
+        locality: item.property.localityName || "—",
+        city: item.property.city || "—",
+        flatNumber: item.property.flatNumber || "—",
         ownerName: item.property.ownerName,
         ownerMobile: item.property.ownerMobile,
         keyHolder: primaryKeyHolder,
         keyHolders:
-          item.property.keyHolders?.map((k) => ({
+          item.property.keyHolders?.map((k: SiteVisitKeyHolderItem) => ({
             id: k.id,
             name: k.name,
             mobile: k.mobile,
@@ -592,11 +610,11 @@ export function mapPrismaSiteVisitToView(v: FullPrismaSiteVisit): SiteVisit {
             notes: k.notes || undefined,
           })) || [],
         photos:
-          item.property.media?.map((m) => ({
+          item.property.media?.map((m: SiteVisitMediaItem) => ({
             id: m.id,
             url: m.url,
             caption: m.caption || undefined,
-            displayOrder: m.displayOrder,
+            displayOrder: m.displayOrder ?? 0,
           })) || [],
         price: item.property.price ? Number(item.property.price) : undefined,
         priceFormatted: item.property.price
@@ -698,7 +716,7 @@ export function serializeBuyerSafeItinerary(v: FullPrismaSiteVisit) {
         : undefined,
       amenities: item.property.amenities || [],
       photos:
-        item.property.media?.map((m) => ({
+        item.property.media?.map((m: SiteVisitMediaItem) => ({
           id: m.id,
           url: m.url,
           caption: m.caption || undefined,

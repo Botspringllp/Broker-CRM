@@ -55,22 +55,22 @@ export interface LeadAssignment {
 
 export interface Property {
   id: string;
-  flatNumber: string;
-  societyName: string;
-  locality: string;
-  city: string;
-  preference: "Sale" | "Rent";
-  furnishingStatus: "Unfurnished" | "Semi-furnished" | "Furnished";
-  propertyType: "Apartment" | "Independent House" | "Villa" | "Builder Floor" | "Plot";
-  area: number;
-  areaType: "Carpet" | "Built-up" | "Super built-up";
-  bedroomCount: number;
-  bathroomCount: number;
+  flatNumber: string | null;
+  societyName: string | null;
+  locality: string | null;
+  city: string | null;
+  preference: "Sale" | "Rent" | null;
+  furnishingStatus: "Unfurnished" | "Semi-furnished" | "Furnished" | null;
+  propertyType: "Apartment" | "Independent House" | "Villa" | "Builder Floor" | "Plot" | null;
+  area: number | null;
+  areaType: "Carpet" | "Built-up" | "Super built-up" | null;
+  bedroomCount: number | null;
+  bathroomCount: number | null;
   balconyCount: number;
-  price: number; // In INR: total sale price or monthly rent
+  price: number | null; // In INR: total sale price or monthly rent
   priceFormatted: string;
   amenities: string[];
-  constructionStatus: "Ready to Move" | "Under Construction";
+  constructionStatus: "Ready to Move" | "Under Construction" | null;
   ownerName: string;
   ownerMobile: string; // Masked in buyer-facing views
   ownerWillingnessConfirmed: boolean;

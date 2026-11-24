@@ -109,7 +109,7 @@ export function sortPropertyMatches(
     }
 
     // 2. Property price closest to buyer budget midpoint (only if buyer budget exists)
-    if (budgetMidpoint !== null) {
+    if (budgetMidpoint !== null && a.property.price !== null && b.property.price !== null) {
       const diffA = Math.abs(a.property.price - budgetMidpoint);
       const diffB = Math.abs(b.property.price - budgetMidpoint);
       if (diffA !== diffB) {
@@ -297,11 +297,11 @@ export async function getMatchingPropertiesForLead(
   for (const prop of eligibleProperties) {
     const rawProp: RawPropertyData = {
       id: prop.id,
-      preference: prop.preference,
-      price: Number(prop.price),
-      city: prop.city,
+      preference: prop.preference || "SALE",
+      price: Number(prop.price || 0),
+      city: prop.city || "",
       localityId: prop.localityId || prop.locality?.id || null,
-      localityName: prop.localityName,
+      localityName: prop.localityName || "",
       locality: prop.locality
         ? {
             id: prop.locality.id,
@@ -311,11 +311,11 @@ export async function getMatchingPropertiesForLead(
             isVerified: true,
           }
         : null,
-      propertyType: prop.propertyType,
-      bedroomCount: prop.bedroomCount,
-      area: Number(prop.area),
+      propertyType: prop.propertyType || "APARTMENT",
+      bedroomCount: prop.bedroomCount ?? 0,
+      area: Number(prop.area || 0),
       areaUnit: "sq.ft",
-      areaType: prop.areaType,
+      areaType: prop.areaType || null,
       validationStatus: prop.validationStatus,
       availabilityStatus: prop.availabilityStatus,
       ownerWillingnessConfirmed: prop.ownerWillingnessConfirmed,
@@ -398,6 +398,20 @@ export async function getMatchingLeadsForProperty(
     throw new NotFoundError("Property not found.");
   }
 
+  // Guard: Incomplete / Unvalidated intake records must NEVER generate matching results
+  if (
+    !property.isActiveSupply ||
+    property.validationStatus !== SupplyValidationStatus.VALIDATED ||
+    !property.preference ||
+    property.price === null
+  ) {
+    return {
+      property: mapPrismaPropertyToView(property),
+      matches: [],
+      totalActiveLeadsCount: 0,
+    };
+  }
+
   // Total active leads in the brokerage tenant
   const totalActiveLeadsCount = await prisma.lead.count({
     where: {
@@ -450,9 +464,9 @@ export async function getMatchingLeadsForProperty(
     id: property.id,
     preference: property.preference,
     price: Number(property.price),
-    city: property.city,
+    city: property.city || "",
     localityId: property.localityId || property.locality?.id || null,
-    localityName: property.localityName,
+    localityName: property.localityName || "",
     locality: property.locality
       ? {
           id: property.locality.id,
@@ -462,11 +476,11 @@ export async function getMatchingLeadsForProperty(
           isVerified: true,
         }
       : null,
-    propertyType: property.propertyType,
-    bedroomCount: property.bedroomCount,
-    area: Number(property.area),
+    propertyType: property.propertyType || "APARTMENT",
+    bedroomCount: property.bedroomCount ?? 0,
+    area: Number(property.area || 0),
     areaUnit: "sq.ft",
-    areaType: property.areaType,
+    areaType: property.areaType || null,
     validationStatus: property.validationStatus,
     availabilityStatus: property.availabilityStatus,
     ownerWillingnessConfirmed: property.ownerWillingnessConfirmed,

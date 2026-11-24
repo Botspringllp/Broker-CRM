@@ -63,6 +63,8 @@ export async function logLeadCallAction(input: LogLeadCallInput) {
     const context = await requireTenantContext();
     const updated = await logLeadCall(context, input);
     revalidatePath("/leads");
+    revalidatePath(`/leads/${input.leadId}`);
+    revalidatePath("/demand");
     revalidatePath("/");
     return {
       success: true as const,
@@ -86,6 +88,8 @@ export async function updateLeadStatusAction(input: {
     const statusEnum = input.status === "ACTIVE" ? LeadStatus.ACTIVE : LeadStatus.INACTIVE;
     const updated = await updateLeadStatus(context, input.leadId, statusEnum);
     revalidatePath("/leads");
+    revalidatePath(`/leads/${input.leadId}`);
+    revalidatePath("/demand");
     revalidatePath("/");
     return {
       success: true as const,
@@ -244,6 +248,8 @@ export async function markLeadDoNotContactAction(leadId: string, reason?: string
     const context = await requireTenantContext();
     const updated = await markLeadDoNotContact(context, leadId, reason);
     revalidatePath("/leads");
+    revalidatePath(`/leads/${leadId}`);
+    revalidatePath("/demand");
     revalidatePath("/");
     return {
       success: true as const,

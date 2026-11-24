@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Modal } from "@/components/ui/Modal";
@@ -10,8 +11,6 @@ import { Lead } from "@/types/crm";
 import { PendingCallbacksCompact } from "@/components/leads/PendingCallbacksCompact";
 import {
   createLeadAction,
-  logLeadCallAction,
-  updateLeadStatusAction,
   assignLeadAction,
   assignLeadRoundRobinAction,
   downloadLeadImportTemplateAction,
@@ -56,8 +55,18 @@ export function LeadValidationClient({
   canAssignTelecaller = false,
   eligibleTelecallers = [],
 }: LeadValidationClientProps) {
+  const router = useRouter();
   const [leads, setLeads] = useState<Lead[]>(initialLeads);
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(initialLeads[0] || null);
+  const [prevInitialLeads, setPrevInitialLeads] = useState(initialLeads);
+  if (prevInitialLeads !== initialLeads) {
+    setPrevInitialLeads(initialLeads);
+    setLeads(initialLeads);
+  }
+  const [duplicateNotice, setDuplicateNotice] = useState<{
+    id: string;
+    name: string;
+    phone: string;
+  } | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [preferenceFilter, setPreferenceFilter] = useState("All");
@@ -78,17 +87,6 @@ export function LeadValidationClient({
   const [assignmentNotes, setAssignmentNotes] = useState("");
   const [isAssigning, setIsAssigning] = useState(false);
   const [assignModalError, setAssignModalError] = useState<string | null>(null);
-
-  // Call Logging state
-  const [isCallModalOpen, setIsCallModalOpen] = useState(false);
-  const [isCallSubmitting, setIsCallSubmitting] = useState(false);
-  const [callModalError, setCallModalError] = useState<string | null>(null);
-  const [callDisposition, setCallDisposition] = useState("Connected");
-  const [callNotes, setCallNotes] = useState("");
-  const [callbackTime, setCallbackTime] = useState("");
-
-  // Status updating state
-  const [isStatusUpdating, setIsStatusUpdating] = useState(false);
 
   // Add Lead Modal state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -223,6 +221,7 @@ export function LeadValidationClient({
       setBulkResult(res.result);
       setBulkStep("SUMMARY");
       setToastMessage(res.result.message);
+      router.refresh();
     } catch (err) {
       setBulkError(err instanceof Error ? err.message : "Failed to execute bulk lead import.");
     } finally {
@@ -386,11 +385,9 @@ export function LeadValidationClient({
       setLeads((prev) =>
         prev.map((l) => (l.id === res.lead.id ? res.lead : l))
       );
-      if (selectedLead?.id === res.lead.id) {
-        setSelectedLead(res.lead);
-      }
       setToastMessage(`Lead assigned to ${res.lead.assignedTelecaller} successfully.`);
       setAssignModalOpen(false);
+      router.refresh();
     } catch (err: unknown) {
       setAssignModalError(err instanceof Error ? err.message : "Failed to assign lead.");
     } finally {
@@ -422,11 +419,9 @@ export function LeadValidationClient({
       setLeads((prev) =>
         prev.map((l) => (l.id === res.lead.id ? res.lead : l))
       );
-      if (selectedLead?.id === res.lead.id) {
-        setSelectedLead(res.lead);
-      }
       setToastMessage(`Auto-assigned to ${res.lead.assignedTelecaller} via round-robin.`);
       setAssignModalOpen(false);
+      router.refresh();
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : "Failed to execute round-robin assignment.";
       if (assignModalOpen) {
@@ -436,99 +431,6 @@ export function LeadValidationClient({
       }
     } finally {
       setIsAssigning(false);
-    }
-  };
-
-  const handleOpenCallModal = () => {
-    if (!selectedLead) return;
-    if (selectedLead.isDoNotContact) {
-      setToastMessage("Cannot call: this prospect is marked Do Not Contact (DNC).");
-      return;
-    }
-    setCallDisposition(selectedLead.currentDisposition || "Connected");
-    setCallNotes("");
-    setCallbackTime("");
-    setCallModalError(null);
-    setIsCallModalOpen(true);
-  };
-
-  const handleSaveCallOutcome = async () => {
-    if (!selectedLead || isCallSubmitting) return;
-
-    setCallModalError(null);
-    setIsCallSubmitting(true);
-
-    try {
-      const res = await logLeadCallAction({
-        leadId: selectedLead.id,
-        disposition: callDisposition,
-        notes: callNotes.trim() || null,
-        callbackScheduledAt: callbackTime.trim() || null,
-      });
-
-      if (!res.success) {
-        setCallModalError(res.error);
-        return;
-      }
-
-      setLeads((prev) => prev.map((l) => (l.id === res.lead.id ? res.lead : l)));
-      setSelectedLead(res.lead);
-      setIsCallModalOpen(false);
-      setToastMessage(`Call outcome logged for ${res.lead.name}: ${res.lead.currentDisposition}`);
-    } catch (err: unknown) {
-      setCallModalError(err instanceof Error ? err.message : "Failed to save call outcome.");
-    } finally {
-      setIsCallSubmitting(false);
-    }
-  };
-
-  const handleMarkLeadActive = async () => {
-    if (!selectedLead || isStatusUpdating) return;
-    setIsStatusUpdating(true);
-
-    try {
-      const res = await updateLeadStatusAction({
-        leadId: selectedLead.id,
-        status: "ACTIVE",
-      });
-
-      if (!res.success) {
-        setToastMessage(`Failed to activate lead: ${res.error}`);
-        return;
-      }
-
-      setLeads((prev) => prev.map((l) => (l.id === res.lead.id ? res.lead : l)));
-      setSelectedLead(res.lead);
-      setToastMessage(`${res.lead.name} marked ACTIVE (Requirements Confirmed).`);
-    } catch (err: unknown) {
-      setToastMessage(err instanceof Error ? err.message : "Failed to activate lead.");
-    } finally {
-      setIsStatusUpdating(false);
-    }
-  };
-
-  const handleMarkLeadInactive = async () => {
-    if (!selectedLead || isStatusUpdating) return;
-    setIsStatusUpdating(true);
-
-    try {
-      const res = await updateLeadStatusAction({
-        leadId: selectedLead.id,
-        status: "INACTIVE",
-      });
-
-      if (!res.success) {
-        setToastMessage(`Failed to mark lead inactive: ${res.error}`);
-        return;
-      }
-
-      setLeads((prev) => prev.map((l) => (l.id === res.lead.id ? res.lead : l)));
-      setSelectedLead(res.lead);
-      setToastMessage(`${res.lead.name} marked INACTIVE.`);
-    } catch (err: unknown) {
-      setToastMessage(err instanceof Error ? err.message : "Failed to mark lead inactive.");
-    } finally {
-      setIsStatusUpdating(false);
     }
   };
 
@@ -581,7 +483,6 @@ export function LeadValidationClient({
         }
         return [res.lead, ...prev];
       });
-      setSelectedLead(res.lead);
       setIsCreateModalOpen(false);
 
       // Reset form
@@ -590,19 +491,22 @@ export function LeadValidationClient({
       setLeadFormAltPhone("");
       setLeadFormEmail("");
       if (res.isExistingBuyer) {
+        setDuplicateNotice({
+          id: res.lead.id,
+          name: res.lead.name,
+          phone: res.lead.primaryPhone,
+        });
         setToastMessage(`Existing buyer "${res.lead.name}" matched. New enquiry logged.`);
       } else {
+        setDuplicateNotice(null);
         setToastMessage(`Prospect ${res.lead.name} registered and saved.`);
       }
+      router.refresh();
     } catch (err: unknown) {
       setCreateLeadError(err instanceof Error ? err.message : "Failed to register prospect.");
     } finally {
       setIsCreatingLead(false);
     }
-  };
-
-  const handleShareProperty = (propName: string) => {
-    setToastMessage(`Property details for ${propName} shared with ${selectedLead?.name}.`);
   };
 
   return (
@@ -651,6 +555,50 @@ export function LeadValidationClient({
             </Link>
           </div>
         </div>
+
+        {/* Duplicate Notice Banner (PRD §5.1 / DV-04 / Issue 4) */}
+        {duplicateNotice && (
+          <div className="p-4 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-950 shadow-2xs space-y-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2.5">
+                <span className="text-xl">ℹ️</span>
+                <div>
+                  <h3 className="font-bold text-sm text-indigo-900">
+                    Existing Buyer Profile Matched
+                  </h3>
+                  <p className="text-xs text-indigo-800 mt-0.5">
+                    A buyer with primary phone <strong>+91 {duplicateNotice.phone}</strong> already exists in the system as <strong>{duplicateNotice.name}</strong>.
+                  </p>
+                  <p className="text-[11px] text-indigo-700 mt-1">
+                    Per CRM deduplication policy, the new enquiry and criteria have been attached to their existing profile instead of creating a duplicate contact.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDuplicateNotice(null)}
+                className="text-indigo-600 hover:text-indigo-900 text-xs font-semibold px-2 py-1 rounded hover:bg-indigo-100 cursor-pointer"
+              >
+                ✕ Dismiss
+              </button>
+            </div>
+            <div className="flex items-center gap-2 pt-1 border-t border-indigo-200/60">
+              <Link
+                href={`/leads/${duplicateNotice.id}`}
+                className="px-3.5 py-1.5 text-xs font-bold rounded bg-indigo-600 text-white hover:bg-indigo-700 shadow-2xs inline-flex items-center gap-1.5"
+              >
+                <span>👤</span> View Existing Buyer Profile
+              </Link>
+              <button
+                type="button"
+                onClick={() => setDuplicateNotice(null)}
+                className="px-3 py-1.5 text-xs font-medium rounded border border-indigo-300 bg-white text-indigo-800 hover:bg-indigo-50 cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Filter Controls Bar (PRD §5.6 - All 7 Filters) */}
         <div className="p-4 rounded-lg bg-crm-surface border border-crm-border shadow-2xs space-y-3">
@@ -832,14 +780,13 @@ export function LeadValidationClient({
           </div>
         </div>
 
-        {/* Master-Detail Architecture: Compact Table on Top, 3-Column Inspector Below */}
+        {/* Assigned Caller Queue */}
         <div className="space-y-6">
           {/* Pending Callbacks Compact Queue */}
           <PendingCallbacksCompact
             defaultOpen={leads.some((l) => l.callHistory.some((c) => Boolean(c.callbackDate)))}
             onSelectLeadId={(leadId) => {
-              const match = leads.find((l) => l.id === leadId);
-              if (match) setSelectedLead(match);
+              router.push(`/leads/${leadId}`);
             }}
           />
 
@@ -847,7 +794,7 @@ export function LeadValidationClient({
           <div className="rounded-lg bg-crm-surface border border-crm-border shadow-2xs overflow-hidden">
             <div className="px-4 py-2.5 bg-stone-50 border-b border-crm-border text-xs font-semibold text-crm-text flex items-center justify-between">
               <span>Assigned Caller Queue</span>
-              <span className="text-crm-muted font-normal text-[11px]">Click any lead to load the 3-column qualification workspace below</span>
+              <span className="text-crm-muted font-normal text-[11px]">Click any lead to view full buyer profile</span>
             </div>
 
             <div className="overflow-x-auto">
@@ -884,14 +831,11 @@ export function LeadValidationClient({
                     </tr>
                   ) : (
                     filteredLeads.map((lead) => {
-                      const isSelected = selectedLead?.id === lead.id;
                       return (
                         <tr
                           key={lead.id}
-                          onClick={() => setSelectedLead(lead)}
-                          className={`cursor-pointer transition-colors ${
-                            isSelected ? "bg-teal-50/60 font-medium" : "hover:bg-stone-50/70"
-                          }`}
+                          onClick={() => router.push(`/leads/${lead.id}`)}
+                          className="cursor-pointer transition-colors hover:bg-stone-50/70"
                         >
                           <td className="px-4 py-2.5">
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1032,432 +976,8 @@ export function LeadValidationClient({
               </table>
             </div>
           </div>
-
-          {/* PRD Three-Column Detail Page Workspace (§5.7) */}
-          {selectedLead ? (
-            <div className="rounded-lg bg-crm-surface border border-crm-border shadow-xs overflow-hidden">
-              {/* Workspace Header */}
-              <div className="px-6 py-3.5 bg-stone-50 border-b border-crm-border flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-crm-primary/10 text-crm-primary flex items-center justify-center font-bold text-sm">
-                    {selectedLead.name.charAt(0)}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-base font-bold text-crm-text">
-                        {selectedLead.name}
-                      </h3>
-                      <StatusBadge status={selectedLead.status} />
-                      <StatusBadge status={selectedLead.requirements.preference} />
-                      {selectedLead.isDoNotContact && (
-                        <span className="px-2 py-0.5 rounded text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300">
-                          🛑 Do Not Contact
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-crm-muted">
-                      Mobile: {selectedLead.primaryPhone} • Source: {selectedLead.originalSource} ({selectedLead.sourceCreatedAt})
-                      {selectedLead.unreachableCount > 0 && (
-                        <span> • Unreachable Attempts: <strong className={selectedLead.unreachableCount >= 3 ? "text-rose-700" : "text-crm-text"}>{selectedLead.unreachableCount}</strong></span>
-                      )}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 flex-wrap">
-                  {selectedLead.status === "Not Yet Validated" && !selectedLead.isDoNotContact && (
-                    <button
-                      onClick={handleMarkLeadActive}
-                      disabled={isStatusUpdating}
-                      className="px-3 py-1.5 text-xs font-bold rounded bg-crm-success text-white hover:bg-emerald-700 shadow-2xs disabled:opacity-50 cursor-pointer"
-                    >
-                      {isStatusUpdating ? "Activating..." : "✓ Activate Lead"}
-                    </button>
-                  )}
-                  <Link
-                    href={`/matching/${selectedLead.id}`}
-                    className="px-3 py-1.5 text-xs font-bold rounded border border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100 shadow-2xs flex items-center gap-1"
-                  >
-                    <span>🎯</span> Matches
-                  </Link>
-                  <Link
-                    href={`/leads/${selectedLead.id}`}
-                    className="px-3 py-1.5 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs flex items-center gap-1"
-                  >
-                    <span>↗</span> Details
-                  </Link>
-                  <Link
-                    href={`/leads/${selectedLead.id}/edit`}
-                    className="px-3 py-1.5 text-xs font-semibold rounded border border-crm-border bg-crm-surface text-crm-text hover:bg-stone-50 shadow-2xs flex items-center gap-1"
-                  >
-                    <span>✏️</span> Edit
-                  </Link>
-                  {selectedLead.isDoNotContact ? (
-                    <span
-                      className="px-3 py-1.5 text-xs font-semibold rounded bg-stone-100 text-stone-400 border border-stone-200 cursor-not-allowed flex items-center gap-1.5"
-                      title="Calling blocked: Prospect marked Do Not Contact"
-                    >
-                      <span>🛑</span> DNC Calling Blocked
-                    </span>
-                  ) : (
-                    <>
-                      <button
-                        onClick={handleOpenCallModal}
-                        className="px-2.5 py-1.5 text-xs font-semibold rounded border border-crm-border bg-stone-50 text-crm-text hover:bg-stone-100 shadow-2xs flex items-center gap-1 cursor-pointer"
-                        title="Quick log call directly without opening new page"
-                      >
-                        <span>⚡</span> Quick Call
-                      </button>
-                      <Link
-                        href={`/leads/${selectedLead.id}/qualify`}
-                        className="px-3.5 py-1.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-2xs flex items-center gap-1.5"
-                      >
-                        <span>📞</span> Open Call Workspace
-                      </Link>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* DNC Alert Banner */}
-              {selectedLead.isDoNotContact && (
-                <div className="px-6 py-2.5 bg-rose-50 border-b border-rose-200 text-rose-900 text-xs font-semibold flex items-center gap-2">
-                  <span>🛑</span>
-                  <span>Do Not Contact (DNC): Prospect requested no further contact. Outgoing calling is strictly disabled.</span>
-                </div>
-              )}
-
-              {/* Unreachable Threshold Warning Banner (PRD §5.5) */}
-              {!selectedLead.isDoNotContact && selectedLead.unreachableCount >= 3 && selectedLead.status !== "Inactive" && (
-                <div className="px-6 py-2.5 bg-amber-50 border-b border-amber-200 text-amber-900 text-xs flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-2">
-                    <span>⚠️</span>
-                    <span>
-                      <strong>Unreachable Threshold Reached:</strong> {selectedLead.unreachableCount} unsuccessful attempts. Per PRD §5.5, the caller may mark this lead Inactive at discretion.
-                    </span>
-                  </div>
-                  <button
-                    onClick={handleMarkLeadInactive}
-                    disabled={isStatusUpdating}
-                    className="px-3 py-1 text-xs font-bold rounded bg-stone-700 text-white hover:bg-stone-800 shadow-2xs disabled:opacity-50 cursor-pointer shrink-0"
-                  >
-                    {isStatusUpdating ? "Updating..." : "Mark Lead Inactive"}
-                  </button>
-                </div>
-              )}
-
-              {/* Three Columns Container */}
-              <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-crm-border text-xs">
-                {/* COLUMN 1: Buyer Details & Requirements (Left) */}
-                <div className="p-5 space-y-4">
-                  <div className="flex items-center justify-between border-b border-crm-border pb-2">
-                    <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                      1. Buyer Details & Requirements
-                    </h4>
-                    <span className="text-[10px] text-crm-muted">PRD §5.7 Left</span>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div>
-                      <span className="text-crm-muted text-[11px] block">Target Budget Range</span>
-                      <strong className="text-crm-text text-sm">{selectedLead.requirements.budgetFormatted}</strong>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <span className="text-crm-muted text-[11px] block">Target City</span>
-                        <strong className="text-crm-text">{selectedLead.requirements.city}</strong>
-                      </div>
-                      <div>
-                        <span className="text-crm-muted text-[11px] block">Transaction Preference</span>
-                        <strong className="text-crm-text">{selectedLead.requirements.preference} (Mandatory Hard Gate)</strong>
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="text-crm-muted text-[11px] block">Preferred Localities</span>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {selectedLead.requirements.localities.map((loc, i) => (
-                          <span key={i} className="px-2 py-0.5 rounded bg-stone-100 text-crm-text font-medium text-[11px] border border-crm-border">
-                            {loc}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="text-crm-muted text-[11px] block">Bedroom Configurations</span>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {selectedLead.requirements.bedroomConfigurations.map((bhk, i) => (
-                          <span key={i} className="px-2 py-0.5 rounded bg-stone-100 text-crm-text font-medium text-[11px] border border-crm-border">
-                            {bhk}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <span className="text-crm-muted text-[11px] block">Acceptable Property Types</span>
-                      <span className="text-crm-text font-medium">{selectedLead.requirements.propertyTypes.join(", ")}</span>
-                    </div>
-
-                    {/* Advertised Enquiry Verification Section (PRD §5.1) */}
-                    <div className="p-3 rounded border border-crm-border bg-stone-50/60 space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-crm-text text-[11px]">Original Ad Enquiry Verification</span>
-                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${selectedLead.advertisedPropertyVerified ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
-                          {selectedLead.advertisedPropertyVerified ? "Verified by Caller" : "Unverified"}
-                        </span>
-                      </div>
-                      <div className="text-crm-muted text-[11px]">
-                        <strong>Ad Reference:</strong> {selectedLead.advertisedPropertyRef || "Direct portal registration"}
-                      </div>
-                      {selectedLead.advertisedPropertyNotes && (
-                        <p className="text-[11px] text-crm-text italic mt-1">
-                          &quot;{selectedLead.advertisedPropertyNotes}&quot;
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* COLUMN 2: Calling Controls & History (Middle) */}
-                <div className="p-5 space-y-4">
-                  <div className="flex items-center justify-between border-b border-crm-border pb-2">
-                    <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                      2. Calling Controls & History
-                    </h4>
-                    <span className="text-[10px] text-crm-muted">PRD §5.7 Middle</span>
-                  </div>
-
-                  {/* Calling Status Summary */}
-                  <div className="p-3 rounded border border-crm-border bg-stone-50 flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] text-crm-muted uppercase font-bold block">Current Disposition</span>
-                      <StatusBadge status={selectedLead.currentDisposition} />
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-crm-muted uppercase font-bold block">Unsuccessful Attempts</span>
-                      <span className="font-bold text-crm-text">{selectedLead.unreachableCount} / 3 Max</span>
-                    </div>
-                  </div>
-
-                  {/* Quick Action Link to Dedicated Workspace */}
-                  <Link
-                    href={`/leads/${selectedLead.id}/qualify`}
-                    className="w-full py-2 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs text-center flex items-center justify-center gap-2"
-                  >
-                    <span>📞</span> Open Qualification Call Workspace
-                  </Link>
-
-                  {/* Call Attempt History Timeline */}
-                  <div className="space-y-2.5">
-                    <span className="font-bold text-crm-text text-[11px] block">
-                      Call History Log ({selectedLead.callHistory.length})
-                    </span>
-
-                    {selectedLead.callHistory.map((call) => (
-                      <div
-                        key={call.id}
-                        className="p-2.5 rounded border border-crm-border bg-stone-50/40 space-y-1"
-                      >
-                        <div className="flex items-center justify-between">
-                          <StatusBadge status={call.disposition} />
-                          <span className="text-[10px] text-crm-muted">{call.calledAt}</span>
-                        </div>
-                        <p className="text-crm-text text-[11px] leading-snug">{call.notes}</p>
-                        {call.callbackDate && (
-                          <div className="text-amber-800 text-[10px] font-semibold">
-                            ⏰ Callback: {call.callbackDate}
-                          </div>
-                        )}
-                        <div className="text-[10px] text-crm-muted">Caller: {call.callerName}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* COLUMN 3: Matching Properties & Visit History (Right) */}
-                <div className="p-5 space-y-4">
-                  <div className="flex items-center justify-between border-b border-crm-border pb-2">
-                    <h4 className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                      3. Top Matches & Visit History
-                    </h4>
-                    <span className="text-[10px] text-crm-muted">PRD §5.7 Right</span>
-                  </div>
-
-                  {/* Top 3 Active Properties */}
-                  <div className="space-y-2.5">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-crm-text text-[11px]">
-                        Top Matching Active Inventory
-                      </span>
-                      <Link
-                        href={`/matching/${selectedLead.id}`}
-                        className="text-[10px] text-crm-primary font-bold hover:underline inline-flex items-center gap-0.5"
-                      >
-                        <span>Full Matching</span>
-                        <span>↗</span>
-                      </Link>
-                    </div>
-
-                    {selectedLead.topMatches.length === 0 ? (
-                      <div className="p-4 rounded border border-crm-border text-center text-crm-muted">
-                        No active matching inventory currently available.
-                      </div>
-                    ) : (
-                      selectedLead.topMatches.map((match) => (
-                        <div
-                          key={match.id}
-                          className="p-3 rounded border border-crm-border bg-stone-50/50 hover:bg-stone-50 transition-all space-y-1.5"
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold text-crm-text text-xs">
-                              {match.societyName}
-                            </span>
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${match.score >= 80 ? "bg-emerald-100 text-emerald-800 border border-emerald-200" : "bg-amber-100 text-amber-800 border border-amber-200"}`}>
-                              {match.score}% Match
-                            </span>
-                          </div>
-
-                          <div className="text-crm-muted text-[11px] flex items-center justify-between">
-                            <span>{match.bedroomCount} BHK • {match.area} sq.ft</span>
-                            <strong className="text-crm-text">{match.priceFormatted}</strong>
-                          </div>
-
-                          <div className="text-[11px] text-crm-muted truncate">
-                            {match.locality}
-                          </div>
-
-                          <div className="pt-1.5 border-t border-crm-border flex items-center justify-between">
-                            <span className="text-[10px] text-crm-muted">Sale vs Rent: Exactly Matched</span>
-                            <button
-                              onClick={() => handleShareProperty(match.societyName)}
-                              className="px-2 py-0.5 text-[10px] font-semibold rounded bg-crm-surface border border-crm-border text-crm-link hover:underline"
-                            >
-                              Share with Buyer ↗
-                            </button>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-
-                  {/* Historical Site Visits Shown to This Buyer */}
-                  <div className="space-y-2 pt-2 border-t border-crm-border">
-                    <span className="font-bold text-crm-text text-[11px] block">
-                      Properties Shown on Site Visits ({selectedLead.siteVisitHistory.length})
-                    </span>
-
-                    {selectedLead.siteVisitHistory.length === 0 ? (
-                      <div className="text-crm-muted italic text-[11px] p-2 bg-stone-50 rounded border border-crm-border text-center">
-                        No prior site visits conducted for this buyer.
-                      </div>
-                    ) : (
-                      selectedLead.siteVisitHistory.map((v, i) => (
-                        <div key={i} className="p-2.5 rounded border border-crm-border bg-stone-50/30 text-[11px] space-y-0.5">
-                          <div className="flex items-center justify-between font-bold text-crm-text">
-                            <span>{v.propertySociety}</span>
-                            <span className="text-crm-muted text-[10px]">{v.date}</span>
-                          </div>
-                          <div className="text-crm-muted">{v.outcome}</div>
-                          <div className="text-[10px] text-crm-muted">Agent: {v.agentName}</div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : leads.length > 0 ? (
-            <div className="rounded-lg bg-crm-surface border border-crm-border p-8 text-center text-crm-muted">
-              <p className="font-semibold text-crm-text text-sm">No lead selected</p>
-              <p className="text-xs text-crm-muted mt-1">Select a lead from the queue above to inspect requirements and record calls.</p>
-            </div>
-          ) : null}
         </div>
       </div>
-
-      {/* Modal: Log Qualification Call */}
-      <Modal
-        isOpen={isCallModalOpen}
-        onClose={() => setIsCallModalOpen(false)}
-        title={`Log Demand Call: ${selectedLead?.name || ""}`}
-        subtitle={`Phone: ${selectedLead?.primaryPhone || ""} • Source: ${selectedLead?.originalSource || ""}`}
-        footer={
-          <>
-            <button
-              onClick={() => setIsCallModalOpen(false)}
-              className="px-3 py-1.5 text-xs rounded border border-crm-border text-crm-muted hover:text-crm-text"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSaveCallOutcome}
-              disabled={isCallSubmitting}
-              className="px-4 py-1.5 text-xs font-semibold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs disabled:opacity-50"
-            >
-              {isCallSubmitting ? "Saving..." : "Save Call Record"}
-            </button>
-          </>
-        }
-      >
-        <div className="space-y-4 text-xs">
-          {callModalError && (
-            <div className="p-2.5 rounded bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
-              {callModalError}
-            </div>
-          )}
-
-          <div>
-            <label className="block font-semibold text-crm-text mb-1">
-              Calling Disposition (PRD §5.5)
-            </label>
-            <select
-              value={callDisposition}
-              onChange={(e) => setCallDisposition(e.target.value)}
-              className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-            >
-              <option value="Connected">Connected (Buyer Discussed Requirements)</option>
-              <option value="Call Back">Call Back (Schedule Specific Date & Time)</option>
-              <option value="Ringing / Not Answering">Ringing / Not Answering (Counts as attempt)</option>
-              <option value="Buyer / Tenant Says Not Looking">Buyer / Tenant Says Not Looking (Move Inactive)</option>
-            </select>
-          </div>
-
-          {callDisposition === "Call Back" && (
-            <div>
-              <label className="block font-semibold text-crm-text mb-1">
-                Scheduled Callback Date & Time
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. 2026-10-23 04:30 PM"
-                value={callbackTime}
-                onChange={(e) => setCallbackTime(e.target.value)}
-                className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="block font-semibold text-crm-text mb-1">
-              Call Notes & Confirmed Requirements
-            </label>
-            <textarea
-              rows={3}
-              placeholder="Record verified budget, preferred sectors, timeline to purchase, loan status..."
-              value={callNotes}
-              onChange={(e) => setCallNotes(e.target.value)}
-              className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-            />
-          </div>
-
-          <div className="p-3 rounded bg-amber-50/60 border border-amber-200 text-amber-900 text-[11px]">
-            <strong>PRD Status Rule:</strong> &quot;Connected&quot; is an attempt outcome, not an automatic activation. Mark lead Active using the button on the workspace header once all mandatory requirements are captured.
-          </div>
-        </div>
-      </Modal>
 
       {/* Modal: Add Lead */}
       <Modal

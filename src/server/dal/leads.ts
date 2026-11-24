@@ -1265,6 +1265,14 @@ export async function updateLeadStatus(
       });
     }
 
+    if (status === LeadStatus.ACTIVE && lead.isDoNotContact) {
+      changes.push({
+        fieldName: "isDoNotContact",
+        previousValue: true,
+        newValue: false,
+      });
+    }
+
     if (status === LeadStatus.ACTIVE && lead.requirement) {
       const now = new Date();
       if (!lead.requirement.isConfirmed) {
@@ -1303,6 +1311,7 @@ export async function updateLeadStatus(
       },
       data: {
         status,
+        ...(status === LeadStatus.ACTIVE && lead.isDoNotContact ? { isDoNotContact: false } : {}),
       },
       include: FULL_LEAD_INCLUDE,
     });

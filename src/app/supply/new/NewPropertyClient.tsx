@@ -25,13 +25,13 @@ interface PhotoItem {
 }
 
 const STEPS = [
-  { id: 1, name: "Basic Details", desc: "Type, BHK, and layout" },
-  { id: 2, name: "Location Details", desc: "Society, unit, and locality" },
-  { id: 3, name: "Property Profile", desc: "Area, furnishing, condition" },
-  { id: 4, name: "Photos & Video", desc: "Upload images & walkthrough" },
-  { id: 5, name: "Amenities", desc: "Society & unit facilities" },
-  { id: 6, name: "Owner & Pricing", desc: "Price, contacts, key-holder" },
-  { id: 7, name: "Review & Submit", desc: "Final verification & publish" },
+  { id: 1, name: "Owner Contact", desc: "Owner & contact details" },
+  { id: 2, name: "Basic Details", desc: "Type, BHK, and layout" },
+  { id: 3, name: "Location Details", desc: "Society, unit, and locality" },
+  { id: 4, name: "Property Profile", desc: "Area, furnishing, condition" },
+  { id: 5, name: "Photos & Video", desc: "Upload images & walkthrough" },
+  { id: 6, name: "Amenities", desc: "Society & unit facilities" },
+  { id: 7, name: "Pricing & Review", desc: "Price, summary & publish" },
 ];
 
 const PREDEFINED_AMENITIES = [
@@ -59,9 +59,17 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
   const [highestStepReached, setHighestStepReached] = useState(1);
   const [stepError, setStepError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSavingExit, setIsSavingExit] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Step 1: Basic Details
+  // Step 1: Owner Contact Details (First Screen)
+  const [ownerName, setOwnerName] = useState("");
+  const [ownerMobile, setOwnerMobile] = useState("");
+  const [ownerAlternatePhone, setOwnerAlternatePhone] = useState("");
+  const [city, setCity] = useState("Gurugram");
+  const [localityName, setLocalityName] = useState("");
+
+  // Step 2: Basic Details
   const [preference, setPreference] = useState<"SALE" | "RENT">("SALE");
   const [propertyType, setPropertyType] = useState<
     "APARTMENT" | "INDEPENDENT_HOUSE" | "VILLA" | "BUILDER_FLOOR" | "PLOT" | "COMMERCIAL" | "OTHER"
@@ -70,16 +78,14 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
   const [bathroomCount, setBathroomCount] = useState<number>(3);
   const [balconyCount, setBalconyCount] = useState<number>(1);
 
-  // Step 2: Location Details
-  const [city, setCity] = useState("Gurugram");
-  const [localityName, setLocalityName] = useState("");
+  // Step 3: Location Details
   const [societyName, setSocietyName] = useState("");
   const [flatNumber, setFlatNumber] = useState("");
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [confirmDuplicate, setConfirmDuplicate] = useState(false);
   const [isCheckingDuplicate, setIsCheckingDuplicate] = useState(false);
 
-  // Step 3: Property Profile
+  // Step 4: Property Profile
   const [area, setArea] = useState("");
   const [areaType, setAreaType] = useState<"SUPER_BUILT_UP" | "BUILT_UP" | "CARPET">("SUPER_BUILT_UP");
   const [furnishingStatus, setFurnishingStatus] = useState<
@@ -89,12 +95,12 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
     "READY_TO_MOVE" | "UNDER_CONSTRUCTION"
   >("READY_TO_MOVE");
 
-  // Step 4: Photos & Videos
+  // Step 5: Photos & Videos
   const [selectedPhotos, setSelectedPhotos] = useState<PhotoItem[]>([]);
   const [youtubeUrl, setYoutubeUrl] = useState("");
   const [videoCaption, setVideoCaption] = useState("");
 
-  // Step 5: Amenities
+  // Step 6: Amenities
   const [amenities, setAmenities] = useState<string[]>([
     "Lift / Elevator",
     "24x7 Power Backup",
@@ -102,10 +108,8 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
   ]);
   const [customAmenityInput, setCustomAmenityInput] = useState("");
 
-  // Step 6: Owner & Pricing
+  // Step 7: Pricing & Key-holder
   const [price, setPrice] = useState("");
-  const [ownerName, setOwnerName] = useState("");
-  const [ownerMobile, setOwnerMobile] = useState("");
   const [hasKeyHolder, setHasKeyHolder] = useState(false);
   const [khName, setKhName] = useState("");
   const [khMobile, setKhMobile] = useState("");
@@ -114,7 +118,7 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
   >("GUARD");
   const [khNotes, setKhNotes] = useState("");
 
-  // Real-time duplicate check
+  // Real-time duplicate check on Step 3
   const handleCheckDuplicate = async () => {
     if (!societyName.trim() || !flatNumber.trim()) return;
     setIsCheckingDuplicate(true);
@@ -137,11 +141,40 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
     }
   };
 
+  const normalizePhone = (mobile: string): string => {
+    const clean = mobile.replace(/\D/g, "");
+    if (clean.length === 12 && clean.startsWith("91")) return clean.slice(2);
+    if (clean.length === 11 && clean.startsWith("0")) return clean.slice(1);
+    return clean;
+  };
+
   // Step Validation before proceeding
   const validateStep = (step: number): boolean => {
     setStepError(null);
 
+    // Step 1: Owner Contact Details
     if (step === 1) {
+      if (!ownerName.trim()) {
+        setStepError("Owner full name is required.");
+        return false;
+      }
+      const normMobile = normalizePhone(ownerMobile);
+      if (!/^[6-9]\d{9}$/.test(normMobile)) {
+        setStepError("Owner mobile must be a valid 10-digit Indian mobile number.");
+        return false;
+      }
+      if (ownerAlternatePhone.trim()) {
+        const normAlt = normalizePhone(ownerAlternatePhone);
+        if (!/^[6-9]\d{9}$/.test(normAlt)) {
+          setStepError("Alternate phone must be a valid 10-digit Indian mobile number.");
+          return false;
+        }
+      }
+      return true;
+    }
+
+    // Step 2: Basic Details
+    if (step === 2) {
       if (bedroomCount < 0) {
         setStepError("Bedroom count must be non-negative.");
         return false;
@@ -153,7 +186,8 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
       return true;
     }
 
-    if (step === 2) {
+    // Step 3: Location Details
+    if (step === 3) {
       if (!city.trim()) {
         setStepError("City is required.");
         return false;
@@ -173,7 +207,8 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
       return true;
     }
 
-    if (step === 3) {
+    // Step 4: Property Profile
+    if (step === 4) {
       const parsedArea = parseFloat(area);
       if (isNaN(parsedArea) || parsedArea <= 0) {
         setStepError("Please enter a valid property area in square feet.");
@@ -182,7 +217,8 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
       return true;
     }
 
-    if (step === 4) {
+    // Step 5: Photos & Walkthrough
+    if (step === 5) {
       if (youtubeUrl.trim()) {
         try {
           const parsed = new URL(youtubeUrl.trim());
@@ -199,12 +235,13 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
       return true;
     }
 
-    if (step === 5) {
-      // Amenities are optional
+    // Step 6: Amenities
+    if (step === 6) {
       return true;
     }
 
-    if (step === 6) {
+    // Step 7: Pricing & Final Review
+    if (step === 7) {
       const parsedPrice = parseFloat(price);
       if (isNaN(parsedPrice) || parsedPrice <= 0) {
         setStepError(
@@ -214,31 +251,9 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
         );
         return false;
       }
-      if (!ownerName.trim()) {
-        setStepError("Owner full name is required.");
-        return false;
-      }
-      const cleanMobile = ownerMobile.replace(/\D/g, "");
-      const normalized =
-        cleanMobile.length === 12 && cleanMobile.startsWith("91")
-          ? cleanMobile.slice(2)
-          : cleanMobile.length === 11 && cleanMobile.startsWith("0")
-          ? cleanMobile.slice(1)
-          : cleanMobile;
-
-      if (!/^[6-9]\d{9}$/.test(normalized)) {
-        setStepError("Owner mobile must be a valid 10-digit Indian mobile number.");
-        return false;
-      }
 
       if (hasKeyHolder && khMobile.trim()) {
-        const cleanKh = khMobile.replace(/\D/g, "");
-        const khNormalized =
-          cleanKh.length === 12 && cleanKh.startsWith("91")
-            ? cleanKh.slice(2)
-            : cleanKh.length === 11 && cleanKh.startsWith("0")
-            ? cleanKh.slice(1)
-            : cleanKh;
+        const khNormalized = normalizePhone(khMobile);
         if (!/^[6-9]\d{9}$/.test(khNormalized)) {
           setStepError("Key-holder mobile must be a valid 10-digit Indian mobile number.");
           return false;
@@ -248,6 +263,51 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
     }
 
     return true;
+  };
+
+  // Step 1 Action A: Save & Exit (Saves unvalidated incomplete intake and exits)
+  const handleSaveAndExit = async () => {
+    if (!validateStep(1)) return;
+
+    setIsSavingExit(true);
+    setStepError(null);
+
+    try {
+      const normMobile = normalizePhone(ownerMobile);
+      const res = await createPropertyAction({
+        ownerName: ownerName.trim(),
+        ownerMobile: normMobile,
+        city: city.trim() || undefined,
+        localityName: localityName.trim() || undefined,
+        validationStatus: "NOT_VALIDATED",
+        entryChannel: "MANUAL",
+      });
+
+      if (!res.success) {
+        setStepError(res.error || "Failed to save property intake.");
+        setIsSavingExit(false);
+        return;
+      }
+
+      setToastMessage("Property intake saved successfully. Assigned to validation queue.");
+      setTimeout(() => {
+        router.push("/supply");
+        router.refresh();
+      }, 700);
+    } catch (err: unknown) {
+      setStepError(err instanceof Error ? err.message : "Failed to save property intake.");
+      setIsSavingExit(false);
+    }
+  };
+
+  // Step 1 Action B: Continue to Post (Preserves details and advances without creating DB duplicate)
+  const handleContinueToPost = () => {
+    if (!validateStep(1)) return;
+    setCurrentStep(2);
+    if (highestStepReached < 2) {
+      setHighestStepReached(2);
+    }
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleNext = () => {
@@ -310,35 +370,19 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
     }
   };
 
-  // Final Submission
+  // Final Submission on Step 7
   const handleSubmit = async () => {
-    if (!validateStep(6)) {
-      setCurrentStep(6);
-      return;
-    }
+    if (!validateStep(7)) return;
 
     setIsSubmitting(true);
     setStepError(null);
 
     try {
-      const cleanOwner = ownerMobile.replace(/\D/g, "");
-      const normalizedOwner =
-        cleanOwner.length === 12 && cleanOwner.startsWith("91")
-          ? cleanOwner.slice(2)
-          : cleanOwner.length === 11 && cleanOwner.startsWith("0")
-          ? cleanOwner.slice(1)
-          : cleanOwner;
+      const normalizedOwner = normalizePhone(ownerMobile);
 
       let keyHolderPayload = null;
       if (hasKeyHolder && khName.trim()) {
-        const cleanKh = khMobile.replace(/\D/g, "");
-        const normalizedKh =
-          cleanKh.length === 12 && cleanKh.startsWith("91")
-            ? cleanKh.slice(2)
-            : cleanKh.length === 11 && cleanKh.startsWith("0")
-            ? cleanKh.slice(1)
-            : cleanKh;
-
+        const normalizedKh = normalizePhone(khMobile);
         keyHolderPayload = {
           name: khName.trim(),
           mobile: normalizedKh || normalizedOwner,
@@ -347,12 +391,14 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
         };
       }
 
-      // 1. Create property
+      // 1. Create fully populated property
       const res = await createPropertyAction({
+        ownerName: ownerName.trim(),
+        ownerMobile: normalizedOwner,
+        city: city.trim(),
+        localityName: localityName.trim(),
         societyName: societyName.trim(),
         flatNumber: flatNumber.trim(),
-        localityName: localityName.trim(),
-        city: city.trim(),
         preference,
         propertyType,
         furnishingStatus,
@@ -363,17 +409,16 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
         area: parseFloat(area),
         areaType,
         price: parseFloat(price),
-        ownerName: ownerName.trim(),
-        ownerMobile: normalizedOwner,
         amenities,
         keyHolder: keyHolderPayload,
         confirmDuplicate,
+        entryChannel: "MANUAL",
       });
 
       if (!res.success) {
         if (res.isDuplicate) {
           setDuplicateWarning(res.error);
-          setCurrentStep(2);
+          setCurrentStep(3); // Jump to Location Details
         } else {
           setStepError(res.error);
         }
@@ -402,7 +447,7 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
         }).catch(() => null);
       }
 
-      setToastMessage(`Property posted successfully: ${res.property.societyName} (${res.property.flatNumber})`);
+      setToastMessage(`Property posted successfully: ${res.property.societyName || "Unit"} (${res.property.flatNumber || "—"})`);
 
       // Navigate to dedicated property details page
       setTimeout(() => {
@@ -450,12 +495,12 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
           </div>
         </div>
 
-        {/* Wizard Layout: Left Stepper (4 cols) & Right Form Card (8 cols) */}
+        {/* Wizard Main Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Vertical Stepper Sidebar */}
-          <div className="lg:col-span-4 bg-crm-surface rounded-lg border border-crm-border p-5 shadow-2xs sticky top-4">
-            <div className="flex items-center justify-between pb-3 mb-4 border-b border-crm-border">
-              <span className="text-xs font-bold text-crm-text uppercase tracking-wider">
+          {/* Left Column: Progress Stepper */}
+          <div className="lg:col-span-4 bg-crm-surface rounded-lg border border-crm-border p-5 shadow-2xs">
+            <div className="flex items-center justify-between pb-3 border-b border-crm-border mb-4">
+              <span className="text-xs font-bold uppercase tracking-wider text-crm-muted">
                 Progress
               </span>
               <span className="text-xs font-semibold text-crm-primary">
@@ -463,27 +508,17 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
               </span>
             </div>
 
-            <nav aria-label="Progress Stepper" className="space-y-1">
-              {STEPS.map((step, idx) => {
-                const isCompleted = step.id < currentStep;
+            <nav aria-label="Wizard Steps" className="space-y-2">
+              {STEPS.map((step) => {
                 const isCurrent = step.id === currentStep;
+                const isCompleted = step.id < currentStep;
                 const isClickable = step.id <= highestStepReached;
 
                 return (
                   <div key={step.id} className="relative">
-                    {/* Connecting line */}
-                    {idx < STEPS.length - 1 && (
-                      <span
-                        className={`absolute left-3.5 top-8 -bottom-1 w-0.5 ${
-                          step.id < currentStep ? "bg-emerald-500" : "bg-stone-200"
-                        }`}
-                        aria-hidden="true"
-                      />
-                    )}
-
                     <button
                       type="button"
-                      disabled={!isClickable || isSubmitting}
+                      disabled={!isClickable || isSubmitting || isSavingExit}
                       onClick={() => jumpToStep(step.id)}
                       className={`w-full flex items-start gap-3 p-2.5 rounded-md text-left transition-colors ${
                         isCurrent
@@ -546,16 +581,22 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                 Step {currentStep}: {STEPS[currentStep - 1]?.name}
               </span>
               <h2 className="text-lg font-bold text-crm-text">
-                {currentStep === 1 && "Basic Property Information"}
-                {currentStep === 2 && "Location & Society Identification"}
-                {currentStep === 3 && "Property Profile & Specifications"}
-                {currentStep === 4 && "Photos & Video Walkthrough"}
-                {currentStep === 5 && "Society & Unit Amenities"}
-                {currentStep === 6 && "Owner Contact & Pricing"}
-                {currentStep === 7 && "Review Property & Submit"}
+                {currentStep === 1 && "Owner Contact Details"}
+                {currentStep === 2 && "Basic Property Information"}
+                {currentStep === 3 && "Location & Society Identification"}
+                {currentStep === 4 && "Property Profile & Specifications"}
+                {currentStep === 5 && "Photos & Video Walkthrough"}
+                {currentStep === 6 && "Society & Unit Amenities"}
+                {currentStep === 7 && "Pricing & Final Review"}
               </h2>
               <p className="text-xs text-crm-muted mt-1">
-                {STEPS[currentStep - 1]?.desc}
+                {currentStep === 1 && "Collect owner contact details first. You can save an incomplete intake record immediately or continue posting full property details."}
+                {currentStep === 2 && "Listing mode, property typology, bedrooms, and layout."}
+                {currentStep === 3 && "Identify society, unit number, locality, and city."}
+                {currentStep === 4 && "Area dimensions, furnishing condition, and possession status."}
+                {currentStep === 5 && "Upload interior/exterior images and optional YouTube walkthrough."}
+                {currentStep === 6 && "Select society and unit amenities."}
+                {currentStep === 7 && "Set expected asking price / rent and review all details before posting."}
               </p>
             </div>
 
@@ -573,8 +614,118 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
               </div>
             )}
 
-            {/* Step 1: Basic Details */}
+            {/* STEP 1: Owner Contact Details (First Screen) */}
             {currentStep === 1 && (
+              <div className="space-y-5 text-xs">
+                <div className="p-4 rounded-lg bg-teal-50/60 border border-teal-200 text-teal-900 space-y-1">
+                  <div className="font-bold text-sm flex items-center gap-1.5">
+                    <span>👤 Quick Owner Intake</span>
+                  </div>
+                  <p className="text-[11px] text-teal-800">
+                    If you only have the owner&apos;s contact details, fill Name and Mobile below and click <strong>Save & Exit</strong>. A pending intake record will be created in your Supply Validation queue for telecallers to follow up.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Owner Name */}
+                  <div>
+                    <label className="block font-semibold text-crm-text mb-1">
+                      Owner Full Name <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Rahul Sharma"
+                      value={ownerName}
+                      onChange={(e) => setOwnerName(e.target.value)}
+                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                      autoFocus
+                    />
+                  </div>
+
+                  {/* Owner Mobile */}
+                  <div>
+                    <label className="block font-semibold text-crm-text mb-1">
+                      Owner Mobile (10-Digit Indian Mobile) <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="e.g. 98123 45678"
+                      value={ownerMobile}
+                      onChange={(e) => setOwnerMobile(e.target.value)}
+                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                    />
+                  </div>
+
+                  {/* Alternate Mobile */}
+                  <div>
+                    <label className="block font-semibold text-crm-text mb-1">
+                      Alternate Mobile Number <span className="text-crm-muted font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="e.g. 98111 22334"
+                      value={ownerAlternatePhone}
+                      onChange={(e) => setOwnerAlternatePhone(e.target.value)}
+                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                    />
+                  </div>
+
+                  {/* City */}
+                  <div>
+                    <label className="block font-semibold text-crm-text mb-1">
+                      City <span className="text-crm-muted font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Gurugram"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                    />
+                  </div>
+
+                  {/* Locality */}
+                  <div className="sm:col-span-2">
+                    <label className="block font-semibold text-crm-text mb-1">
+                      Locality / Sector <span className="text-crm-muted font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Sector 54, Golf Course Road"
+                      value={localityName}
+                      onChange={(e) => setLocalityName(e.target.value)}
+                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Step 1 Two Distinct Action Buttons */}
+                <div className="pt-6 border-t border-crm-border flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    disabled={isSavingExit || isSubmitting}
+                    onClick={handleSaveAndExit}
+                    className="px-4 py-2.5 text-xs font-semibold rounded border border-crm-border text-crm-text bg-white hover:bg-stone-50 shadow-2xs cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    <span>💾</span>
+                    <span>{isSavingExit ? "Saving Intake..." : "Save & Exit (Intake Only)"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isSavingExit || isSubmitting}
+                    onClick={handleContinueToPost}
+                    className="px-5 py-2.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs cursor-pointer flex items-center justify-center gap-1"
+                  >
+                    <span>Continue to Post Property</span>
+                    <span>→</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 2: Basic Property Details */}
+            {currentStep === 2 && (
               <div className="space-y-5 text-xs">
                 {/* Transaction Type */}
                 <div>
@@ -609,27 +760,27 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                   </div>
                 </div>
 
-                {/* Property Type */}
+                {/* Property Typology */}
                 <div>
                   <label className="block font-semibold text-crm-text mb-2">
                     Property Typology <span className="text-red-500">*</span>
                   </label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {[
-                      { val: "APARTMENT", label: "Apartment / Flat" },
-                      { val: "BUILDER_FLOOR", label: "Builder Floor" },
-                      { val: "INDEPENDENT_HOUSE", label: "Independent House" },
-                      { val: "VILLA", label: "Villa / Bungalow" },
-                      { val: "PLOT", label: "Residential Plot" },
-                      { val: "COMMERCIAL", label: "Commercial Unit" },
-                      { val: "OTHER", label: "Other Typology" },
-                    ].map((item) => (
+                      { id: "APARTMENT", label: "Apartment / Flat" },
+                      { id: "BUILDER_FLOOR", label: "Builder Floor" },
+                      { id: "INDEPENDENT_HOUSE", label: "Independent House" },
+                      { id: "VILLA", label: "Villa / Bungalow" },
+                      { id: "PLOT", label: "Residential Plot" },
+                      { id: "COMMERCIAL", label: "Commercial Unit" },
+                      { id: "OTHER", label: "Other Typology" },
+                    ].map((type) => (
                       <button
-                        key={item.val}
+                        key={type.id}
                         type="button"
                         onClick={() =>
                           setPropertyType(
-                            item.val as
+                            type.id as
                               | "APARTMENT"
                               | "INDEPENDENT_HOUSE"
                               | "VILLA"
@@ -639,19 +790,19 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                               | "OTHER"
                           )
                         }
-                        className={`p-2.5 rounded border text-left text-xs transition-all ${
-                          propertyType === item.val
+                        className={`py-2 px-3 rounded border text-center transition-all ${
+                          propertyType === type.id
                             ? "bg-teal-50 border-teal-600 text-teal-900 font-semibold"
-                            : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50 hover:text-crm-text"
+                            : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50"
                         }`}
                       >
-                        {item.label}
+                        {type.label}
                       </button>
                     ))}
                   </div>
                 </div>
 
-                {/* BHK / Bedroom Configuration */}
+                {/* Bedrooms (BHK) */}
                 <div>
                   <label className="block font-semibold text-crm-text mb-2">
                     Bedrooms (BHK) <span className="text-red-500">*</span>
@@ -662,10 +813,10 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                         key={bhk}
                         type="button"
                         onClick={() => setBedroomCount(bhk)}
-                        className={`w-14 py-2 rounded text-xs border text-center font-semibold transition-all ${
+                        className={`h-9 w-12 rounded border font-bold transition-all ${
                           bedroomCount === bhk
-                            ? "bg-teal-600 text-white border-teal-600"
-                            : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50 hover:text-crm-text"
+                            ? "bg-teal-600 border-teal-700 text-white shadow-2xs"
+                            : "bg-crm-surface border-crm-border text-crm-text hover:bg-stone-50"
                         }`}
                       >
                         {bhk} BHK
@@ -674,10 +825,10 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                   </div>
                 </div>
 
-                {/* Bathrooms & Balconies */}
+                {/* Bathrooms and Balconies */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block font-semibold text-crm-text mb-1">
+                    <label className="block font-semibold text-crm-text mb-2">
                       Bathroom Count
                     </label>
                     <div className="flex gap-2">
@@ -686,9 +837,9 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                           key={bath}
                           type="button"
                           onClick={() => setBathroomCount(bath)}
-                          className={`w-10 py-1.5 rounded text-xs border text-center font-medium ${
+                          className={`h-8 w-10 rounded border font-semibold transition-all ${
                             bathroomCount === bath
-                              ? "bg-teal-600 text-white border-teal-600"
+                              ? "bg-teal-600 border-teal-700 text-white"
                               : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50"
                           }`}
                         >
@@ -699,7 +850,7 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-crm-text mb-1">
+                    <label className="block font-semibold text-crm-text mb-2">
                       Balconies
                     </label>
                     <div className="flex gap-2">
@@ -708,9 +859,9 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                           key={balc}
                           type="button"
                           onClick={() => setBalconyCount(balc)}
-                          className={`w-10 py-1.5 rounded text-xs border text-center font-medium ${
+                          className={`h-8 w-10 rounded border font-semibold transition-all ${
                             balconyCount === balc
-                              ? "bg-teal-600 text-white border-teal-600"
+                              ? "bg-teal-600 border-teal-700 text-white"
                               : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50"
                           }`}
                         >
@@ -723,129 +874,126 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
               </div>
             )}
 
-            {/* Step 2: Location Details */}
-            {currentStep === 2 && (
+            {/* STEP 3: Location Details */}
+            {currentStep === 3 && (
               <div className="space-y-4 text-xs">
                 {duplicateWarning && (
-                  <div className="p-3 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-xs space-y-2">
-                    <div className="font-bold flex items-center gap-1.5">
-                      <span>⚠️ Potential Duplicate Listing Detected</span>
+                  <div className="p-3 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-start gap-2">
+                    <span className="text-base">⚠️</span>
+                    <div className="space-y-1">
+                      <div className="font-bold">Duplicate Inventory Warning</div>
+                      <p>{duplicateWarning}</p>
+                      <label className="flex items-center gap-1.5 pt-1 font-semibold text-amber-950 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={confirmDuplicate}
+                          onChange={(e) => setConfirmDuplicate(e.target.checked)}
+                          className="accent-amber-600"
+                        />
+                        <span>Confirm and proceed anyway (e.g. dual mandate or re-listing)</span>
+                      </label>
                     </div>
-                    <p>{duplicateWarning}</p>
-                    <label className="flex items-center gap-2 pt-1 font-semibold text-amber-950 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={confirmDuplicate}
-                        onChange={(e) => setConfirmDuplicate(e.target.checked)}
-                        className="accent-amber-700"
-                      />
-                      I confirm this is an intentional separate entry
-                    </label>
                   </div>
                 )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Society / Project Name */}
                   <div>
                     <label className="block font-semibold text-crm-text mb-1">
-                      City / Primary Market <span className="text-red-500">*</span>
+                      Society / Project Name <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
-                      placeholder="e.g. Gurugram, Noida, Delhi"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-crm-text mb-1">
-                      Locality / Sector Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. DLF Phase 5, Golf Course Road, Sector 54"
-                      value={localityName}
-                      onChange={(e) => setLocalityName(e.target.value)}
-                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-semibold text-crm-text mb-1">
-                      Society / Condominium / Project <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. The Camellias, DLF The Aralias"
+                      placeholder="e.g. DLF The Aralias"
                       value={societyName}
                       onChange={(e) => setSocietyName(e.target.value)}
                       onBlur={handleCheckDuplicate}
                       className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
                     />
+                    {isCheckingDuplicate && (
+                      <span className="text-[10px] text-crm-muted mt-0.5 block">Checking duplicates...</span>
+                    )}
                   </div>
 
+                  {/* Flat / Unit Number */}
                   <div>
                     <label className="block font-semibold text-crm-text mb-1">
-                      Flat / Unit / Villa Number <span className="text-red-500">*</span>
+                      Flat / Unit Number <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
-                      placeholder="e.g. Tower 3 Flat 402, Villa 12"
+                      placeholder="e.g. Tower B - 1204"
                       value={flatNumber}
                       onChange={(e) => setFlatNumber(e.target.value)}
                       onBlur={handleCheckDuplicate}
                       className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
                     />
-                    {isCheckingDuplicate && (
-                      <span className="text-[10px] text-crm-muted mt-1 block">
-                        Checking brokerage records for duplicates...
-                      </span>
-                    )}
                   </div>
-                </div>
 
-                <div className="p-3 rounded bg-stone-50 border border-crm-border text-[11px] text-crm-muted">
-                  <strong>Privacy Rule (PRD §8.2):</strong> Exact unit and flat numbers are never exposed in buyer-facing links, shared brochures, or unauthenticated views. Only confirmed clients receive viewing access.
+                  {/* Locality / Sector */}
+                  <div>
+                    <label className="block font-semibold text-crm-text mb-1">
+                      Locality / Sector <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Sector 54, Golf Course Road"
+                      value={localityName}
+                      onChange={(e) => setLocalityName(e.target.value)}
+                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                    />
+                  </div>
+
+                  {/* City */}
+                  <div>
+                    <label className="block font-semibold text-crm-text mb-1">
+                      City <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Gurugram"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
+                    />
+                  </div>
                 </div>
               </div>
             )}
 
-            {/* Step 3: Property Profile */}
-            {currentStep === 3 && (
-              <div className="space-y-5 text-xs">
+            {/* STEP 4: Property Profile & Specifications */}
+            {currentStep === 4 && (
+              <div className="space-y-4 text-xs">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Area */}
                   <div>
                     <label className="block font-semibold text-crm-text mb-1">
-                      Property Area (Square Feet) <span className="text-red-500">*</span>
+                      Property Area (sq.ft) <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="number"
-                      placeholder="e.g. 1850"
+                      placeholder="e.g. 2450"
                       value={area}
                       onChange={(e) => setArea(e.target.value)}
                       className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
                     />
                   </div>
 
+                  {/* Area Type */}
                   <div>
                     <label className="block font-semibold text-crm-text mb-1">
-                      Area Measurement Type
+                      Area Unit Type <span className="text-red-500">*</span>
                     </label>
                     <select
                       value={areaType}
                       onChange={(e) =>
-                        setAreaType(
-                          e.target.value as "SUPER_BUILT_UP" | "BUILT_UP" | "CARPET"
-                        )
+                        setAreaType(e.target.value as "SUPER_BUILT_UP" | "BUILT_UP" | "CARPET")
                       }
                       className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
                     >
                       <option value="SUPER_BUILT_UP">Super Built-up Area</option>
                       <option value="BUILT_UP">Built-up Area</option>
-                      <option value="CARPET">Carpet Area (RERA)</option>
+                      <option value="CARPET">Carpet Area</option>
                     </select>
                   </div>
                 </div>
@@ -853,29 +1001,29 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                 {/* Furnishing Status */}
                 <div>
                   <label className="block font-semibold text-crm-text mb-2">
-                    Furnishing Status
+                    Furnishing Status <span className="text-red-500">*</span>
                   </label>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-3 gap-2">
                     {[
-                      { val: "UNFURNISHED", label: "Unfurnished" },
-                      { val: "SEMI_FURNISHED", label: "Semi-Furnished" },
-                      { val: "FURNISHED", label: "Fully Furnished" },
-                    ].map((item) => (
+                      { id: "UNFURNISHED", label: "Unfurnished" },
+                      { id: "SEMI_FURNISHED", label: "Semi-Furnished" },
+                      { id: "FURNISHED", label: "Fully Furnished" },
+                    ].map((f) => (
                       <button
-                        key={item.val}
+                        key={f.id}
                         type="button"
                         onClick={() =>
                           setFurnishingStatus(
-                            item.val as "UNFURNISHED" | "SEMI_FURNISHED" | "FURNISHED"
+                            f.id as "UNFURNISHED" | "SEMI_FURNISHED" | "FURNISHED"
                           )
                         }
                         className={`py-2 px-3 rounded border text-center transition-all ${
-                          furnishingStatus === item.val
+                          furnishingStatus === f.id
                             ? "bg-teal-50 border-teal-600 text-teal-900 font-semibold"
                             : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50"
                         }`}
                       >
-                        {item.label}
+                        {f.label}
                       </button>
                     ))}
                   </div>
@@ -884,7 +1032,7 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                 {/* Construction Status */}
                 <div>
                   <label className="block font-semibold text-crm-text mb-2">
-                    Construction & Possession Status
+                    Construction / Possession Status <span className="text-red-500">*</span>
                   </label>
                   <div className="grid grid-cols-2 gap-3 max-w-md">
                     <button
@@ -896,7 +1044,7 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                           : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50"
                       }`}
                     >
-                      ✓ Ready to Move
+                      🏢 Ready to Move
                     </button>
                     <button
                       type="button"
@@ -914,8 +1062,8 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
               </div>
             )}
 
-            {/* Step 4: Photos & Videos */}
-            {currentStep === 4 && (
+            {/* STEP 5: Photos & Walkthrough */}
+            {currentStep === 5 && (
               <div className="space-y-5 text-xs">
                 {/* Photo Upload Dropzone */}
                 <div>
@@ -999,26 +1147,22 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                   />
                   <input
                     type="text"
-                    placeholder="Video caption (e.g. Complete 3 BHK Walkthrough with Terrace)"
+                    placeholder="Caption (e.g. 3BHK Walkthrough Tour)"
                     value={videoCaption}
                     onChange={(e) => setVideoCaption(e.target.value)}
-                    className="w-full px-3 py-1.5 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden text-xs"
+                    className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
                   />
                 </div>
               </div>
             )}
 
-            {/* Step 5: Amenities */}
-            {currentStep === 5 && (
+            {/* STEP 6: Amenities */}
+            {currentStep === 6 && (
               <div className="space-y-4 text-xs">
                 <div>
-                  <label className="block font-semibold text-crm-text mb-1">
-                    Selected Amenities & Facilities ({amenities.length})
+                  <label className="block font-semibold text-crm-text mb-2">
+                    Society & Unit Amenities Checklist
                   </label>
-                  <p className="text-[11px] text-crm-muted mb-3">
-                    Check all applicable features for prospective buyers and tenants.
-                  </p>
-
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {PREDEFINED_AMENITIES.map((item) => {
                       const isChecked = amenities.includes(item);
@@ -1033,7 +1177,7 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                               setAmenities([...amenities, item]);
                             }
                           }}
-                          className={`p-2 rounded border text-left text-xs transition-all ${
+                          className={`p-2.5 rounded border text-left flex items-center transition-all ${
                             isChecked
                               ? "bg-teal-50 border-teal-600 text-teal-900 font-semibold"
                               : "bg-crm-surface border-crm-border text-crm-muted hover:bg-stone-50"
@@ -1078,13 +1222,13 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
               </div>
             )}
 
-            {/* Step 6: Owner & Pricing */}
-            {currentStep === 6 && (
-              <div className="space-y-4 text-xs">
+            {/* STEP 7: Pricing & Final Review */}
+            {currentStep === 7 && (
+              <div className="space-y-6 text-xs">
                 {/* Price / Rent Input */}
-                <div>
-                  <label className="block font-semibold text-crm-text mb-1">
-                    {preference === "SALE" ? "Expected Sale Price (INR)" : "Monthly Rent (INR)"}{" "}
+                <div className="p-4 rounded-lg bg-stone-50/60 border border-crm-border space-y-3">
+                  <label className="block font-bold text-sm text-crm-text">
+                    {preference === "SALE" ? "Expected Resale Price (INR)" : "Monthly Rent (INR)"}{" "}
                     <span className="text-red-500">*</span>
                   </label>
                   <div className="relative max-w-sm">
@@ -1093,48 +1237,19 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                       placeholder={preference === "SALE" ? "e.g. 15000000" : "e.g. 45000"}
                       value={price}
                       onChange={(e) => setPrice(e.target.value)}
-                      className="w-full pl-7 pr-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden font-semibold"
+                      className="w-full pl-7 pr-3 py-2 rounded border border-crm-border bg-white focus:outline-hidden font-semibold text-sm"
                     />
-                    <span className="absolute left-2.5 top-2 text-crm-muted">₹</span>
+                    <span className="absolute left-2.5 top-2 text-crm-muted font-bold">₹</span>
                   </div>
                   {formattedPricePreview && (
-                    <div className="text-xs font-bold text-teal-800 mt-1">
-                      Preview: {formattedPricePreview}
+                    <div className="text-xs font-bold text-teal-800">
+                      Formatted: {formattedPricePreview}
                     </div>
                   )}
                 </div>
 
-                {/* Owner Contacts */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-crm-border">
-                  <div>
-                    <label className="block font-semibold text-crm-text mb-1">
-                      Owner Full Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. Rajesh Singhal"
-                      value={ownerName}
-                      onChange={(e) => setOwnerName(e.target.value)}
-                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-semibold text-crm-text mb-1">
-                      Owner Mobile (10-Digit Indian Mobile) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="tel"
-                      placeholder="e.g. 98100 12345"
-                      value={ownerMobile}
-                      onChange={(e) => setOwnerMobile(e.target.value)}
-                      className="w-full px-3 py-2 rounded border border-crm-border bg-stone-50/50 focus:bg-white focus:outline-hidden"
-                    />
-                  </div>
-                </div>
-
                 {/* Optional Key-Holder Section */}
-                <div className="pt-3 border-t border-crm-border space-y-3">
+                <div className="pt-2 border-t border-crm-border space-y-3">
                   <label className="flex items-center gap-2 font-semibold text-crm-text cursor-pointer">
                     <input
                       type="checkbox"
@@ -1175,7 +1290,7 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                           </label>
                           <input
                             type="text"
-                            placeholder="e.g. Ram Bahadur (Tower A)"
+                            placeholder="e.g. Ram Singh"
                             value={khName}
                             onChange={(e) => setKhName(e.target.value)}
                             className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-white"
@@ -1188,7 +1303,7 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                           </label>
                           <input
                             type="tel"
-                            placeholder="Optional 10-digit number"
+                            placeholder="e.g. 98123 45678"
                             value={khMobile}
                             onChange={(e) => setKhMobile(e.target.value)}
                             className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-white"
@@ -1198,11 +1313,11 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
 
                       <div>
                         <label className="block font-medium text-crm-muted mb-1">
-                          Key Access Instructions / Notes
+                          Key Pickup Notes / Location
                         </label>
                         <input
                           type="text"
-                          placeholder="e.g. Collect keys from main gate security cabin between 10 AM - 5 PM"
+                          placeholder="e.g. Gate 2 Guard Room, register entry required"
                           value={khNotes}
                           onChange={(e) => setKhNotes(e.target.value)}
                           className="w-full px-2.5 py-1.5 rounded border border-crm-border bg-white"
@@ -1211,29 +1326,18 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                     </div>
                   )}
                 </div>
-              </div>
-            )}
 
-            {/* Step 7: Review & Submit */}
-            {currentStep === 7 && (
-              <div className="space-y-4 text-xs">
-                <div className="p-3 rounded-md bg-teal-50/70 border border-teal-200 text-teal-900 text-xs">
-                  Please review the property specifications and contacts before publishing. You can click <strong>Edit</strong> on any section below to jump back and adjust details.
-                </div>
+                {/* Review Summary Cards */}
+                <div className="space-y-3 pt-2 border-t border-crm-border">
+                  <h3 className="text-xs font-bold text-crm-text uppercase tracking-wider">
+                    Full Property Listing Summary
+                  </h3>
 
-                {duplicateWarning && (
-                  <div className="p-3 rounded-md bg-amber-50 border border-amber-300 text-amber-900 text-xs">
-                    <strong>Notice:</strong> This listing matches an existing unit. Ensure you have checked the confirmation box on Step 2.
-                  </div>
-                )}
-
-                {/* Section Review Cards */}
-                <div className="space-y-3">
-                  {/* Basic & Location */}
+                  {/* 1. Owner Contact */}
                   <div className="p-3.5 rounded border border-crm-border bg-stone-50/40 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                        1 & 2. Basic Details & Location
+                      <span className="font-bold text-crm-text text-[11px]">
+                        1. Owner Contact Details
                       </span>
                       <button
                         type="button"
@@ -1245,29 +1349,63 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-crm-text">
                       <div>
-                        <span className="text-crm-muted block text-[10px]">Listing:</span>
-                        <strong className="text-teal-800">{preference === "SALE" ? "Resale (Sale)" : "Rental"}</strong>
+                        <span className="text-crm-muted block text-[10px]">Owner Name:</span>
+                        <strong>{ownerName}</strong>
                       </div>
                       <div>
-                        <span className="text-crm-muted block text-[10px]">Type & Layout:</span>
-                        <strong>{bedroomCount} BHK {propertyType.replace(/_/g, " ")}</strong>
+                        <span className="text-crm-muted block text-[10px]">Owner Mobile:</span>
+                        <strong>{ownerMobile}</strong>
                       </div>
                       <div>
-                        <span className="text-crm-muted block text-[10px]">Society & Unit:</span>
-                        <strong>{societyName} ({flatNumber})</strong>
+                        <span className="text-crm-muted block text-[10px]">Alternate Phone:</span>
+                        <span>{ownerAlternatePhone || "—"}</span>
                       </div>
                       <div>
-                        <span className="text-crm-muted block text-[10px]">City & Locality:</span>
-                        <strong>{localityName}, {city}</strong>
+                        <span className="text-crm-muted block text-[10px]">City / Locality:</span>
+                        <span>{city} {localityName ? `(${localityName})` : ""}</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Profile & Specs */}
+                  {/* 2. Basic Details */}
                   <div className="p-3.5 rounded border border-crm-border bg-stone-50/40 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                        3. Property Profile
+                      <span className="font-bold text-crm-text text-[11px]">
+                        2. Basic Details
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => jumpToStep(2)}
+                        className="text-crm-primary font-semibold hover:underline"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-crm-text">
+                      <div>
+                        <span className="text-crm-muted block text-[10px]">Mode:</span>
+                        <strong>{preference === "SALE" ? "Resale (Sale)" : "Rental"}</strong>
+                      </div>
+                      <div>
+                        <span className="text-crm-muted block text-[10px]">Typology:</span>
+                        <strong>{propertyType}</strong>
+                      </div>
+                      <div>
+                        <span className="text-crm-muted block text-[10px]">Layout:</span>
+                        <strong>{bedroomCount} BHK • {bathroomCount} Baths</strong>
+                      </div>
+                      <div>
+                        <span className="text-crm-muted block text-[10px]">Balconies:</span>
+                        <strong>{balconyCount}</strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3. Location Details */}
+                  <div className="p-3.5 rounded border border-crm-border bg-stone-50/40 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-crm-text text-[11px]">
+                        3. Location Details
                       </span>
                       <button
                         type="button"
@@ -1279,29 +1417,29 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-crm-text">
                       <div>
-                        <span className="text-crm-muted block text-[10px]">Area:</span>
-                        <strong>{area} sq ft ({areaType.replace(/_/g, " ")})</strong>
+                        <span className="text-crm-muted block text-[10px]">Society:</span>
+                        <strong>{societyName}</strong>
                       </div>
                       <div>
-                        <span className="text-crm-muted block text-[10px]">Bathrooms:</span>
-                        <strong>{bathroomCount} Baths • {balconyCount} Balconies</strong>
+                        <span className="text-crm-muted block text-[10px]">Flat / Unit:</span>
+                        <strong>{flatNumber}</strong>
                       </div>
                       <div>
-                        <span className="text-crm-muted block text-[10px]">Furnishing:</span>
-                        <strong>{furnishingStatus.replace(/_/g, " ")}</strong>
+                        <span className="text-crm-muted block text-[10px]">Locality:</span>
+                        <strong>{localityName}</strong>
                       </div>
                       <div>
-                        <span className="text-crm-muted block text-[10px]">Possession:</span>
-                        <strong>{constructionStatus.replace(/_/g, " ")}</strong>
+                        <span className="text-crm-muted block text-[10px]">City:</span>
+                        <strong>{city}</strong>
                       </div>
                     </div>
                   </div>
 
-                  {/* Media & Amenities */}
+                  {/* 4. Specifications */}
                   <div className="p-3.5 rounded border border-crm-border bg-stone-50/40 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                        4 & 5. Media & Amenities
+                      <span className="font-bold text-crm-text text-[11px]">
+                        4. Property Profile
                       </span>
                       <button
                         type="button"
@@ -1311,52 +1449,22 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
                         Edit
                       </button>
                     </div>
-                    <div className="space-y-1.5 text-crm-text">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-crm-text">
                       <div>
-                        <span className="text-crm-muted mr-1.5">Attached Photos:</span>
-                        <strong>{selectedPhotos.length} photos selected</strong>
-                      </div>
-                      {youtubeUrl.trim() && (
-                        <div>
-                          <span className="text-crm-muted mr-1.5">Video Tour:</span>
-                          <span className="font-mono text-[11px] text-teal-800">{youtubeUrl}</span>
-                        </div>
-                      )}
-                      <div>
-                        <span className="text-crm-muted mr-1.5">Amenities ({amenities.length}):</span>
-                        <span className="text-[11px]">{amenities.join(", ") || "None"}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Owner & Pricing */}
-                  <div className="p-3.5 rounded border border-crm-border bg-stone-50/40 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-crm-text uppercase tracking-wider text-[11px]">
-                        6. Owner Details & Pricing
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => jumpToStep(6)}
-                        className="text-crm-primary font-semibold hover:underline"
-                      >
-                        Edit
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-crm-text">
-                      <div>
-                        <span className="text-crm-muted block text-[10px]">Expected Price / Rent:</span>
-                        <strong className="text-sm font-bold text-teal-900">
-                          {formattedPricePreview || `₹${price}`}
-                        </strong>
+                        <span className="text-crm-muted block text-[10px]">Area:</span>
+                        <strong>{area} sq.ft ({areaType})</strong>
                       </div>
                       <div>
-                        <span className="text-crm-muted block text-[10px]">Owner Name:</span>
-                        <strong>{ownerName}</strong>
+                        <span className="text-crm-muted block text-[10px]">Furnishing:</span>
+                        <strong>{furnishingStatus}</strong>
                       </div>
                       <div>
-                        <span className="text-crm-muted block text-[10px]">Owner Mobile:</span>
-                        <strong>{ownerMobile}</strong>
+                        <span className="text-crm-muted block text-[10px]">Possession:</span>
+                        <strong>{constructionStatus}</strong>
+                      </div>
+                      <div>
+                        <span className="text-crm-muted block text-[10px]">Amenities:</span>
+                        <strong>{amenities.length} selected</strong>
                       </div>
                     </div>
                   </div>
@@ -1364,36 +1472,38 @@ export function NewPropertyClient({ userRole, userName }: NewPropertyClientProps
               </div>
             )}
 
-            {/* Stepper Navigation Buttons */}
-            <div className="flex items-center justify-between pt-5 border-t border-crm-border">
-              <button
-                type="button"
-                disabled={currentStep === 1 || isSubmitting}
-                onClick={handleBack}
-                className="px-4 py-2 text-xs font-semibold rounded border border-crm-border text-crm-muted hover:text-crm-text hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                ← Back
-              </button>
-
-              {currentStep < 7 ? (
-                <button
-                  type="button"
-                  onClick={handleNext}
-                  className="px-5 py-2 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs cursor-pointer"
-                >
-                  Continue to Step {currentStep + 1} →
-                </button>
-              ) : (
+            {/* Stepper Navigation Footer Buttons */}
+            {currentStep > 1 && (
+              <div className="flex items-center justify-between pt-5 border-t border-crm-border">
                 <button
                   type="button"
                   disabled={isSubmitting}
-                  onClick={handleSubmit}
-                  className="px-6 py-2 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                  onClick={handleBack}
+                  className="px-4 py-2 text-xs font-semibold rounded border border-crm-border text-crm-muted hover:text-crm-text hover:bg-stone-50 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  {isSubmitting ? "Creating Property & Attaching Media..." : "Confirm & Post Property"}
+                  ← Back
                 </button>
-              )}
-            </div>
+
+                {currentStep < 7 ? (
+                  <button
+                    type="button"
+                    onClick={handleNext}
+                    className="px-5 py-2 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs cursor-pointer"
+                  >
+                    Continue to Step {currentStep + 1} →
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={handleSubmit}
+                    className="px-6 py-2.5 text-xs font-bold rounded bg-crm-primary text-white hover:bg-crm-primary-hover shadow-xs disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                  >
+                    {isSubmitting ? "Creating Property & Attaching Media..." : "Confirm & Post Property"}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

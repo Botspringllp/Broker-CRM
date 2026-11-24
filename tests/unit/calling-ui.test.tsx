@@ -110,8 +110,12 @@ describe("DV-07: Calling UI Integration Tests", () => {
     expect(html).toContain("DNC");
     // Action column shows disabled DNC badge instead of Call link
     expect(html).toContain("Calling blocked: Prospect marked Do Not Contact");
-    // Workspace displays DNC alert banner
-    expect(html).toContain("Do Not Contact (DNC): Prospect requested no further contact");
+
+    // Profile workspace displays DNC alert banner
+    const detailsHtml = renderToString(
+      <LeadDetailsClient lead={dncLead} canEdit={true} canLogCall={true} canActivate={true} userRole="TELECALLER" />
+    );
+    expect(detailsHtml).toContain("DO NOT CONTACT (DNC)");
   });
 
   // 3. LeadValidationClient: Unreachable attempt warning and manual inactivation
@@ -126,10 +130,14 @@ describe("DV-07: Calling UI Integration Tests", () => {
 
     // Table displays attempt count
     expect(html).toMatch(/3.*attempts/);
-    // Warning banner displayed per PRD §5.5
-    expect(html).toContain("Unreachable Threshold Reached");
-    expect(html).toContain("caller may mark this lead Inactive");
-    expect(html).toContain("Mark Lead Inactive");
+
+    // Profile workspace displays warning banner per PRD §5.5
+    const detailsHtml = renderToString(
+      <LeadDetailsClient lead={unreachableLead} canEdit={true} canLogCall={true} canActivate={true} userRole="TELECALLER" />
+    );
+    expect(detailsHtml).toContain("Unreachable Limit:");
+    expect(detailsHtml).toContain("caller may mark lead Inactive");
+    expect(detailsHtml).toContain("Mark Inactive");
   });
 
   // 4. LeadQualifyClient: DNC alert and disabled calling controls

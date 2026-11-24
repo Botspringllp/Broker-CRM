@@ -231,7 +231,7 @@ describe("DV-12 Phase 4: Field Agent Mobile Token Access & Security", () => {
   // -----------------------------------------------------------------
   describe("3. Access Link Creation (createSiteVisitAccessLink)", () => {
     it("generates a new mobile link with 24-hour post-visit expiry (DEC-M1-05)", async () => {
-      const scheduledDate = new Date("2026-11-20T14:00:00Z");
+      const scheduledDate = new Date(Date.now() + 24 * 60 * 60 * 1000);
       (prisma.siteVisit.findFirst as any).mockResolvedValue({
         id: "visit-1",
         tenantId: "tenant-apex-1",

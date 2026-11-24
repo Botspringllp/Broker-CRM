@@ -707,15 +707,15 @@ export function OverviewClient({
                         >
                           <div className="space-y-1">
                             <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-crm-text">{prop.societyName}</span>
+                              <span className="text-xs font-bold text-crm-text">{prop.societyName || "Property Intake"}</span>
                               <span className="text-xs text-crm-muted">•</span>
                               <span className="text-xs text-crm-muted">
-                                {prop.bedroomCount} BHK {prop.propertyType}
+                                {prop.bedroomCount ? `${prop.bedroomCount} BHK ` : ""}{prop.propertyType || "Property"}
                               </span>
-                              <StatusBadge status={prop.preference} />
+                              {prop.preference && <StatusBadge status={prop.preference} />}
                             </div>
                             <div className="text-xs text-crm-muted flex items-center gap-3">
-                              <span>Locality: {prop.locality}, {prop.city}</span>
+                              <span>Locality: {prop.locality || "—"}, {prop.city || "—"}</span>
                               <span>Price: <strong className="text-crm-text">{prop.priceFormatted}</strong></span>
                             </div>
                             <div className="text-xs text-amber-800 flex items-center gap-1.5 pt-0.5">

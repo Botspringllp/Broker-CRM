@@ -416,24 +416,24 @@ model Property {
   tenantId String
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  // Property Details
-  flatNumber         String
-  societyName        String
+  // Property Details (Nullable for initial intake; enforced when validating/activating)
+  flatNumber         String?
+  societyName        String?
   localityId         String?
   locality           Locality?          @relation(fields: [localityId], references: [id], onDelete: SetNull)
-  localityName       String // Preserved from upload/entry
-  city               String
-  preference         TransactionType
-  furnishingStatus   FurnishingStatus
-  propertyType       PropertyType
-  area               Decimal            @db.Decimal(12, 2)
-  areaType           AreaUnitType
-  bedroomCount       Int
-  bathroomCount      Int
-  balconyCount       Int                @default(0)
-  price              Decimal            @db.Decimal(14, 2) // Total sale price or monthly rent
+  localityName       String? // Preserved from upload/entry
+  city               String?
+  preference         TransactionType?
+  furnishingStatus   FurnishingStatus?
+  propertyType       PropertyType?
+  area               Decimal?           @db.Decimal(12, 2)
+  areaType           AreaUnitType?
+  bedroomCount       Int?
+  bathroomCount      Int?
+  balconyCount       Int?               @default(0)
+  price              Decimal?           @db.Decimal(14, 2) // Total sale price or monthly rent
   amenities          String[]           @default([])
-  constructionStatus ConstructionStatus
+  constructionStatus ConstructionStatus?
 
   // Owner Contacts (Masked from unauthenticated & buyer-facing views)
   ownerName                 String

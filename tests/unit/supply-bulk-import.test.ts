@@ -99,15 +99,18 @@ describe("Supply Bulk Property Upload - DAL & Validation", () => {
   // Standard valid header line matching TEMPLATE_COLUMNS
   const validHeaderLine = TEMPLATE_COLUMNS.map((c) => c.header).join(",");
 
-  it("1. Generates valid CSV and Excel templates with 20 PRD columns", async () => {
+  it("1. Generates valid CSV and Excel templates with only Owner Name and Mobile marked mandatory", async () => {
     const csvBuffer = await generateImportTemplate("csv");
     expect(csvBuffer).toBeInstanceOf(Buffer);
     const csvText = csvBuffer.toString("utf-8");
-    expect(csvText).toContain("Flat Number*");
-    expect(csvText).toContain("Society Name*");
-    expect(csvText).toContain("Locality*");
-    expect(csvText).toContain("Price (INR)*");
+    // Only Owner Name and Owner Mobile Number have asterisks
+    expect(csvText).toContain("Owner Name*");
     expect(csvText).toContain("Owner Mobile Number*");
+    // Other fields are optional without asterisks
+    expect(csvText).toContain("Flat Number,");
+    expect(csvText).toContain("Society Name,");
+    expect(csvText).toContain("Locality,");
+    expect(csvText).toContain("Price (INR),");
 
     const xlsxBuffer = await generateImportTemplate("xlsx");
     expect(xlsxBuffer).toBeInstanceOf(Buffer);
@@ -610,5 +613,205 @@ describe("Supply Bulk Property Upload - DAL & Validation", () => {
     expect(overrideResult.importedCount).toBe(1);
     expect(overrideResult.skippedCount).toBe(0);
     expect(prisma.property.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("15. Successfully parses and validates CSV with ONLY Owner Name and Mobile (all other columns blank)", async () => {
+    // 20 columns: columns 0-14 blank, 15: Name, 16: Mobile, 17-19 blank
+    const row = [
+      "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+      "Rohan Mehra",
+      "9811223344",
+      "", "", "",
+    ].join(",");
+
+    vi.mocked(prisma.property.findMany).mockResolvedValueOnce([]);
+
+    const csvBuffer = createCsvBuffer(validHeaderLine, [row]);
+    const preview = await parseAndPreviewImportFile(tenant1Context, csvBuffer, "name-mobile-only.csv");
+
+    expect(preview.totalRows).toBe(1);
+    expect(preview.validCount).toBe(1);
+    expect(preview.errorCount).toBe(0);
+
+    const parsed = preview.rows[0];
+    expect(parsed.isValid).toBe(true);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.ownerName).toBe("Rohan Mehra");
+    expect(parsed.ownerMobile).toBe("9811223344");
+    // All other fields must be null
+    expect(parsed.flatNumber).toBeNull();
+    expect(parsed.societyName).toBeNull();
+    expect(parsed.localityName).toBeNull();
+    expect(parsed.city).toBeNull();
+    expect(parsed.preference).toBeNull();
+    expect(parsed.propertyType).toBeNull();
+    expect(parsed.furnishingStatus).toBeNull();
+    expect(parsed.area).toBeNull();
+    expect(parsed.areaType).toBeNull();
+    expect(parsed.bedroomCount).toBeNull();
+    expect(parsed.bathroomCount).toBeNull();
+    expect(parsed.balconyCount).toBeNull();
+    expect(parsed.price).toBeNull();
+    expect(parsed.constructionStatus).toBeNull();
+    expect(parsed.keyHolder).toBeNull();
+  });
+
+  it("16. Successfully parses CSV with partial property details and stores null for omitted ones", async () => {
+    // Some details filled: Flat Number, Society, Price, Owner Name, Owner Mobile
+    const row = [
+      "502",
+      "Palm Springs",
+      "", // Locality blank
+      "", // City blank
+      "Sale",
+      "", // Property Type blank
+      "", // Furnishing blank
+      "", // Area blank
+      "", // Area Type blank
+      "", // Bedrooms blank
+      "", // Bathrooms blank
+      "", // Balconies blank
+      "15000000",
+      "", // Amenities blank
+      "", // Construction blank
+      "Anita Desai",
+      "+91 9822334455",
+      "", "", "",
+    ].join(",");
+
+    vi.mocked(prisma.property.findMany).mockResolvedValueOnce([]);
+
+    const csvBuffer = createCsvBuffer(validHeaderLine, [row]);
+    const preview = await parseAndPreviewImportFile(tenant1Context, csvBuffer, "partial-details.csv");
+
+    expect(preview.totalRows).toBe(1);
+    expect(preview.validCount).toBe(1);
+    expect(preview.errorCount).toBe(0);
+
+    const parsed = preview.rows[0];
+    expect(parsed.isValid).toBe(true);
+    expect(parsed.flatNumber).toBe("502");
+    expect(parsed.societyName).toBe("Palm Springs");
+    expect(parsed.localityName).toBeNull();
+    expect(parsed.preference).toBe(TransactionType.SALE);
+    expect(parsed.propertyType).toBeNull();
+    expect(parsed.price).toBe(15000000);
+    expect(parsed.ownerName).toBe("Anita Desai");
+    expect(parsed.ownerMobile).toBe("9822334455");
+  });
+
+  it("17. Rejects row when Owner Name is missing", async () => {
+    const row = [
+      "101", "DLF Phase 1", "Sector 26", "Gurgaon", "Sale", "Apartment", "Semi-Furnished",
+      "1500", "Super built-up", "3", "3", "2", "20000000", "", "Ready to Move",
+      "", // Missing owner name
+      "9811223344",
+      "", "", "",
+    ].join(",");
+
+    vi.mocked(prisma.property.findMany).mockResolvedValueOnce([]);
+
+    const csvBuffer = createCsvBuffer(validHeaderLine, [row]);
+    const preview = await parseAndPreviewImportFile(tenant1Context, csvBuffer, "missing-owner-name.csv");
+
+    expect(preview.totalRows).toBe(1);
+    expect(preview.validCount).toBe(0);
+    expect(preview.errorCount).toBe(1);
+    expect(preview.rows[0].isValid).toBe(false);
+    expect(preview.rows[0].errors.some((e) => e.includes("Owner Name is required"))).toBe(true);
+  });
+
+  it("18. Rejects row when Owner Mobile is missing or has invalid format", async () => {
+    // Row with missing mobile
+    const missingMobileRow = [
+      "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+      "Rajesh Khanna",
+      "", // Missing mobile
+      "", "", "",
+    ].join(",");
+
+    // Row with invalid mobile length (8 digits)
+    const invalidMobileRow = [
+      "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+      "Kavita Roy",
+      "98112233", // 8 digits
+      "", "", "",
+    ].join(",");
+
+    vi.mocked(prisma.property.findMany).mockResolvedValueOnce([]);
+
+    const csvBuffer = createCsvBuffer(validHeaderLine, [missingMobileRow, invalidMobileRow]);
+    const preview = await parseAndPreviewImportFile(tenant1Context, csvBuffer, "invalid-mobiles.csv");
+
+    expect(preview.totalRows).toBe(2);
+    expect(preview.validCount).toBe(0);
+    expect(preview.errorCount).toBe(2);
+
+    expect(preview.rows[0].errors.some((e) => e.includes("Owner Mobile Number is required"))).toBe(true);
+    expect(preview.rows[1].errors.some((e) => e.includes("Must be a 10-digit Indian mobile"))).toBe(true);
+  });
+
+  it("19. Persists incomplete intake property (Name + Mobile only) with genuine nulls and NOT_VALIDATED status", async () => {
+    const incompleteRow: ValidatedPropertyRow = {
+      rowNumber: 2,
+      societyName: null,
+      flatNumber: null,
+      localityName: null,
+      city: null,
+      preference: null,
+      propertyType: null,
+      furnishingStatus: null,
+      constructionStatus: null,
+      bedroomCount: null,
+      bathroomCount: null,
+      balconyCount: null,
+      area: null,
+      areaType: null,
+      price: null,
+      amenities: [],
+      ownerName: "Harish Patel",
+      ownerMobile: "9876543210",
+      keyHolder: null,
+      isValid: true,
+      errors: [],
+    };
+
+    vi.mocked(prisma.property.create).mockResolvedValueOnce({
+      id: "incomplete-prop-1",
+      ...incompleteRow,
+    } as unknown as MockProperty);
+
+    const result = await executeBulkPropertyImport(tenant1Context, {
+      rows: [incompleteRow],
+      overrideDuplicates: false,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.importedCount).toBe(1);
+
+    expect(prisma.property.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tenantId: "tenant-brokerage-1",
+        submittingAgentId: "manager-user-1",
+        ownerName: "Harish Patel",
+        ownerMobile: "9876543210",
+        societyName: null,
+        flatNumber: null,
+        localityName: null,
+        city: null,
+        preference: null,
+        propertyType: null,
+        furnishingStatus: null,
+        constructionStatus: null,
+        bedroomCount: null,
+        bathroomCount: null,
+        balconyCount: null,
+        area: null,
+        areaType: null,
+        price: null,
+        validationStatus: SupplyValidationStatus.NOT_VALIDATED,
+        isActiveSupply: false,
+      }),
+    });
   });
 });

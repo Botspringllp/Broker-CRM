@@ -13,6 +13,7 @@ import {
   KeyHolderPersona,
   SupplyValidationStatus,
   PropertyAvailabilityStatus,
+  PropertyEntryChannel,
   Prisma,
 } from "@prisma/client";
 
@@ -29,20 +30,20 @@ export interface KeyHolderImportData {
 
 export interface ValidatedPropertyRow {
   rowNumber: number;
-  societyName: string;
-  flatNumber: string;
-  localityName: string;
-  city: string;
-  preference: TransactionType;
-  propertyType: PropertyType;
-  furnishingStatus: FurnishingStatus;
-  constructionStatus: ConstructionStatus;
-  bedroomCount: number;
-  bathroomCount: number;
-  balconyCount: number;
-  area: number;
-  areaType: AreaUnitType;
-  price: number;
+  societyName: string | null;
+  flatNumber: string | null;
+  localityName: string | null;
+  city: string | null;
+  preference: TransactionType | null;
+  propertyType: PropertyType | null;
+  furnishingStatus: FurnishingStatus | null;
+  constructionStatus: ConstructionStatus | null;
+  bedroomCount: number | null;
+  bathroomCount: number | null;
+  balconyCount: number | null;
+  area: number | null;
+  areaType: AreaUnitType | null;
+  price: number | null;
   amenities: string[];
   ownerName: string;
   ownerMobile: string;
@@ -169,21 +170,21 @@ function normalizeKeyHolderPersona(val: string): KeyHolderPersona | null {
 // -------------------------------------------------------------
 
 export const TEMPLATE_COLUMNS = [
-  { header: "Flat Number*", key: "flatNumber", width: 18, required: true },
-  { header: "Society Name*", key: "societyName", width: 22, required: true },
-  { header: "Locality*", key: "localityName", width: 20, required: true },
-  { header: "City*", key: "city", width: 16, required: true },
-  { header: "Sale/Rent Preference*", key: "preference", width: 22, required: true },
-  { header: "Property Type*", key: "propertyType", width: 18, required: true },
-  { header: "Furnishing Status*", key: "furnishingStatus", width: 20, required: true },
-  { header: "Area (sq.ft)*", key: "area", width: 16, required: true },
-  { header: "Area Type*", key: "areaType", width: 18, required: true },
-  { header: "Bedrooms*", key: "bedroomCount", width: 14, required: true },
-  { header: "Bathrooms*", key: "bathroomCount", width: 14, required: true },
+  { header: "Flat Number", key: "flatNumber", width: 18, required: false },
+  { header: "Society Name", key: "societyName", width: 22, required: false },
+  { header: "Locality", key: "localityName", width: 20, required: false },
+  { header: "City", key: "city", width: 16, required: false },
+  { header: "Sale/Rent Preference", key: "preference", width: 22, required: false },
+  { header: "Property Type", key: "propertyType", width: 18, required: false },
+  { header: "Furnishing Status", key: "furnishingStatus", width: 20, required: false },
+  { header: "Area (sq.ft)", key: "area", width: 16, required: false },
+  { header: "Area Type", key: "areaType", width: 18, required: false },
+  { header: "Bedrooms", key: "bedroomCount", width: 14, required: false },
+  { header: "Bathrooms", key: "bathroomCount", width: 14, required: false },
   { header: "Balcony Count", key: "balconyCount", width: 15, required: false },
-  { header: "Price (INR)*", key: "price", width: 18, required: true },
+  { header: "Price (INR)", key: "price", width: 18, required: false },
   { header: "Amenities / Features", key: "amenities", width: 30, required: false },
-  { header: "Construction Status*", key: "constructionStatus", width: 22, required: true },
+  { header: "Construction Status", key: "constructionStatus", width: 22, required: false },
   { header: "Owner Name*", key: "ownerName", width: 20, required: true },
   { header: "Owner Mobile Number*", key: "ownerMobile", width: 22, required: true },
   { header: "Key-Holder Name", key: "keyHolderName", width: 20, required: false },
@@ -255,19 +256,6 @@ const CANONICAL_HEADER_MAP: Record<string, string> = {
 };
 
 export const REQUIRED_CANONICAL_KEYS = [
-  "flatNumber",
-  "societyName",
-  "localityName",
-  "city",
-  "preference",
-  "propertyType",
-  "furnishingStatus",
-  "area",
-  "areaType",
-  "bedroomCount",
-  "bathroomCount",
-  "price",
-  "constructionStatus",
   "ownerName",
   "ownerMobile",
 ];
@@ -495,84 +483,124 @@ export async function parseAndPreviewImportFile(
 
     const rowErrors: string[] = [];
 
-    // Extract & Validate Fields
-    const societyName = cleanString(rowData.societyName);
-    if (!societyName) rowErrors.push("Society Name is required.");
-
-    const flatNumber = cleanString(rowData.flatNumber);
-    if (!flatNumber) rowErrors.push("Flat Number is required.");
-
-    const localityName = cleanString(rowData.localityName);
-    if (!localityName) rowErrors.push("Locality is required.");
-
-    const city = cleanString(rowData.city);
-    if (!city) rowErrors.push("City is required.");
-
-    const rawPref = cleanString(rowData.preference);
-    const preference = normalizePreference(rawPref);
-    if (!preference) {
-      rowErrors.push(`Invalid Sale/Rent Preference '${rawPref}'. Must be 'Sale' or 'Rent'.`);
-    }
-
-    const rawType = cleanString(rowData.propertyType);
-    const propertyType = normalizePropertyType(rawType);
-    if (!propertyType) {
-      rowErrors.push(`Invalid Property Type '${rawType}'.`);
-    }
-
-    const rawFurnishing = cleanString(rowData.furnishingStatus);
-    const furnishingStatus = normalizeFurnishing(rawFurnishing);
-    if (!furnishingStatus) {
-      rowErrors.push(`Invalid Furnishing Status '${rawFurnishing}'.`);
-    }
-
-    const rawArea = parseNumber(rowData.area);
-    if (rawArea === null || rawArea <= 0) {
-      rowErrors.push("Area must be a positive number greater than 0.");
-    }
-    const area = rawArea ?? 0;
-
-    const rawAreaType = cleanString(rowData.areaType);
-    const areaType = normalizeAreaType(rawAreaType);
-    if (!areaType) {
-      rowErrors.push(`Invalid Area Type '${rawAreaType}'. Must be Carpet, Built-up, or Super built-up.`);
-    }
-
-    const rawBhk = parseNumber(rowData.bedroomCount);
-    if (rawBhk === null || rawBhk < 0) {
-      rowErrors.push("Bedrooms must be a non-negative number.");
-    }
-    const bedroomCount = rawBhk !== null ? Math.floor(rawBhk) : 0;
-
-    const rawBaths = parseNumber(rowData.bathroomCount);
-    if (rawBaths === null || rawBaths < 0) {
-      rowErrors.push("Bathrooms must be a non-negative number.");
-    }
-    const bathroomCount = rawBaths !== null ? Math.floor(rawBaths) : 0;
-
-    const rawBalconies = parseNumber(rowData.balconyCount);
-    const balconyCount = rawBalconies !== null && rawBalconies >= 0 ? Math.floor(rawBalconies) : 0;
-
-    const rawPrice = parseNumber(rowData.price);
-    if (rawPrice === null || rawPrice <= 0) {
-      rowErrors.push("Price must be a positive number greater than 0.");
-    }
-    const price = rawPrice ?? 0;
-
-    const rawConstruction = cleanString(rowData.constructionStatus);
-    const constructionStatus = normalizeConstruction(rawConstruction);
-    if (!constructionStatus) {
-      rowErrors.push(`Invalid Construction Status '${rawConstruction}'. Must be Ready to Move or Under Construction.`);
-    }
-
+    // MANDATORY 1: Owner Name
     const ownerName = cleanString(rowData.ownerName);
     if (!ownerName) rowErrors.push("Owner Name is required.");
 
-    const rawOwnerMobile = normalizeMobile(rowData.ownerMobile as string | number);
-    if (!/^[6-9]\d{9}$/.test(rawOwnerMobile)) {
-      rowErrors.push(`Invalid Owner Mobile Number '${cleanString(rowData.ownerMobile)}'. Must be a 10-digit Indian mobile.`);
+    // MANDATORY 2: Owner Mobile Number
+    const rawMobileStr = cleanString(rowData.ownerMobile);
+    let ownerMobile = "";
+    if (!rawMobileStr) {
+      rowErrors.push("Owner Mobile Number is required.");
+    } else {
+      const rawOwnerMobile = normalizeMobile(rawMobileStr);
+      if (!/^[6-9]\d{9}$/.test(rawOwnerMobile)) {
+        rowErrors.push(`Invalid Owner Mobile Number '${rawMobileStr}'. Must be a 10-digit Indian mobile.`);
+      } else {
+        ownerMobile = rawOwnerMobile;
+      }
     }
-    const ownerMobile = rawOwnerMobile;
+
+    // OPTIONAL FIELDS (stored as null if missing; validated only if provided)
+    const societyName = cleanString(rowData.societyName) || null;
+    const flatNumber = cleanString(rowData.flatNumber) || null;
+    const localityName = cleanString(rowData.localityName) || null;
+    const city = cleanString(rowData.city) || null;
+
+    let preference: TransactionType | null = null;
+    const rawPref = cleanString(rowData.preference);
+    if (rawPref) {
+      preference = normalizePreference(rawPref);
+      if (!preference) {
+        rowErrors.push(`Invalid Sale/Rent Preference '${rawPref}'. Must be 'Sale' or 'Rent'.`);
+      }
+    }
+
+    let propertyType: PropertyType | null = null;
+    const rawType = cleanString(rowData.propertyType);
+    if (rawType) {
+      propertyType = normalizePropertyType(rawType);
+      if (!propertyType) {
+        rowErrors.push(`Invalid Property Type '${rawType}'.`);
+      }
+    }
+
+    let furnishingStatus: FurnishingStatus | null = null;
+    const rawFurnishing = cleanString(rowData.furnishingStatus);
+    if (rawFurnishing) {
+      furnishingStatus = normalizeFurnishing(rawFurnishing);
+      if (!furnishingStatus) {
+        rowErrors.push(`Invalid Furnishing Status '${rawFurnishing}'.`);
+      }
+    }
+
+    let area: number | null = null;
+    const rawArea = parseNumber(rowData.area);
+    if (rawArea !== null) {
+      if (rawArea <= 0) {
+        rowErrors.push("Area must be a positive number greater than 0.");
+      } else {
+        area = rawArea;
+      }
+    }
+
+    let areaType: AreaUnitType | null = null;
+    const rawAreaType = cleanString(rowData.areaType);
+    if (rawAreaType) {
+      areaType = normalizeAreaType(rawAreaType);
+      if (!areaType) {
+        rowErrors.push(`Invalid Area Type '${rawAreaType}'. Must be Carpet, Built-up, or Super built-up.`);
+      }
+    }
+
+    let bedroomCount: number | null = null;
+    const rawBhk = parseNumber(rowData.bedroomCount);
+    if (rawBhk !== null) {
+      if (rawBhk < 0) {
+        rowErrors.push("Bedrooms must be a non-negative number.");
+      } else {
+        bedroomCount = Math.floor(rawBhk);
+      }
+    }
+
+    let bathroomCount: number | null = null;
+    const rawBaths = parseNumber(rowData.bathroomCount);
+    if (rawBaths !== null) {
+      if (rawBaths < 0) {
+        rowErrors.push("Bathrooms must be a non-negative number.");
+      } else {
+        bathroomCount = Math.floor(rawBaths);
+      }
+    }
+
+    let balconyCount: number | null = null;
+    const rawBalconies = parseNumber(rowData.balconyCount);
+    if (rawBalconies !== null) {
+      if (rawBalconies < 0) {
+        rowErrors.push("Balcony Count must be a non-negative number.");
+      } else {
+        balconyCount = Math.floor(rawBalconies);
+      }
+    }
+
+    let price: number | null = null;
+    const rawPrice = parseNumber(rowData.price);
+    if (rawPrice !== null) {
+      if (rawPrice <= 0) {
+        rowErrors.push("Price must be a positive number greater than 0.");
+      } else {
+        price = rawPrice;
+      }
+    }
+
+    let constructionStatus: ConstructionStatus | null = null;
+    const rawConstruction = cleanString(rowData.constructionStatus);
+    if (rawConstruction) {
+      constructionStatus = normalizeConstruction(rawConstruction);
+      if (!constructionStatus) {
+        rowErrors.push(`Invalid Construction Status '${rawConstruction}'. Must be Ready to Move or Under Construction.`);
+      }
+    }
 
     // Amenities parsing
     const rawAmenities = cleanString(rowData.amenities);
@@ -624,15 +652,15 @@ export async function parseAndPreviewImportFile(
       flatNumber,
       localityName,
       city,
-      preference: preference || TransactionType.SALE,
-      propertyType: propertyType || PropertyType.APARTMENT,
-      furnishingStatus: furnishingStatus || FurnishingStatus.SEMI_FURNISHED,
-      constructionStatus: constructionStatus || ConstructionStatus.READY_TO_MOVE,
+      preference,
+      propertyType,
+      furnishingStatus,
+      constructionStatus,
       bedroomCount,
       bathroomCount,
       balconyCount,
       area,
-      areaType: areaType || AreaUnitType.SUPER_BUILT_UP,
+      areaType,
       price,
       amenities,
       ownerName,
@@ -679,8 +707,10 @@ export async function parseAndPreviewImportFile(
 
     const existingMap = new Map<string, string>();
     for (const ep of existingProperties) {
-      const k = `${ep.societyName.toLowerCase()}|${ep.flatNumber.toLowerCase()}`;
-      existingMap.set(k, ep.societyName);
+      if (ep.societyName && ep.flatNumber) {
+        const k = `${ep.societyName.toLowerCase()}|${ep.flatNumber.toLowerCase()}`;
+        existingMap.set(k, ep.societyName);
+      }
     }
 
     for (const row of parsedRows) {
@@ -799,10 +829,10 @@ export async function executeBulkPropertyImport(
         data: {
           tenantId: context.tenantId, // STRICT SERVER-DERIVED TENANT
           submittingAgentId: context.userId, // STRICT SERVER-DERIVED SUBMITTER
-          societyName: row.societyName.trim(),
-          flatNumber: row.flatNumber.trim(),
-          localityName: row.localityName.trim(),
-          city: row.city.trim(),
+          societyName: row.societyName ? row.societyName.trim() : null,
+          flatNumber: row.flatNumber ? row.flatNumber.trim() : null,
+          localityName: row.localityName ? row.localityName.trim() : null,
+          city: row.city ? row.city.trim() : null,
           preference: row.preference,
           propertyType: row.propertyType,
           furnishingStatus: row.furnishingStatus,
@@ -810,9 +840,9 @@ export async function executeBulkPropertyImport(
           bedroomCount: row.bedroomCount,
           bathroomCount: row.bathroomCount,
           balconyCount: row.balconyCount,
-          area: row.area,
+          area: row.area !== null && row.area !== undefined ? new Prisma.Decimal(row.area) : null,
           areaType: row.areaType,
-          price: row.price,
+          price: row.price !== null && row.price !== undefined ? new Prisma.Decimal(row.price) : null,
           ownerName: row.ownerName.trim(),
           ownerMobile: row.ownerMobile,
           amenities: row.amenities || [],
@@ -820,6 +850,7 @@ export async function executeBulkPropertyImport(
           availabilityStatus: PropertyAvailabilityStatus.AVAILABLE,
           ownerWillingnessConfirmed: false, // STRICT PRD DEFAULT
           isActiveSupply: false, // STRICT PRD DEFAULT
+          entryChannel: PropertyEntryChannel.BULK_UPLOAD,
           keyHolders: keyHolderCreate ? { create: keyHolderCreate } : undefined,
           ...(row.validationStatus === SupplyValidationStatus.VALIDATED ? { validatedAt: new Date() } : {}),
         },

@@ -77,7 +77,13 @@ async function SiteVisitsData() {
     <SiteVisitsClient
       initialVisits={visits}
       availableLeads={leads}
-      availableProperties={activeProps}
+      availableProperties={activeProps.map((p) => ({
+        id: p.id,
+        societyName: p.societyName || "—",
+        flatNumber: p.flatNumber || "—",
+        bedroomCount: p.bedroomCount ?? 0,
+        localityName: p.localityName || "—",
+      }))}
       salesAgents={agents}
     />
   );

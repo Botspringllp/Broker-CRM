@@ -169,7 +169,13 @@ async function LeadDetailsData({ params }: PageProps) {
         }),
       ]);
 
-      availableProperties = props;
+      availableProperties = props.map((p) => ({
+        id: p.id,
+        societyName: p.societyName || "—",
+        flatNumber: p.flatNumber || "—",
+        bedroomCount: p.bedroomCount ?? 0,
+        localityName: p.localityName || "—",
+      }));
       salesAgents = agents;
 
       if (salesAgents.length === 0) {
@@ -193,10 +199,10 @@ async function LeadDetailsData({ params }: PageProps) {
     if (!availableProperties.some((p) => p.id === m.property.id)) {
       availableProperties.push({
         id: m.property.id,
-        societyName: m.property.societyName,
-        flatNumber: m.property.flatNumber,
-        bedroomCount: m.property.bedroomCount,
-        localityName: m.property.locality,
+        societyName: m.property.societyName || "—",
+        flatNumber: m.property.flatNumber || "—",
+        bedroomCount: m.property.bedroomCount ?? 0,
+        localityName: m.property.locality || "—",
       });
     }
   }
@@ -223,13 +229,13 @@ async function LeadDetailsData({ params }: PageProps) {
   lead.topMatches = topMatches.map((m) => ({
     id: m.property.id,
     score: m.score,
-    societyName: m.property.societyName,
-    bedroomCount: m.property.bedroomCount,
-    area: m.property.area,
-    areaType: m.property.areaType,
+    societyName: m.property.societyName || "—",
+    bedroomCount: m.property.bedroomCount ?? 0,
+    area: m.property.area ?? 0,
+    areaType: m.property.areaType || "sq.ft",
     priceFormatted: m.property.priceFormatted,
-    preference: m.property.preference,
-    locality: m.property.locality,
+    preference: (m.property.preference || "Sale") as "Sale" | "Rent",
+    locality: m.property.locality || "—",
   }));
 
   lead.siteVisitHistory = siteVisits.flatMap((v) =>

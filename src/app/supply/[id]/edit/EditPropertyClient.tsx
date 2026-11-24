@@ -142,8 +142,8 @@ export function EditPropertyClient({ property }: EditPropertyClientProps) {
 
     // If matches initial, no need to alert duplicate on self
     if (
-      trimmedSociety.toLowerCase() === property.societyName.trim().toLowerCase() &&
-      trimmedFlat.toLowerCase() === property.flatNumber.trim().toLowerCase()
+      trimmedSociety.toLowerCase() === (property.societyName || "").trim().toLowerCase() &&
+      trimmedFlat.toLowerCase() === (property.flatNumber || "").trim().toLowerCase()
     ) {
       const timer = setTimeout(() => {
         setDuplicateWarning(null);

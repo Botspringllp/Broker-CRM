@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AppShell } from "@/components/layout/AppShell";
 import { StatusBadge } from "@/components/ui/Badge";
 import { Toast } from "@/components/ui/Toast";
@@ -62,6 +63,7 @@ export function LeadQualifyClient({
   lead: initialLead,
   canActivate = false,
 }: LeadQualifyClientProps) {
+  const router = useRouter();
   const [lead, setLead] = useState<Lead>(initialLead);
 
   // Form State
@@ -221,6 +223,7 @@ export function LeadQualifyClient({
         `Call outcome successfully recorded: ${updatedLead.currentDisposition}. Lead status is now ${updatedLead.status}.`
       );
       setToastMessage("Call logged successfully.");
+      router.refresh();
 
       // Reset form fields
       setNotes("");
@@ -251,6 +254,7 @@ export function LeadQualifyClient({
 
       setLead(res.lead);
       setToastMessage(`${res.lead.name} marked ACTIVE (Search Confirmed).`);
+      router.refresh();
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : "Failed to activate lead.");
     } finally {

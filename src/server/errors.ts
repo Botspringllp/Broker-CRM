@@ -34,19 +34,19 @@ export class DuplicatePropertyError extends Error {
   readonly status = 409;
   readonly existingProperty: {
     id: string;
-    societyName: string;
-    flatNumber: string;
-    bedroomCount: number;
-    propertyType: string;
+    societyName?: string | null;
+    flatNumber?: string | null;
+    bedroomCount?: number | null;
+    propertyType?: string | null;
   };
   constructor(
     message: string,
     existingProperty: {
       id: string;
-      societyName: string;
-      flatNumber: string;
-      bedroomCount: number;
-      propertyType: string;
+      societyName?: string | null;
+      flatNumber?: string | null;
+      bedroomCount?: number | null;
+      propertyType?: string | null;
     }
   ) {
     super(message);

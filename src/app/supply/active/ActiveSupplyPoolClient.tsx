@@ -108,9 +108,9 @@ export function ActiveSupplyPoolClient({
 
       // Search
       const matchesSearch =
-        prop.societyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        prop.locality.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        prop.city.toLowerCase().includes(searchTerm.toLowerCase());
+        (prop.societyName || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (prop.locality || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (prop.city || "").toLowerCase().includes(searchTerm.toLowerCase());
       if (!matchesSearch) return false;
 
       // Preference
@@ -120,13 +120,14 @@ export function ActiveSupplyPoolClient({
 
       // BHK
       if (bhkFilter !== "All") {
-        if (bhkFilter === "4+" && prop.bedroomCount < 4) return false;
-        if (bhkFilter !== "4+" && prop.bedroomCount.toString() !== bhkFilter) return false;
+        if (bhkFilter === "4+" && (prop.bedroomCount ?? 0) < 4) return false;
+        if (bhkFilter !== "4+" && (prop.bedroomCount ?? "").toString() !== bhkFilter) return false;
       }
 
       // Price Range Filter
       if (priceRangeFilter !== "All") {
         const p = prop.price;
+        if (p === null) return false;
         if (priceRangeFilter === "<50L" && p >= 5000000) return false;
         if (priceRangeFilter === "50L-1.5Cr" && (p < 5000000 || p > 15000000)) return false;
         if (priceRangeFilter === "1.5Cr-3Cr" && (p < 15000000 || p > 30000000)) return false;
@@ -144,13 +145,13 @@ export function ActiveSupplyPoolClient({
 
     const rawProp: RawPropertyData = {
       id: selectedProperty.id,
-      preference: selectedProperty.preference.toUpperCase() === "RENT" ? "RENT" : "SALE",
-      price: selectedProperty.price,
-      city: selectedProperty.city,
-      localityName: selectedProperty.locality,
-      propertyType: selectedProperty.propertyType,
-      bedroomCount: selectedProperty.bedroomCount,
-      area: selectedProperty.area,
+      preference: (selectedProperty.preference || "Sale").toUpperCase() === "RENT" ? "RENT" : "SALE",
+      price: selectedProperty.price || 0,
+      city: selectedProperty.city || "",
+      localityName: selectedProperty.locality || "",
+      propertyType: selectedProperty.propertyType || "APARTMENT",
+      bedroomCount: selectedProperty.bedroomCount ?? 0,
+      area: selectedProperty.area || 0,
       validationStatus: "VALIDATED",
       availabilityStatus: selectedProperty.availabilityStatus || "AVAILABLE",
       ownerWillingnessConfirmed: true,
@@ -409,7 +410,7 @@ export function ActiveSupplyPoolClient({
 
                           <td className="px-3 py-3 font-semibold text-crm-text">
                             <div>{prop.priceFormatted}</div>
-                            <StatusBadge status={prop.preference} />
+                            {prop.preference && <StatusBadge status={prop.preference} />}
                           </td>
 
                           <td className="px-3 py-3 space-y-1">
@@ -444,9 +445,9 @@ export function ActiveSupplyPoolClient({
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-base font-bold text-crm-text">
-                      {selectedProperty.societyName}
+                      {selectedProperty.societyName || "Property Intake"}
                     </h3>
-                    <StatusBadge status={selectedProperty.preference} />
+                    {selectedProperty.preference && <StatusBadge status={selectedProperty.preference} />}
                     <StatusBadge status={selectedProperty.availabilityStatus} />
                   </div>
                   <p className="text-xs text-crm-muted mt-0.5">
